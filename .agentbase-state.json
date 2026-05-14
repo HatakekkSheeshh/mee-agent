@@ -1,0 +1,11 @@
+{
+  "wizard_step": 9,
+  "project_name": "mee-agent",
+  "framework": "custom-fastapi",
+  "agent_identity": "mee-agent",
+  "auth_configured": true,
+  "runtime_id": "runtime-a67d83e4-6075-4241-95c5-0366a657374a",
+  "memory_id": "memory-a06738c9-28ab-4710-b574-8c717d561627",
+  "aip_key_name": "mee-agent",
+  "vcr_repo_name": "mee-agent"
+}
