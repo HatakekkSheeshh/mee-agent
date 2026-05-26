@@ -51,6 +51,11 @@ Re-format raw transcript ở trên thành **dạng có cấu trúc** với speak
    - Gọi tên trực tiếp: "Tuấn ơi", "Mai à"
    - Nếu không detect được → speaker = "Unknown"
 2. **Group consecutive sentences** của CÙNG 1 speaker thành 1 block
+   - QUAN TRỌNG: Nếu block dài (>3 câu), thêm `\\n\\n` (xuống dòng kép) để
+     tách thành PARAGRAPHS theo SUB-TOPIC. Ví dụ: 1 paragraph nói về deploy,
+     paragraph khác nói về testing. Mỗi paragraph 2-4 câu là đẹp.
+   - Nếu speaker chuyển chủ đề rõ ràng (vd "OK chuyển qua chủ đề khác") → paragraph mới
+   - Mục tiêu: text DỄ ĐỌC, không phải 1 đoạn dài lê thê
 3. **Bỏ filler words**: "ờ", "um", "à", "dạ", "thì là", "kiểu", "anh nghĩ là", "kiểu như"
 4. **Add punctuation** đúng (dấu chấm, hỏi, phẩy) + normalize wording nhẹ
 5. **Tag mỗi block** với category nếu rõ ràng (mảng rỗng nếu không chắc):
