@@ -25,6 +25,21 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("meeting-date").value = today;
     initVocabHints();
     loadVocabPool();
+
+    // Enable Generate MoM button when user types/pastes into transcript textarea
+    const transcriptEl = document.getElementById("transcript");
+    const genBtn = document.getElementById("btn-generate-notes");
+    const saveBtn = document.getElementById("btn-save-transcript");
+    if (transcriptEl) {
+        const updateButtons = () => {
+            const hasText = transcriptEl.value.trim().length > 0;
+            if (genBtn) genBtn.disabled = !hasText;
+            if (saveBtn) saveBtn.disabled = !hasText;
+        };
+        transcriptEl.addEventListener("input", updateButtons);
+        transcriptEl.addEventListener("paste", () => setTimeout(updateButtons, 0));
+        updateButtons();  // Initial state
+    }
 });
 
 // ─── Recording Controls ─────────────────────────────────────────
@@ -181,8 +196,8 @@ function stopAudioCapture() {
 // ─── Transcript Display ─────────────────────────────────────────
 
 function updateTranscript(segments) {
+    // UI v5: #transcript is a <textarea>, so we use .value not innerHTML
     const container = document.getElementById("transcript");
-    const prevCount = allCompletedSegments.length;
 
     for (const seg of segments) {
         if (seg.completed && !allCompletedSegments.some(s => s.start === seg.start && s.text === seg.text)) {
@@ -190,35 +205,31 @@ function updateTranscript(segments) {
         }
     }
 
-    const newSegs = allCompletedSegments.slice(prevCount);
-    if (prevCount === 0 && newSegs.length > 0) container.innerHTML = "";
-
-    const oldInProgress = container.querySelector(".segment.in-progress");
-    if (oldInProgress) oldInProgress.remove();
-
-    for (const seg of newSegs) {
-        const div = document.createElement("div");
-        div.className = "segment completed";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
-
     const inProgress = segments.filter(s => !s.completed);
-    if (inProgress.length > 0) {
-        const seg = inProgress[inProgress.length - 1];
-        const div = document.createElement("div");
-        div.className = "segment in-progress";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
 
-    if (allCompletedSegments.length === 0 && inProgress.length === 0) {
-        container.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
-    }
+    // Render as plain text into textarea (no HTML tags)
+    const completedLines = allCompletedSegments.map(
+        s => `[${formatTime(parseFloat(s.start))}] ${s.text}`
+    );
+    const inProgressLine = inProgress.length > 0
+        ? `[${formatTime(parseFloat(inProgress[inProgress.length - 1].start))}] ${inProgress[inProgress.length - 1].text} ...`
+        : '';
+    const allLines = [...completedLines];
+    if (inProgressLine) allLines.push(inProgressLine);
 
+    container.value = allLines.join('\n');
     container.scrollTop = container.scrollHeight;
+
     const countEl = document.getElementById("segment-count");
     if (countEl) countEl.textContent = `${allCompletedSegments.length} đoạn`;
+
+    // Enable buttons when transcript has content
+    if (allCompletedSegments.length > 0) {
+        const genBtn = document.getElementById("btn-generate-notes");
+        const saveBtn = document.getElementById("btn-save-transcript");
+        if (genBtn) genBtn.disabled = false;
+        if (saveBtn) saveBtn.disabled = false;
+    }
 }
 
 function getFullTranscript() {
@@ -227,6 +238,12 @@ function getFullTranscript() {
     if (manual && manual.style.display !== "none" && manual.value.trim()) {
         return manual.value.trim();
     }
+    // Direct paste/type into main transcript textarea
+    const live = document.getElementById("transcript");
+    if (live && live.value.trim()) {
+        return live.value.trim();
+    }
+    // Fall back to live segments from recording
     return allCompletedSegments.map(s => s.text.trim()).filter(Boolean).join(" ");
 }
 
@@ -268,7 +285,8 @@ async function uploadAudioFile(input) {
 
         allCompletedSegments = [{ start: "0.000", text, completed: true }];
         const container = document.getElementById("transcript");
-        container.innerHTML = `<div class="segment completed"><span class="timestamp">[upload]</span><span class="text">${escapeHtml(text)}</span></div>`;
+        // textarea — use .value, not innerHTML
+        container.value = `[upload] ${text}`;
 
         setStatus(`Đã transcribe "${file.name}". Bạn có thể tạo biên bản họp.`, "idle");
         document.getElementById("btn-generate-notes").disabled = false;
@@ -288,45 +306,58 @@ async function generateNotes() {
         return;
     }
 
-    setStatus("Đang tạo biên bản họp (30-60 giây)...", "assessing");
+    setStatus("Đang chuẩn bị cuộc họp...", "assessing");
     document.getElementById("btn-generate-notes").disabled = true;
     document.getElementById("btn-new-session").style.display = "inline-block";
 
-    const meetingDate = formatDateVN(document.getElementById("meeting-date").value);
-
     try {
-        const resp = await fetch(`${API_BASE}/api/generate-notes`, {
+        // Phase D.3+D.4: use DB-backed endpoint via LangGraph
+        // 1. Ensure DB meeting exists (creates if needed)
+        // 2. Import transcript → recording + segments in DB
+        // 3. Call /api/meetings/{id}/generate-mom (LangGraph, uses memory)
+        setStatus("Đang import transcript vào DB...", "assessing");
+        const imported = await window.importTranscriptToDb(transcript);
+        const meetingId = imported.meetingId;
+
+        setStatus(`Đang tạo biên bản qua LangGraph (${imported.segmentCount} segments)...`, "assessing");
+        const resp = await fetch(`${API_BASE}/api/meetings/${meetingId}/generate-mom`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                session_id: sessionId || "manual",
-                title: document.getElementById("meeting-title").value.trim(),
-                purpose: document.getElementById("meeting-purpose").value.trim(),
-                venue: document.getElementById("meeting-venue").value.trim(),
-                date: meetingDate,
-                chaired_by: document.getElementById("chaired-by").value.trim(),
-                noted_by: document.getElementById("noted-by").value.trim(),
-                attendees: document.getElementById("attendees").value.trim(),
-                transcript,
-            }),
         });
 
         if (!resp.ok) {
-            const err = await resp.json();
+            const err = await resp.json().catch(() => ({}));
             throw new Error(err.detail || "Tạo biên bản thất bại");
         }
 
         const result = await resp.json();
         displayMoM(result.notes);
-        downloadUrl = API_BASE + result.download_url;
+
+        // download_url not returned by new endpoint — construct from meeting_id
+        // (Phase D follow-up: add /api/meetings/{id}/download endpoint)
+        const savedMd = result.saved_paths?.md;
+        if (savedMd) {
+            // Path on server — for now, fallback to old download endpoint nếu có session_id
+            downloadUrl = null;  // disable download until D follow-up
+        }
 
         const downloadRow = document.getElementById("download-row");
-        downloadRow.style.display = "flex";
+        if (downloadRow) downloadRow.style.display = "flex";
         const dlBtn = document.getElementById("btn-download");
-        dlBtn.disabled = false;
-        document.getElementById("btn-pdf").disabled = false;
+        if (dlBtn) dlBtn.disabled = !savedMd;
+        const pdfBtn = document.getElementById("btn-pdf");
+        if (pdfBtn) pdfBtn.disabled = !savedMd;
 
-        setStatus("Biên bản họp đã tạo xong! Bạn có thể tải về.", "idle");
+        const memCount = result.memory_context_count || 0;
+        const memHint = memCount > 0
+            ? ` (đã dùng ${memCount} events từ memory)`
+            : "";
+        setStatus(`Biên bản đã tạo xong${memHint}.`, "idle");
+
+        // Refresh sidebar to show new meeting in list
+        if (typeof window.reloadSidebarMeetings === 'function') {
+            window.reloadSidebarMeetings();
+        }
     } catch (err) {
         setStatus(`Lỗi tạo biên bản: ${err.message}`, "error");
         document.getElementById("btn-generate-notes").disabled = false;
@@ -410,7 +441,13 @@ function displayMoM(notes) {
 
     container.innerHTML = html;
     container.scrollTop = 0;
+
+    // Hide empty state
+    const momEmpty = document.getElementById("mom-empty");
+    if (momEmpty) momEmpty.style.display = "none";
 }
+// Expose so sidebar load-meeting can render
+window.displayMoM = displayMoM;
 
 function downloadMoM() {
     if (downloadUrl) window.open(downloadUrl, "_blank");
@@ -474,41 +511,82 @@ function newSession() {
     downloadUrl = null;
     wsReconnectAttempts = 0;
 
-    // Clear transcript display
+    // Phase D: reset DB meeting + chat session state
+    window.meetingDbId = null;
+    if (typeof chatSessionId !== 'undefined') {
+        try { chatSessionId = null; } catch (e) {}
+    }
+    // Also clear via window if defined in IIFE
+    if ('chatSessionId' in window) window.chatSessionId = null;
+
+    // Clear transcript textarea (UI v5: textarea, not div)
     const transcript = document.getElementById("transcript");
-    transcript.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
+    if (transcript) transcript.value = "";
     const manual = document.getElementById("manual-transcript");
-    if (manual) { manual.value = ""; manual.style.display = "none"; transcript.style.display = "block"; }
+    if (manual) { manual.value = ""; }
 
     // Clear MoM result
     const momResult = document.getElementById("mom-result");
     if (momResult) momResult.innerHTML = "";
+    const momEmpty = document.getElementById("mom-empty");
+    if (momEmpty) momEmpty.style.display = "";
+
+    // Clear chat thread (keep welcome + suggested prompts)
+    const chatThread = document.getElementById("chat-thread");
+    if (chatThread) {
+        // Remove everything except first welcome msg + suggested prompts
+        const keep = chatThread.querySelectorAll('.msg-agent:first-child, #suggested-prompts');
+        chatThread.innerHTML = '';
+        keep.forEach(el => chatThread.appendChild(el));
+        // Re-show suggested prompts
+        const prompts = document.getElementById('suggested-prompts');
+        if (prompts) prompts.style.display = '';
+    }
 
     // Reset buttons
-    document.getElementById("btn-start").disabled = false;
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("btn-generate-notes").disabled = true;
-    document.getElementById("btn-save-transcript").disabled = true;
-    document.getElementById("download-row").style.display = "none";
-    document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-pdf").disabled = true;
-    document.getElementById("btn-new-session").style.display = "none";
+    const btnStart = document.getElementById("btn-start");
+    if (btnStart) btnStart.disabled = false;
+    const btnStop = document.getElementById("btn-stop");
+    if (btnStop) btnStop.disabled = true;
+    const btnGen = document.getElementById("btn-generate-notes");
+    if (btnGen) btnGen.disabled = true;
+    const btnSave = document.getElementById("btn-save-transcript");
+    if (btnSave) btnSave.disabled = true;
+    const dlRow = document.getElementById("download-row");
+    if (dlRow) dlRow.style.display = "none";
+    const dlBtn = document.getElementById("btn-download");
+    if (dlBtn) dlBtn.disabled = true;
+    const pdfBtn = document.getElementById("btn-pdf");
+    if (pdfBtn) pdfBtn.disabled = true;
 
     // Reset meeting fields
-    document.getElementById("meeting-title").value = "";
-    document.getElementById("meeting-purpose").value = "";
-    document.getElementById("meeting-venue").value = "";
-    document.getElementById("chaired-by").value = "";
-    document.getElementById("noted-by").value = "";
-    document.getElementById("attendees").value = "";
-    document.getElementById("meeting-date").value = new Date().toISOString().split("T")[0];
+    const titleEl = document.getElementById("meeting-title");
+    if (titleEl) titleEl.value = "";
+    const purposeEl = document.getElementById("meeting-purpose");
+    if (purposeEl) purposeEl.value = "";
+    const venueEl = document.getElementById("meeting-venue");
+    if (venueEl) venueEl.value = "";
+    const chairEl = document.getElementById("chaired-by");
+    if (chairEl) chairEl.value = "";
+    const notedEl = document.getElementById("noted-by");
+    if (notedEl) notedEl.value = "";
+    const attEl = document.getElementById("attendees");
+    if (attEl) attEl.value = "";
+    const dateEl = document.getElementById("meeting-date");
+    if (dateEl) dateEl.value = new Date().toISOString().split("T")[0];
 
     const countEl = document.getElementById("segment-count");
-    if (countEl) countEl.textContent = "";
+    if (countEl) countEl.textContent = "0";
     stopTimer();
-    document.getElementById("timer").style.display = "none";
+    const timerEl = document.getElementById("timer");
+    if (timerEl) timerEl.textContent = "00:00";
     setStatus("Sẵn sàng", "idle");
+
+    // Update meta info display
+    if (typeof window.updateMeta === 'function') window.updateMeta();
 }
+// Expose for IIFE buttons
+window.newSession = newSession;
 
 // ─── Utilities ──────────────────────────────────────────────────
 

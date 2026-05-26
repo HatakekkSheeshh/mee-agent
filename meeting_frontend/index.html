@@ -1,1657 +1,1324 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mee — Meeting Note Agent</title>
-<style>
-/* Mee — Meeting Note Agent */
-:root {
-    --pink: #c0727a;
-    --pink-light: #fde8ec;
-    --pink-dark: #a55a62;
-    --green: #7ab89a;
-    --green-light: #e4f5ec;
-    --green-dark: #5a9a7a;
-    --bg: #fdf6f8;
-    --card: #ffffff;
-    --text: #4a3540;
-    --text-light: #a08090;
-    --border: #f0d8de;
-    --radius: 8px;
-    --sidebar-w: 280px;
-}
-
-* { box-sizing: border-box; margin: 0; padding: 0; }
-
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.5;
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
-}
-
-/* ── Sidebar ─────────────────────────────────────── */
-
-.sidebar {
-    width: var(--sidebar-w);
-    min-width: var(--sidebar-w);
-    background: var(--card);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-    padding: 0 0 16px 0;
-}
-
-.sidebar-brand {
-    background: linear-gradient(135deg, #e8a0aa 0%, #c0727a 55%, #7ab89a 100%);
-    padding: 18px 16px 14px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-}
-.brand-logo {
-    font-size: 1.8rem;
-    line-height: 1;
-    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2));
-}
-.brand-text {
-    display: flex;
-    flex-direction: column;
-}
-.brand-name {
-    font-size: 1.5rem;
-    font-weight: 800;
-    color: white;
-    letter-spacing: 1.5px;
-    line-height: 1;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.2);
-}
-.brand-sub {
-    font-size: 0.68rem;
-    color: rgba(255,255,255,0.85);
-    letter-spacing: 0.3px;
-    margin-top: 2px;
-}
-
-.sidebar-section {
-    padding: 12px 14px 8px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.section-label {
-    font-size: 0.68rem;
-    font-weight: 700;
-    color: var(--text-light);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 2px;
-}
-
-.field {
-    width: 100%;
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font-size: 0.82rem;
-    font-family: inherit;
-    color: var(--text);
-    background: var(--bg);
-    transition: border-color 0.15s, box-shadow 0.15s;
-    resize: vertical;
-}
-.field:focus {
-    outline: none;
-    border-color: var(--pink);
-    box-shadow: 0 0 0 2px var(--pink-light);
-    background: white;
-}
-.field::placeholder { color: var(--text-light); }
-.field-label { font-size: 0.72rem; color: var(--text-light); margin-bottom: 2px; margin-top: 2px; }
-.required { color: #e53e3e; font-weight: 700; }
-
-.field-row {
-    display: flex;
-    gap: 6px;
-}
-.field-row .field { flex: 1; min-width: 0; }
-
-select.field[multiple] {
-    padding: 4px;
-    font-size: 0.8rem;
-}
-select.field[multiple] option {
-    padding: 4px 6px;
-    border-radius: 4px;
-}
-select.field[multiple] option:checked {
-    background: var(--pink);
-    color: white;
-}
-
-/* ── Controls ────────────────────────────────────── */
-
-.sidebar-controls {
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.controls-row {
-    display: flex;
-    gap: 6px;
-}
-.controls-row .btn { flex: 1; }
-
-.btn {
-    padding: 8px 14px;
-    border: none;
-    border-radius: var(--radius);
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-    text-align: center;
-    display: inline-block;
-}
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.btn-record { background: var(--pink); color: white; }
-.btn-record:hover:not(:disabled) { background: var(--pink-dark); }
-
-.btn-stop { background: #e07080; color: white; }
-.btn-stop:hover:not(:disabled) { background: #c05060; }
-
-.btn-generate { background: var(--green); color: white; }
-.btn-generate:hover:not(:disabled) { background: var(--green-dark); }
-
-.btn-download { background: var(--green-dark); color: white; }
-.btn-download:hover:not(:disabled) { background: #4a8060; }
-
-.btn-pdf { background: #e07035; color: white; }
-.btn-pdf:hover:not(:disabled) { background: #c05a20; }
-
-.btn-outline {
-    background: white;
-    color: var(--pink);
-    border: 1.5px solid var(--pink);
-    cursor: pointer;
-}
-.btn-outline:hover { background: var(--pink-light); }
-.btn-full { width: 100%; }
-
-.status {
-    font-size: 0.78rem;
-    padding: 5px 10px;
-    border-radius: var(--radius);
-    background: var(--pink-light);
-    color: var(--pink);
-    text-align: center;
-    margin-top: 2px;
-}
-.status.recording { background: #fde8ec; color: #c0404a; animation: pulse 1.5s infinite; }
-.status.connecting { background: var(--green-light); color: #3a7a5a; }
-.status.assessing { background: var(--green-light); color: #3a7a5a; }
-.status.error { background: #fde8ec; color: #c0404a; }
-.status.idle { background: var(--pink-light); color: var(--pink); }
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
-}
-
-.timer {
-    font-size: 1.5rem;
-    font-weight: 700;
-    font-family: "SF Mono", "Courier New", monospace;
-    color: var(--pink);
-    text-align: center;
-}
-
-/* ── Main area ───────────────────────────────────── */
-
-.main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding: 12px;
-    gap: 8px;
-}
-
-.pane-header {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-.pane-title {
-    font-size: 0.82rem;
-    font-weight: 700;
-    color: var(--pink);
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    padding-bottom: 6px;
-    border-bottom: 2px solid var(--pink-light);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.pane-row {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    overflow: hidden;
-}
-
-.pane {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-}
-
-/* ── Transcript ──────────────────────────────────── */
-
-.transcript-area, .mom-area {
-    flex: 1;
-    overflow-y: auto;
-    padding: 10px 12px;
-    font-size: 0.87rem;
-}
-
-.segment { padding: 3px 0; border-bottom: 1px solid #f5edf0; }
-.segment:last-child { border-bottom: none; }
-.segment .timestamp {
-    color: var(--text-light);
-    font-family: "SF Mono", monospace;
-    font-size: 0.72rem;
-    margin-right: 6px;
-}
-.segment.in-progress .text { color: var(--text-light); font-style: italic; }
-.segment.completed .text { color: var(--text); }
-
-.segment-count {
-    font-size: 0.7rem;
-    font-weight: 400;
-    color: var(--text-light);
-}
-
-.manual-transcript {
-    flex: 1;
-    width: 100%;
-    height: 100%;
-    padding: 10px 12px;
-    border: none;
-    border-radius: 0;
-    font-size: 0.87rem;
-    font-family: inherit;
-    resize: none;
-    background: #fffafc;
-    outline: none;
-}
-.manual-transcript:focus { border: none; box-shadow: inset 0 0 0 2px var(--pink-light); }
-
-.btn-toggle-manual {
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 2px 8px;
-    font-size: 0.72rem;
-    cursor: pointer;
-    color: var(--text-light);
-    margin-left: auto;
-}
-.btn-toggle-manual:hover { background: var(--pink-light); color: var(--pink); }
-
-/* ── MoM ─────────────────────────────────────────── */
-
-.mom-section { margin-bottom: 14px; }
-.mom-section-title {
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--pink);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-    padding-bottom: 3px;
-    border-bottom: 1.5px solid var(--pink-light);
-}
-
-.mom-meta-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.82rem;
-}
-.mom-meta-table td {
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-}
-.mom-meta-table td:first-child {
-    font-weight: 600;
-    background: var(--pink-light);
-    width: 42%;
-    color: var(--pink);
-    font-size: 0.78rem;
-}
-
-.mom-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-}
-.mom-table th {
-    background: var(--pink);
-    color: white;
-    padding: 5px 8px;
-    text-align: left;
-    font-size: 0.74rem;
-}
-.mom-table td {
-    padding: 4px 8px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-}
-.mom-table tr:nth-child(even) td { background: #fdf6f8; }
-
-.agenda-item {
-    padding: 7px 10px;
-    margin-bottom: 6px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: white;
-}
-.agenda-item-header {
-    display: flex;
-    gap: 7px;
-    align-items: baseline;
-    margin-bottom: 3px;
-}
-.topic-no {
-    background: var(--pink);
-    color: white;
-    border-radius: 50%;
-    width: 20px;
-    height: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.7rem;
-    font-weight: 700;
-    flex-shrink: 0;
-}
-.agenda-title { font-weight: 600; color: var(--text); font-size: 0.85rem; }
-.agenda-description { font-size: 0.8rem; color: var(--text-light); padding-left: 27px; line-height: 1.5; }
-
-.action-item {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 8px;
-    padding: 5px 10px;
-    border-bottom: 1px solid var(--border);
-    align-items: start;
-    font-size: 0.82rem;
-}
-.action-item:last-child { border-bottom: none; }
-.action-pic { font-weight: 600; color: var(--pink); white-space: nowrap; }
-.action-task { color: var(--text); }
-.action-deadline {
-    font-size: 0.74rem;
-    color: var(--green-dark);
-    font-weight: 600;
-    white-space: nowrap;
-    background: var(--green-light);
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid #b0d8c4;
-}
-
-/* ── Editable action item inputs ─────────────────── */
-.action-editable {
-    border: 1px solid transparent;
-    background: transparent;
-    font-family: inherit;
-    font-size: inherit;
-    color: inherit;
-    width: 100%;
-    padding: 2px 4px;
-    border-radius: 3px;
-    outline: none;
-    transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
-}
-.action-editable:hover { background: rgba(192,114,122,0.07); border-color: var(--border); }
-.action-editable:focus { background: white; border-color: var(--pink); box-shadow: 0 0 0 2px var(--pink-light); }
-.action-editable-pic {
-    font-weight: 600; color: var(--pink); width: 110px; min-width: 80px; flex-shrink: 0;
-}
-.action-editable-task { flex: 1; min-width: 0; }
-.action-editable-deadline {
-    font-size: 0.74rem; color: var(--green-dark); font-weight: 600;
-    background: var(--green-light); padding: 2px 6px; border-radius: 4px;
-    border: 1px solid #b0d8c4; width: 96px; min-width: 72px; text-align: center; flex-shrink: 0;
-}
-.action-editable-deadline:hover { background: #d0eedd; }
-.action-editable-deadline:focus { background: white; border-color: var(--pink); box-shadow: 0 0 0 2px var(--pink-light); color: var(--text); }
-
-.action-items-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
-}
-.btn-export-tasks {
-    background: #7c6bc0; color: white;
-    border: none; border-radius: var(--radius);
-    padding: 4px 10px; font-size: 0.74rem; font-weight: 600;
-    cursor: pointer; transition: background 0.15s;
-}
-.btn-export-tasks:hover { background: #6a5aad; }
-.btn-export-tasks:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.mom-summary {
-    padding: 9px 12px;
-    background: linear-gradient(135deg, var(--pink-light) 0%, var(--green-light) 100%);
-    border-radius: var(--radius);
-    font-style: italic;
-    color: var(--text);
-    line-height: 1.6;
-    font-size: 0.84rem;
-    border-left: 3px solid var(--pink);
-}
-
-.placeholder { color: var(--text-light); font-style: italic; text-align: center; padding: 40px 20px; font-size: 0.85rem; }
-
-/* ── Corrections panel ───────────────────────────── */
-
-.topic-checkbox-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 130px;
-    overflow-y: auto;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 8px;
-    margin-bottom: 4px;
-}
-.topic-checkbox-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.82rem;
-    color: var(--text);
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
-}
-.topic-checkbox-item:hover { background: var(--pink-light); }
-.topic-checkbox-item input[type=checkbox] { accent-color: var(--pink); cursor: pointer; }
-
-.corrections-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 110px;
-    overflow-y: auto;
-    margin-bottom: 6px;
-}
-.correction-tag {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--pink-light);
-    border-radius: 6px;
-    padding: 3px 8px;
-    font-size: 0.75rem;
-    color: var(--text);
-}
-.correction-tag .wrong { color: var(--pink); font-weight: 600; text-decoration: line-through; }
-.correction-tag .arrow { color: var(--text-light); }
-.correction-tag .correct { color: var(--green-dark); font-weight: 600; }
-.correction-tag .del-btn {
-    margin-left: auto;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-light);
-    font-size: 0.75rem;
-    padding: 0 2px;
-    line-height: 1;
-}
-.correction-tag .del-btn:hover { color: var(--pink); }
-
-.vocab-terms-preview {
-    font-size: 0.72rem;
-    color: var(--text-light);
-    line-height: 1.5;
-    margin-bottom: 4px;
-    max-height: 50px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* ── Print header/footer (hidden on screen) ─────── */
-.print-header, .print-footer { display: none; }
-
-/* ── Print / PDF export ──────────────────────────── */
-@media print {
-    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-
-    @page { margin: 18mm 15mm; }
-
-    body {
-        background: white !important;
-        height: auto;
-        overflow: visible;
-        display: block;
-    }
-
-    .sidebar { display: none !important; }
-
-    .main {
-        display: block !important;
-        padding: 0 !important;
-        overflow: visible !important;
-        gap: 0 !important;
-    }
-
-    .pane-header { display: none !important; }
-
-    .pane-row {
-        display: block !important;
-        overflow: visible !important;
-        gap: 0 !important;
-    }
-
-    /* Hide transcript pane */
-    .pane-row .pane:first-child { display: none !important; }
-
-    /* MoM pane takes full page */
-    .pane-row .pane:last-child {
-        border: none !important;
-        box-shadow: none !important;
-        overflow: visible !important;
-        display: block !important;
-    }
-
-    .mom-area {
-        overflow: visible !important;
-        padding: 0 !important;
-        font-size: 0.9rem !important;
-    }
-
-    /* Print header/footer */
-    .print-header {
-        display: block !important;
-        text-align: center;
-        padding-bottom: 10px;
-        margin-bottom: 18px;
-        border-bottom: 2px solid #c0727a;
-    }
-    .print-brand {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #c0727a !important;
-    }
-    .print-sub {
-        font-size: 0.75rem;
-        color: #888;
-        margin-top: 2px;
-    }
-    .print-footer {
-        display: block !important;
-        text-align: center;
-        margin-top: 20px;
-        font-size: 0.72rem;
-        color: #aaa !important;
-        border-top: 1px solid #e0d0d5;
-        padding-top: 8px;
-    }
-
-    /* Prevent orphaned rows */
-    .mom-section { page-break-inside: avoid; }
-    .mom-table, .mom-meta-table { page-break-inside: avoid; }
-    .agenda-item { page-break-inside: avoid; }
-    .action-item { page-break-inside: avoid; }
-
-    /* Preserve colors */
-    .mom-section-title {
-        color: #c0727a !important;
-        border-bottom-color: #fde8ec !important;
-    }
-    .mom-table th { background: #c0727a !important; color: white !important; }
-    .mom-meta-table td:first-child { background: #fde8ec !important; color: #c0727a !important; }
-    .mom-table tr:nth-child(even) td { background: #fdf6f8 !important; }
-    .action-deadline {
-        background: #e4f5ec !important;
-        color: #5a9a7a !important;
-        border-color: #b0d8c4 !important;
-    }
-    .topic-no { background: #c0727a !important; color: white !important; }
-    .action-pic { color: #c0727a !important; }
-    .mom-summary {
-        background: linear-gradient(135deg, #fde8ec 0%, #e4f5ec 100%) !important;
-        border-left-color: #c0727a !important;
-    }
-}
-
-/* ── Responsive ──────────────────────────────────── */
-@media (max-width: 900px) {
-    body { flex-direction: column; height: auto; overflow: auto; }
-    .sidebar { width: 100%; min-width: unset; border-right: none; border-bottom: 1px solid var(--border); }
-    .main { padding: 10px; }
-    .pane-header, .pane-row { grid-template-columns: 1fr; }
-    .pane { min-height: 300px; }
-}
-
-</style>
+    <title>Mee · Meeting Workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<aside class="sidebar">
-    <div class="sidebar-brand">
-        <div class="brand-logo">✿</div>
-        <div class="brand-text">
-            <span class="brand-name">Mee</span>
-            <span class="brand-sub">Meeting Note Agent</span>
+<!-- ══ LEFT SIDEBAR (collapsible) ═══════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+        <button class="btn btn-primary btn-sm sidebar-new-btn" id="sidebar-new-meeting" type="button">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Cuộc họp mới
+        </button>
+    </div>
+
+    <div class="sidebar-body">
+        <div class="sidebar-section-label">Cuộc họp gần đây</div>
+        <div class="sidebar-meetings" id="sidebar-meetings-list">
+            <div class="sidebar-empty muted">Đang tải...</div>
         </div>
     </div>
 
-    <div class="sidebar-section">
-        <div class="section-label">Cuộc họp</div>
-        <div class="field-label">Tên Project <span class="required">*</span></div>
-        <input type="text" id="meeting-title" class="field" placeholder="Tên Project (map với Redmine)">
-        <input type="text" id="meeting-purpose" class="field" placeholder="Mục đích">
-        <div class="field-row">
-            <input type="date" id="meeting-date" class="field">
-            <input type="text" id="meeting-venue" class="field" placeholder="Địa điểm">
-        </div>
-        <div class="field-row">
-            <input type="text" id="chaired-by" class="field" placeholder="Chủ trì">
-            <input type="text" id="noted-by" class="field" placeholder="Thư ký">
-        </div>
-        <textarea id="attendees" class="field" rows="2" placeholder="Thành viên: Nguyễn Văn A (Team AI - PM), ..."></textarea>
-    </div>
-
-    <div class="sidebar-section">
-        <div class="section-label">Cấu hình</div>
-        <div class="field-row">
-            <select id="language" class="field">
-                <option value="vi" selected>🇻🇳 Tiếng Việt</option>
-                <option value="en">🇺🇸 English</option>
-            </select>
-            <input type="text" id="ws-url" class="field" placeholder="WebSocket URL (ws://...)">
-        </div>
-        <div id="meeting-topic-list" class="topic-checkbox-list"></div>
-        <textarea id="vocab-hints" class="field" rows="2" placeholder="Từ khoá kỹ thuật..."></textarea>
-    </div>
-
-    <div class="sidebar-section">
-        <div class="section-label">
-            Mee đã học
-            <span id="vocab-count" style="font-weight:400;text-transform:none;margin-left:4px"></span>
-        </div>
-        <div id="corrections-list" class="corrections-list"></div>
-        <div class="field-row" style="gap:4px">
-            <input type="text" id="correction-wrong" class="field" placeholder='Mee nghe sai: "deploy"'>
-            <input type="text" id="correction-correct" class="field" placeholder='Đúng là: "triển khai"'>
-        </div>
-        <button class="btn btn-outline btn-full" onclick="addCorrection()" style="font-size:0.78rem;padding:6px">+ Thêm sửa lỗi</button>
-    </div>
-
-    <div class="sidebar-controls">
-        <div class="controls-row">
-            <button id="btn-start" class="btn btn-record" onclick="startRecording()">▶ Ghi âm</button>
-            <button id="btn-stop" class="btn btn-stop" onclick="stopRecording()" disabled>■ Dừng</button>
-        </div>
-        <label class="btn btn-outline btn-full">
-            ↑ Upload Audio
-            <input type="file" id="file-upload" accept="audio/*,.wav,.mp3,.m4a,.webm,.ogg" onchange="uploadAudioFile(this)" hidden>
-        </label>
-        <div class="controls-row">
-            <button id="btn-save-transcript" class="btn btn-outline" onclick="saveTranscript()" disabled>Lưu TXT</button>
-            <button id="btn-generate-notes" class="btn btn-generate" onclick="generateNotes()" disabled>✦ Tạo MoM</button>
-        </div>
-        <button id="btn-new-session" class="btn btn-outline btn-full" onclick="newSession()" style="display:none">＋ Cuộc họp mới</button>
-        <div id="download-row" class="controls-row" style="display:none">
-            <button id="btn-download" class="btn btn-download" onclick="downloadMoM()" disabled>↓ Tải .md</button>
-            <button id="btn-pdf" class="btn btn-pdf" onclick="downloadPDF()" disabled>↓ Xuất PDF</button>
-        </div>
-        <button id="btn-export-tasks" class="btn-export-tasks btn-full" onclick="exportTasksJSON()" style="display:none">📋 Copy Tasks JSON</button>
-        <div id="status" class="status">Sẵn sàng</div>
-        <div id="timer" class="timer" style="display:none">00:00:00</div>
+    <div class="sidebar-footer">
+        <button class="icon-btn" id="sidebar-collapse-btn" type="button" title="Thu gọn sidebar">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <polyline points="15 18 9 12 15 6"/>
+            </svg>
+        </button>
     </div>
 </aside>
 
-<main class="main">
-    <div class="pane-header">
-        <div class="pane-title">
-            Transcript
-            <span id="segment-count" class="segment-count"></span>
-            <button class="btn-toggle-manual" onclick="toggleManualInput()" title="Nhập thủ công">✏️ Nhập tay</button>
+<div class="app">
+
+    <!-- ══ TOP HEADER ═══════════════════════════════════════════ -->
+    <header class="topbar">
+        <div class="tb-left">
+            <button class="icon-btn" id="sidebar-toggle" type="button" title="Sidebar">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <line x1="3" y1="6" x2="21" y2="6"/>
+                    <line x1="3" y1="12" x2="21" y2="12"/>
+                    <line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+            </button>
+            <a href="#" class="brand">
+                <span class="brand-mark"></span>
+                <span class="brand-name">Mee</span>
+            </a>
+
+            <button class="ws-pill" id="workspace-btn" type="button">
+                <span class="ws-name">GreenNode AI</span>
+                <svg class="caret" viewBox="0 0 12 7" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 1l5 5 5-5"/></svg>
+            </button>
+
+            <button class="icon-btn" id="settings-btn" data-tip="Settings" data-i18n-tip="tip.settings" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+            </button>
         </div>
-        <div class="pane-title">Biên Bản Họp</div>
+
+        <div class="tb-center">
+            <button class="btn btn-outline btn-sm" id="invite-btn" type="button">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <line x1="19" y1="8" x2="19" y2="14"/>
+                    <line x1="16" y1="11" x2="22" y2="11"/>
+                </svg>
+                <span data-i18n="btn.invite">Invite</span>
+            </button>
+        </div>
+
+        <div class="tb-right">
+            <span id="status" class="tb-status idle" data-i18n="status.ready">Ready</span>
+            <button class="icon-btn" id="chat-toggle" data-tip="Toggle Agent" data-i18n-tip="tip.toggleAgent" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+            </button>
+            <div class="tb-sep"></div>
+            <button class="avatar-btn" id="avatar-fab" type="button">
+                <span class="avatar-img">U</span>
+                <span class="avatar-name">User</span>
+                <svg class="caret" viewBox="0 0 12 7" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 1l5 5 5-5"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ══ MEETING CONTROL BAR (title + meta + details) ═════════ -->
+    <section class="meeting-control">
+        <div class="mc-row mc-title-row">
+            <input type="text" id="meeting-title" class="title-input"
+                   placeholder="Untitled meeting" data-i18n-ph="meeting.titlePlaceholder">
+        </div>
+
+        <div class="mc-row mc-meta-row">
+            <span class="mc-meta-item">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span id="meta-date" data-i18n="meta.noDate">No date</span>
+            </span>
+            <span class="mc-meta-item">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span id="meta-people" data-i18n="meta.noPeople">No participants</span>
+            </span>
+            <span class="mc-meta-item">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span id="timer" class="mono">00:00</span>
+                <span class="mc-sub">· <span id="segment-count">0</span> <span data-i18n="meta.seg">seg</span></span>
+            </span>
+            <button class="mc-meta-pill" id="btn-details" type="button">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+                <span data-i18n="btn.details">Details</span>
+            </button>
+        </div>
+
+        <!-- ── Details collapsible ─────────────────────── -->
+        <div class="details-panel" id="details-panel" hidden>
+            <div class="details-grid">
+                <div class="field-block">
+                    <label for="meeting-date" data-i18n="details.date">Date</label>
+                    <input type="date" id="meeting-date" class="field">
+                </div>
+                <div class="field-block">
+                    <label for="meeting-venue" data-i18n="details.venue">Venue</label>
+                    <input type="text" id="meeting-venue" class="field" placeholder="Online / Office" data-i18n-ph="details.venuePlaceholder">
+                </div>
+                <div class="field-block" style="grid-column: 1/-1;">
+                    <label for="meeting-purpose" data-i18n="details.purpose">Purpose</label>
+                    <input type="text" id="meeting-purpose" class="field" placeholder="What's this about?" data-i18n-ph="details.purposePlaceholder">
+                </div>
+                <div class="field-block">
+                    <label for="chaired-by" data-i18n="details.chairedBy">Chaired by</label>
+                    <input type="text" id="chaired-by" class="field" placeholder="Name" data-i18n-ph="details.namePlaceholder">
+                </div>
+                <div class="field-block">
+                    <label for="noted-by" data-i18n="details.notedBy">Noted by</label>
+                    <input type="text" id="noted-by" class="field" placeholder="Name" data-i18n-ph="details.namePlaceholder">
+                </div>
+                <div class="field-block">
+                    <label for="attendees" data-i18n="details.attendees">Attendees</label>
+                    <input type="text" id="attendees" class="field" placeholder="Linh (PM), Tuấn (Eng)" data-i18n-ph="details.attendeesPlaceholder">
+                </div>
+                <div class="field-block">
+                    <label for="language" data-i18n="details.meetingLang">Meeting language</label>
+                    <select id="language" class="field">
+                        <option value="vi" selected>Tiếng Việt</option>
+                        <option value="en">English</option>
+                    </select>
+                    <div class="field-hint" data-i18n="details.meetingLangHint">Helps Whisper transcribe more accurately</div>
+                </div>
+                <input type="hidden" id="ws-url" value="ws://localhost:9091">
+            </div>
+
+            <div class="vocab-section">
+                <div class="section-label">
+                    <span data-i18n="details.vocab">Vocabulary</span> <span id="vocab-count" class="faint">(0)</span>
+                </div>
+                <div id="vocab-hints-dropdown" class="chip-list"></div>
+                <textarea id="vocab-hints" class="field" rows="2" style="margin-top:8px;"
+                          placeholder="Custom keywords (comma separated)" data-i18n-ph="details.vocabPlaceholder"></textarea>
+
+                <div class="section-label" style="margin-top:14px;" data-i18n="details.corrections">Corrections</div>
+                <div class="field-row">
+                    <input type="text" id="correction-wrong" class="field" placeholder='Heard ("wisper")' data-i18n-ph="details.heardPlaceholder">
+                    <input type="text" id="correction-correct" class="field" placeholder='Correct ("Whisper")' data-i18n-ph="details.correctPlaceholder">
+                </div>
+                <button type="button" class="btn btn-ghost btn-xs" style="margin-top:6px;" onclick="addCorrection()" data-i18n="details.addCorrection">+ Add correction</button>
+                <div id="corrections-list" style="margin-top:8px;"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ══ MAIN WORKSPACE (Transcript | MoM | Agent) ════════════ -->
+    <div class="workspace chat-open" id="workspace">
+
+        <!-- LEFT: Transcript -->
+        <section class="pane pane-transcript">
+            <div class="pane-header pane-header-actions">
+                <span class="pane-title" data-i18n="pane.transcript">Transcript</span>
+                <div class="pane-actions">
+                    <button id="btn-start" class="btn btn-record btn-sm" type="button" onclick="startRecording()">
+                        <span class="rec-dot"></span>
+                        <span data-i18n="btn.record">Record</span>
+                    </button>
+                    <button id="btn-stop" class="btn btn-stop btn-sm" type="button" onclick="stopRecording()" disabled>
+                        <svg viewBox="0 0 12 12" width="9" height="9"><rect x="2" y="2" width="8" height="8" fill="currentColor"/></svg>
+                        <span data-i18n="btn.stop">Stop</span>
+                    </button>
+                    <label for="file-upload" class="btn btn-outline btn-sm" style="cursor:pointer">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <span data-i18n="btn.upload">Upload</span>
+                    </label>
+                    <input type="file" id="file-upload" accept="audio/*" onchange="uploadAudioFile(this)" hidden>
+                    <button class="icon-btn icon-btn-sm" id="transcript-search-btn" data-tip="Search (Cmd+F)" data-i18n-tip="tip.search" type="button">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="pane-content">
+                <textarea id="transcript" class="transcript-box"
+                          placeholder="Start recording, upload audio, or paste your transcript here." data-i18n-ph="transcriptPlaceholder"></textarea>
+                <textarea id="manual-transcript" class="transcript-box hidden" placeholder="Paste or type your transcript here..." data-i18n-ph="transcriptPlaceholder"></textarea>
+
+                <div class="pane-footer">
+                    <button id="btn-save-transcript" class="btn btn-ghost btn-sm" type="button" onclick="saveTranscript()" disabled data-i18n="btn.saveTxt">Save .txt</button>
+                    <div class="spacer"></div>
+                    <button id="btn-new-session" class="btn btn-ghost btn-sm" type="button" onclick="newSession()" style="display:none" data-i18n="btn.newMeeting">New meeting</button>
+                    <button id="btn-generate-notes" class="btn btn-primary btn-sm" type="button" onclick="generateNotes()" disabled>
+                        <span data-i18n="btn.generateMom">Generate MoM</span>
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <div class="resizer" id="resizer-mom"></div>
+
+        <!-- CENTER: MoM -->
+        <section class="pane pane-mom">
+            <div class="pane-header">
+                <span class="pane-title" data-i18n="pane.minutes">Minutes</span>
+                <div class="pane-meta">
+                    <span id="mom-status-text" class="mono small" data-i18n="mom.empty">empty</span>
+                    <button id="btn-download" class="icon-btn icon-btn-sm" data-tip="Download .md" data-i18n-tip="tip.downloadMd" type="button" onclick="downloadMoM()" disabled>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </button>
+                    <button id="btn-pdf" class="icon-btn icon-btn-sm" data-tip="Download PDF" data-i18n-tip="tip.downloadPdf" type="button" onclick="downloadPDF()" disabled>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="pane-content">
+                <div class="mom-empty" id="mom-empty">
+                    <div class="mom-empty-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                            <line x1="10" y1="9" x2="8" y2="9"/>
+                        </svg>
+                    </div>
+                    <div class="mom-empty-title" data-i18n="mom.emptyTitle">Minutes will appear here</div>
+                    <div class="mom-empty-text" id="mom-empty-text">Record or upload audio on the left, then click <span class="kbd">Generate MoM</span> to have Mee draft the minutes.</div>
+                </div>
+                <div id="mom-result"></div>
+            </div>
+        </section>
+
+        <div class="resizer chat-resizer" id="resizer-chat"></div>
+
+        <!-- RIGHT: AI Agent -->
+        <section class="pane pane-chat">
+            <div class="pane-header">
+                <span class="pane-title">
+                    <span class="agent-dot"></span> <span data-i18n="pane.agent">Agent</span>
+                </span>
+                <div class="pane-meta">
+                    <span id="chat-subtitle" class="small" data-i18n="agent.noMeeting">no meeting</span>
+                </div>
+            </div>
+
+            <div class="chat-thread" id="chat-thread">
+                <div class="msg msg-agent">
+                    <span data-i18n="agent.welcome">Hi! Ask me to summarize, send emails, or create tasks. Actions with side-effects will ask for approval first.</span>
+                    <div class="msg-meta" data-i18n="agent.justNow">just now</div>
+                </div>
+
+                <div class="suggested-prompts" id="suggested-prompts">
+                    <button class="prompt-chip" type="button" data-i18n="agent.prompt1">What are the action items?</button>
+                    <button class="prompt-chip" type="button" data-i18n="agent.prompt2">Summarize key decisions</button>
+                    <button class="prompt-chip" type="button" data-i18n="agent.prompt3">Who mentioned deployment?</button>
+                </div>
+            </div>
+
+            <div class="chat-input-wrap">
+                <textarea id="chat-input" class="chat-input" rows="1" placeholder="Ask anything…" data-i18n-ph="chat.placeholder"></textarea>
+                <button class="chat-send" id="chat-send" type="button" title="Send">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="19" x2="12" y2="5"/>
+                        <polyline points="5 12 12 5 19 12"/>
+                    </svg>
+                </button>
+            </div>
+        </section>
     </div>
-    <div class="pane-row">
-        <div class="pane">
-            <textarea id="manual-transcript" class="manual-transcript" placeholder="Paste hoặc gõ transcript vào đây..." style="display:none"></textarea>
-            <div id="transcript" class="transcript-area">
-                <p class="placeholder">Transcript sẽ hiện ở đây khi bạn bắt đầu ghi âm...</p>
+
+    <!-- ── Settings dropdown ─────────────────────────────────── -->
+    <div class="dropdown-menu" id="settings-menu">
+        <div class="dd-label" data-i18n="menu.appearance">Appearance</div>
+
+        <div class="dd-row">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            <span data-i18n="menu.theme">Theme</span>
+            <div class="seg-toggle" data-toggle="theme">
+                <button class="seg-opt" data-value="light" type="button" aria-label="Light theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+                    <span data-i18n="menu.themeLight">Light</span>
+                </button>
+                <button class="seg-opt" data-value="dark" type="button" aria-label="Dark theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    <span data-i18n="menu.themeDark">Dark</span>
+                </button>
             </div>
         </div>
-        <div class="pane">
-            <div class="print-header">
-                <div class="print-brand">✿ Mee — Meeting Note Agent</div>
-                <div class="print-sub">Minutes of Meeting</div>
+
+        <div class="dd-row">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <span data-i18n="menu.language">Language</span>
+            <div class="seg-toggle" data-toggle="lang">
+                <button class="seg-opt" data-value="vi" type="button" aria-label="Tiếng Việt">VI</button>
+                <button class="seg-opt" data-value="en" type="button" aria-label="English">EN</button>
             </div>
-            <div id="mom-result" class="mom-area">
-                <p class="placeholder">Biên bản họp sẽ hiện ở đây sau khi tạo...</p>
-            </div>
-            <div class="print-footer">Tạo bởi Mee · Meeting Note Agent · VNG</div>
         </div>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+            <span data-i18n="menu.shortcuts">Keyboard shortcuts</span>
+            <span class="dd-value mono">⌘?</span>
+        </button>
+        <div class="dd-divider"></div>
+        <div class="dd-label" data-i18n="menu.meeting">Meeting</div>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span data-i18n="menu.audioPrefs">Audio preferences</span>
+        </button>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span data-i18n="menu.transcriptPrefs">Transcript preferences</span>
+        </button>
     </div>
-</main>
 
-<!-- AudioWorklet processor code — inlined as JS string, loaded via Blob URL -->
+    <!-- ── Invite menu ──────────────────────────────────────── -->
+    <div class="dropdown-menu" id="invite-menu">
+        <div class="dd-label" data-i18n="invite.share">Share meeting</div>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span data-i18n="invite.copyLink">Copy invite link</span>
+            <span class="dd-value mono small">⌘L</span>
+        </button>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+            <span data-i18n="invite.invite">Invite collaborators</span>
+        </button>
+        <button class="dd-item" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <span data-i18n="invite.permissions">Permissions</span>
+        </button>
+    </div>
+
+    <!-- ── Avatar menu ──────────────────────────────────────── -->
+    <div class="dropdown-menu" id="avatar-menu">
+        <div class="dd-user">
+            <span class="avatar-img lg">U</span>
+            <div class="dd-user-info">
+                <div class="dd-user-name">User</div>
+                <div class="dd-user-email">user@vng.com.vn</div>
+            </div>
+        </div>
+        <div class="dd-divider"></div>
+        <button class="dd-item" id="dd-profile" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span data-i18n="avatar.profile">Profile</span>
+        </button>
+        <div class="dd-divider"></div>
+        <button class="dd-item danger" id="dd-signout" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            <span data-i18n="avatar.signOut">Sign out</span>
+        </button>
+    </div>
+
+
+</div>
+
+<script src="vocab_hints.js"></script>
+<script src="app.js"></script>
 <script>
-const AUDIO_PROCESSOR_CODE = `/**
- * AudioWorklet processor for resampling audio to 16kHz mono.
- * Adapted from WhisperLive's Chrome extension audiopreprocessor.js.
- */
-class AudioProcessor extends AudioWorkletProcessor {
-    constructor() {
-        super();
-        this.bufferSize = 4096;
-        this.buffer = new Float32Array(this.bufferSize);
-        this.bufferIndex = 0;
-        this.targetSampleRate = 16000;
+'use strict';
+
+// ════════════════════════════════════════════════
+//  i18n strings
+// ════════════════════════════════════════════════
+const STRINGS = {
+    vi: {
+        // topbar
+        'btn.invite':                'Mời',
+        'status.ready':              'Sẵn sàng',
+        'tip.settings':              'Cài đặt',
+        'tip.toggleAgent':           'Mở/đóng Agent',
+        // meeting control
+        'meeting.titlePlaceholder':  'Cuộc họp chưa đặt tên',
+        'meta.noDate':               'Chưa có ngày',
+        'meta.noPeople':             'Chưa có người tham dự',
+        'meta.person':               'người',
+        'meta.people':               'người',
+        'meta.seg':                  'đoạn',
+        'btn.details':               'Chi tiết',
+        'btn.record':                'Ghi âm',
+        'btn.stop':                  'Dừng',
+        'btn.upload':                'Tải lên',
+        // details
+        'details.date':              'Ngày',
+        'details.venue':             'Địa điểm',
+        'details.venuePlaceholder':  'Online / Văn phòng',
+        'details.purpose':           'Mục đích',
+        'details.purposePlaceholder':'Cuộc họp về gì?',
+        'details.chairedBy':         'Chủ trì',
+        'details.notedBy':           'Người ghi',
+        'details.attendees':         'Người tham dự',
+        'details.attendeesPlaceholder':'Linh (PM), Tuấn (Eng)',
+        'details.language':          'Ngôn ngữ',
+        'details.meetingLang':       'Ngôn ngữ cuộc họp',
+        'details.meetingLangHint':   'Giúp Whisper nhận dạng chính xác hơn',
+        'details.ws':                'WebSocket',
+        'details.namePlaceholder':   'Tên',
+        'details.vocab':             'Từ vựng',
+        'details.vocabPlaceholder':  'Từ khóa tùy chỉnh (cách nhau bởi dấu phẩy)',
+        'details.corrections':       'Sửa lỗi nhận dạng',
+        'details.heardPlaceholder':  'Nghe được ("wisper")',
+        'details.correctPlaceholder':'Đúng là ("Whisper")',
+        'details.addCorrection':     '+ Thêm sửa lỗi',
+        // transcript pane
+        'pane.transcript':           'Biên bản gốc',
+        'transcriptPlaceholder':     'Bắt đầu ghi âm, tải audio lên, hoặc paste nội dung vào đây.',
+        'tip.search':                'Tìm kiếm (Cmd+F)',
+        'btn.saveTxt':               'Lưu .txt',
+        'btn.newMeeting':            'Cuộc họp mới',
+        'btn.generateMom':           'Tạo Biên bản',
+        // MoM pane
+        'pane.minutes':              'Biên bản họp',
+        'mom.empty':                 'trống',
+        'mom.emptyTitle':            'Biên bản sẽ hiện ở đây',
+        'mom.emptyText':             'Ghi âm hoặc tải audio bên trái, sau đó bấm {kbd} để Mee tự sinh biên bản.',
+        'mom.generated':             'đã tạo',
+        'tip.downloadMd':            'Tải .md',
+        'tip.downloadPdf':           'Tải PDF',
+        // Agent pane
+        'pane.agent':                'Trợ lý Mee',
+        'agent.noMeeting':           'chưa có cuộc họp',
+        'agent.welcome':             'Xin chào! Hỏi tôi tóm tắt, gửi email, hoặc tạo task. Action có side-effect sẽ xin phép trước.',
+        'agent.justNow':             'vừa xong',
+        'agent.prompt1':             'Có những action items nào?',
+        'agent.prompt2':             'Tổng hợp các quyết định chính',
+        'agent.prompt3':             'Ai đã đề cập đến deployment?',
+        'chat.placeholder':          'Hỏi bất cứ điều gì…',
+        'chat.linkedTo':             'liên kết với:',
+        // Settings menu
+        'menu.appearance':           'Giao diện',
+        'menu.theme':                'Chủ đề',
+        'menu.themeDark':            'Tối',
+        'menu.themeLight':           'Sáng',
+        'menu.language':             'Ngôn ngữ',
+        'menu.shortcuts':            'Phím tắt',
+        'menu.meeting':              'Cuộc họp',
+        'menu.audioPrefs':           'Cài đặt âm thanh',
+        'menu.transcriptPrefs':      'Cài đặt phiên dịch',
+        // Invite menu
+        'invite.share':              'Chia sẻ cuộc họp',
+        'invite.copyLink':           'Sao chép link mời',
+        'invite.invite':             'Mời cộng tác viên',
+        'invite.permissions':        'Quyền truy cập',
+        // Avatar menu
+        'avatar.profile':            'Hồ sơ',
+        'avatar.myMeetings':         'Cuộc họp của tôi',
+        'avatar.billing':            'Thanh toán',
+        'avatar.signOut':            'Đăng xuất',
+    },
+    en: {
+        // topbar
+        'btn.invite':                'Invite',
+        'status.ready':              'Ready',
+        'tip.settings':              'Settings',
+        'tip.toggleAgent':           'Toggle Agent',
+        // meeting control
+        'meeting.titlePlaceholder':  'Untitled meeting',
+        'meta.noDate':               'No date',
+        'meta.noPeople':             'No participants',
+        'meta.person':               'person',
+        'meta.people':               'people',
+        'meta.seg':                  'seg',
+        'btn.details':               'Details',
+        'btn.record':                'Record',
+        'btn.stop':                  'Stop',
+        'btn.upload':                'Upload',
+        // details
+        'details.date':              'Date',
+        'details.venue':             'Venue',
+        'details.venuePlaceholder':  'Online / Office',
+        'details.purpose':           'Purpose',
+        'details.purposePlaceholder':"What's this about?",
+        'details.chairedBy':         'Chaired by',
+        'details.notedBy':           'Noted by',
+        'details.attendees':         'Attendees',
+        'details.attendeesPlaceholder':'Linh (PM), Tuấn (Eng)',
+        'details.language':          'Language',
+        'details.meetingLang':       'Meeting language',
+        'details.meetingLangHint':   'Helps Whisper transcribe more accurately',
+        'details.ws':                'WebSocket',
+        'details.namePlaceholder':   'Name',
+        'details.vocab':             'Vocabulary',
+        'details.vocabPlaceholder':  'Custom keywords (comma separated)',
+        'details.corrections':       'Corrections',
+        'details.heardPlaceholder':  'Heard ("wisper")',
+        'details.correctPlaceholder':'Correct ("Whisper")',
+        'details.addCorrection':     '+ Add correction',
+        // transcript pane
+        'pane.transcript':           'Transcript',
+        'transcriptPlaceholder':     'Start recording, upload audio, or paste your transcript here.',
+        'tip.search':                'Search (Cmd+F)',
+        'btn.saveTxt':               'Save .txt',
+        'btn.newMeeting':            'New meeting',
+        'btn.generateMom':           'Generate MoM',
+        // MoM pane
+        'pane.minutes':              'Minutes',
+        'mom.empty':                 'empty',
+        'mom.emptyTitle':            'Minutes will appear here',
+        'mom.emptyText':             'Record or upload audio on the left, then click {kbd} to have Mee draft the minutes.',
+        'mom.generated':             'generated',
+        'tip.downloadMd':            'Download .md',
+        'tip.downloadPdf':           'Download PDF',
+        // Agent pane
+        'pane.agent':                'Agent',
+        'agent.noMeeting':           'no meeting',
+        'agent.welcome':             "Hi! Ask me to summarize, send emails, or create tasks. Actions with side-effects will ask for approval first.",
+        'agent.justNow':             'just now',
+        'agent.prompt1':             'What are the action items?',
+        'agent.prompt2':             'Summarize key decisions',
+        'agent.prompt3':             'Who mentioned deployment?',
+        'chat.placeholder':          'Ask anything…',
+        'chat.linkedTo':             'linked to:',
+        // Settings menu
+        'menu.appearance':           'Appearance',
+        'menu.theme':                'Theme',
+        'menu.themeDark':            'Dark',
+        'menu.themeLight':           'Light',
+        'menu.language':             'Language',
+        'menu.shortcuts':            'Keyboard shortcuts',
+        'menu.meeting':              'Meeting',
+        'menu.audioPrefs':           'Audio preferences',
+        'menu.transcriptPrefs':      'Transcript preferences',
+        // Invite menu
+        'invite.share':              'Share meeting',
+        'invite.copyLink':           'Copy invite link',
+        'invite.invite':             'Invite collaborators',
+        'invite.permissions':        'Permissions',
+        // Avatar menu
+        'avatar.profile':            'Profile',
+        'avatar.myMeetings':         'My meetings',
+        'avatar.billing':            'Billing',
+        'avatar.signOut':            'Sign out',
     }
-
-    process(inputs, outputs, parameters) {
-        const input = inputs[0];
-        if (!input || !input.length) return true;
-
-        const channelData = input[0]; // mono
-        for (let i = 0; i < channelData.length; i++) {
-            this.buffer[this.bufferIndex++] = channelData[i];
-
-            if (this.bufferIndex >= this.bufferSize) {
-                // Resample from source sample rate to 16kHz
-                const resampled = this.resample(this.buffer, sampleRate, this.targetSampleRate);
-                this.port.postMessage(resampled);
-                this.bufferIndex = 0;
-            }
-        }
-        return true;
-    }
-
-    resample(audioData, fromRate, toRate) {
-        if (fromRate === toRate) {
-            return new Float32Array(audioData);
-        }
-        const ratio = fromRate / toRate;
-        const newLength = Math.round(audioData.length / ratio);
-        const result = new Float32Array(newLength);
-        for (let i = 0; i < newLength; i++) {
-            const srcIndex = i * ratio;
-            const low = Math.floor(srcIndex);
-            const high = Math.min(low + 1, audioData.length - 1);
-            const frac = srcIndex - low;
-            result[i] = audioData[low] * (1 - frac) + audioData[high] * frac;
-        }
-        return result;
-    }
-}
-
-registerProcessor("audio-processor", AudioProcessor);
-`;
-</script>
-
-<!-- Vocab hints (inlined from vocab_hints.js) -->
-<script>
-/**
- * Whisper Vocabulary Hints — VNG Cloud / GreenNode
- * Chọn product topic → tự điền vocab hints vào Whisper prompt
- * Cập nhật: 2026-04-10
- */
-
-const VOCAB_HINTS = {
-  "": {
-    label: "-- Chọn chủ đề họp --",
-    hints: "",
-  },
-  "general": {
-    label: "General / Chung",
-    hints: "GreenNode, VNG Cloud, Region, Availability Zone, Data Center, API, REST API, API Key, API Gateway, Webhook, SDK, CLI, IaC, Terraform, Portal, vConsole, Dashboard, Pay-as-you-go, Quota, SLA, Encryption, Authentication, Authorization, Certificate, SSL, TLS, HTTPS, Firewall, Backup, Recovery, Replication, Failover, Failback, Scale Out, Scale In, Health Check",
-  },
-  "vks": {
-    label: "VKS — Kubernetes Service",
-    hints: "VKS, Kubernetes, cluster, node group, node, pod, container, image, deployment, replica, control plane, data plane, master node, worker node, kubelet, kube-proxy, kubeconfig, kubectl, Ingress, Service, ClusterIP, NodePort, LoadBalancer, Persistent Volume, PV, PVC, StorageClass, ConfigMap, Secret, Network Policy, HPA, VPA, vCR, Container Registry, repository, image tag, Terraform, Helm, Helm chart, IaC, Autoscale, Spot Instance, Preemptible Node",
-  },
-  "vserver": {
-    label: "vServer — Virtual Server / Compute",
-    hints: "vServer, Virtual Machine, VM, instance, flavor, vCPU, RAM, GPU, VRAM, GPU Server, Block Store, Volume, Root Volume, Data Volume, Snapshot, Image, Custom Image, SSH Key, Key Pair, Floating IP, Elastic IP, Security Group, Network ACL, Route Table, Subnet, VPC, Auto Scaling, Auto Scaling Group, Scaling Policy, Scale Out, Scale In, Cooldown Period, Region HAN-01, HAN-02, HCM-02, HCM-03, HCM-04, Availability Zone, Backup, IOPS, QoS",
-  },
-  "vstorage": {
-    label: "vStorage — Object & File Storage",
-    hints: "vStorage, Object Storage, File Storage, Storage Gateway, Bucket, Object, Key, Metadata, Upload, Download, DataSync, vBackup, Disaster Recovery Center, DRC, S3-compatible, Access Key, Secret Key, rclone, NFS, SMB, Mount, Unmount, Retention Policy, Versioning, Lifecycle Policy",
-  },
-  "vdb": {
-    label: "VDB — Database as a Service",
-    hints: "VDB, RDS, Relational Database Service, MySQL, MariaDB, PostgreSQL, Redis, Memcached, MemoryStore Database Service, MDS, OpenSearch, Instance, Endpoint, Connection String, Read Replica, Vertical Scaling, Storage Expansion, Automated Backup, Backup Retention, Standalone, High Availability, HA, Failover, pgvector, pg_trgm, PostGIS",
-  },
-  "ai": {
-    label: "AI Stack / AI Platform / AI Infrastructure",
-    hints: "AI Stack, AI Gateway, AI Platform, GenAI Studio, LLM, Large Language Model, Embedding Model, Inference Endpoint, Model Registry, Model Catalog, RAG, Retrieval Augmented Generation, Vector Database, OpenAI, Google Gemini, DeepSeek, Llama, GPU H100, L40s, A40, RTX 4090, VRAM, Context Length, Auto-scaling, InfiniBand, Guardrails, Caching, Automatic Fallback, Semantic Search, OpenSearch, pgvector, Agentbase, one-click deploy",
-  },
-  "vcdn": {
-    label: "vCDN — Content Delivery Network",
-    hints: "vCDN, Web Accelerator, Object Download, Video on Demand, VOD, Livestream, HLS, Edge Server, Origin Server, Cache, Cache TTL, CDN Purge, Cache Hit Ratio, CNAME, SSL/TLS, HTTP/2, PageRule, Bandwidth Report, Compression, Image Optimization, Security Link",
-  },
-  "vnetwork": {
-    label: "vNetwork — Virtual Network",
-    hints: "VPC, Virtual Private Cloud, Subnet, CIDR, Route Table, Network Interface, Security Group, Network ACL, VPC Peering, Cross Connect, Cross Region Connection, Dynamic Routing, Global Load Balancer, GLB, GSLB, Application Load Balancer, ALB, Network Load Balancer, NLB, Load Balancing Pool, Health Check, Sticky Session, Round Robin, Least Connection, SSL Termination, Floating IP",
-  },
-  "vdns": {
-    label: "vDNS — Domain Name System",
-    hints: "vDNS, DNS, Domain Name System, A Record, AAAA Record, CNAME Record, MX Record, TXT Record, SOA Record, NS Record, DNS Zone, Nameserver, TTL, DNSSEC, DDoS Protection, Subdomain, Name Resolution",
-  },
-  "vwaf": {
-    label: "vWAF — Web Application Firewall",
-    hints: "vWAF, Web Application Firewall, DDoS Protection, Security Policy, Rule, IP Address Rule, Pattern Matching, Allowlist, Blocklist, Rate Limiting, Bot Protection, SQL Injection, XSS, Request Filtering, Custom Rule",
-  },
-  "iam": {
-    label: "IAM — Identity & Access Management",
-    hints: "IAM, Identity and Access Management, Root User, IAM User, Service Account, User Group, Role, Policy, Permission, Principal, Resource, Action, Effect, Inline Policy, Managed Policy, Trusted Relationship, Assume Role, Access Key, Secret Key, Session Token, MFA, Multi-Factor Authentication, RBAC, Role-Based Access Control, Audit Trail, vConsole, Partner Portal",
-  },
-  "kms": {
-    label: "KMS — Key Management System",
-    hints: "KMS, Key Management System, Encryption Key, GreenNode Managed Key, Customer Managed Key, Master Key, Data Key, Create Key, Delete Key, Enable Key, Disable Key, Import Key, Export Key, Key Alias, Key Rotation, Key State",
-  },
-  "vmonitor": {
-    label: "vMonitor Platform",
-    hints: "vMonitor, Monitoring, Observability, Metric, Log, Alert, Dashboard, Widget, Chart, Visualization, Alert Rule, Alert Policy, Notification Channel, Threshold, Trigger, Alert State, OK, WARNING, CRITICAL, Log Search, Log Filtering, Log Aggregation, Field Extraction, Regex, Time Series, Label, Webhook, Slack, Microsoft Teams",
-  },
-  "datasync": {
-    label: "DataSync",
-    hints: "DataSync, Transfer Job, Task, Source, Destination, Data Migration, Data Transfer, Amazon S3, Google Cloud Storage, S3-Compatible, On-Premise, Filter Include Prefix, Filter Exclude Prefix, Transfer Status, Retry Transfer, Failed File List, Data Validation",
-  },
-  "backup_dr": {
-    label: "Backup Center & Disaster Recovery",
-    hints: "Backup Vault, Backup Plan, Backup Policy, Backup Point, Recovery Point, Full Backup, Incremental Backup, RPO, Recovery Point Objective, RTO, Recovery Time Objective, Disaster Recovery Center, DRC, Server Disaster Recovery, SDR, Replication, Replication Group, Failover, Failback, Test Failover, Veeam, Veeam Backup and Replication, Recovery Plan",
-  },
-  "vcolo": {
-    label: "vColocation / vColo",
-    hints: "vColocation, vColo, Colocation, Data Center, Rack, Rack Unit, Cage, Cabinet, Rack Space, Power Supply, Power Meter, Electricity Usage, Temperature, Humidity, Environmental Monitoring, Asset Tracking, Connection Circuit, Bandwidth",
-  },
-  "vcloudstack": {
-    label: "vCloudStack — Hybrid Cloud",
-    hints: "vCloudStack, Hybrid Cloud, On-Premise, On-Premises Infrastructure, Cloud Extension, Managed Solution, Data Locality, API Compatibility, Cloud Integration",
-  },
-  "veka": {
-    label: "Veka.ai / vCloudCam — Smart Camera",
-    hints: "Veka.ai, vCloudCam, Smart Camera, Surveillance, Face Recognition, Anomaly Detection, Intrusion Alert, Live Streaming, Video Recording, Cloud-based, Real-time Alert",
-  },
 };
 
-/**
- * Populate the topic dropdown and wire up the change handler.
- * Call once after DOM is ready.
- */
-function initVocabHints() {
-  const container = document.getElementById("meeting-topic-list");
-  if (!container) return;
+let currentLang = 'vi';
 
-  function updateVocabHints() {
-    const checked = Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(cb => cb.value);
-    const vocabEl = document.getElementById("vocab-hints");
-    if (!vocabEl) return;
-    if (checked.length === 0) { vocabEl.value = ""; return; }
-    const seen = new Set();
-    const merged = [];
-    for (const key of checked) {
-      const hints = VOCAB_HINTS[key]?.hints || "";
-      for (const term of hints.split(",")) {
-        const t = term.trim();
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          merged.push(t);
-        }
-      }
+(function() {
+
+const workspace   = document.getElementById('workspace');
+const chatBtn     = document.getElementById('chat-toggle');
+const avatarBtn   = document.getElementById('avatar-fab');
+const avatarMenu  = document.getElementById('avatar-menu');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsMenu= document.getElementById('settings-menu');
+const inviteBtn   = document.getElementById('invite-btn');
+const inviteMenu  = document.getElementById('invite-menu');
+const wsBtn       = document.getElementById('workspace-btn');
+const detailsBtn  = document.getElementById('btn-details');
+const langSelect  = document.getElementById('language');
+
+const K = {
+    theme:        'mee.theme',
+    lang:         'mee.lang',
+    chatOpen:     'mee.chatOpen',
+    chatWidth:    'mee.chatWidth',
+    mainLeftWidth:'mee.mainLeftWidth',
+};
+
+// ── i18n apply ───────────────────────────────────
+function applyLang(lang) {
+    currentLang = (STRINGS[lang] ? lang : 'vi');
+    const t = STRINGS[currentLang];
+    document.documentElement.setAttribute('lang', currentLang);
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (t[key] !== undefined) el.textContent = t[key];
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+        const key = el.getAttribute('data-i18n-ph');
+        if (t[key] !== undefined) el.setAttribute('placeholder', t[key]);
+    });
+    document.querySelectorAll('[data-i18n-tip]').forEach(el => {
+        const key = el.getAttribute('data-i18n-tip');
+        if (t[key] !== undefined) el.setAttribute('data-tip', t[key]);
+    });
+
+    // MoM empty text — has {kbd} placeholder
+    const emptyText = document.getElementById('mom-empty-text');
+    if (emptyText) {
+        emptyText.innerHTML = (t['mom.emptyText'] || '').replace(
+            '{kbd}', `<span class="kbd">${t['btn.generateMom']}</span>`
+        );
     }
-    vocabEl.value = merged.join(", ");
-  }
 
-  for (const [key, data] of Object.entries(VOCAB_HINTS)) {
-    if (key === "") continue;
-    const label = document.createElement("label");
-    label.className = "topic-checkbox-item";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.value = key;
-    cb.addEventListener("change", updateVocabHints);
-    label.appendChild(cb);
-    label.appendChild(document.createTextNode(" " + data.label));
-    container.appendChild(label);
-  }
+    // Update segmented toggle visual state
+    if (typeof updateSegStates === 'function') updateSegStates();
+
+    // MoM status text — depends on whether content exists
+    const momResult = document.getElementById('mom-result');
+    const momStatus = document.getElementById('mom-status-text');
+    if (momStatus) {
+        const has = momResult.innerHTML.trim().length > 0;
+        momStatus.textContent = has ? t['mom.generated'] : t['mom.empty'];
+    }
+
+    localStorage.setItem(K.lang, currentLang);
+    // Trigger meta re-render with new lang
+    updateMeta();
 }
 
-</script>
+// ── Theme toggle ────────────────────────────────
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(K.theme, theme);
+    updateSegStates();
+}
 
-<!-- Main app (inlined from app.js, patched for proxy compatibility) -->
-<script>
-/**
- * Meeting Note Agent — Frontend
- * Handles audio capture, WebSocket transcription, and MoM generation.
- */
+// ── Segmented toggles (theme / language) ───────
+function updateSegStates() {
+    const curTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+    document.querySelectorAll('.seg-toggle').forEach(toggle => {
+        const type = toggle.getAttribute('data-toggle');
+        const active = type === 'theme' ? curTheme : currentLang;
+        toggle.querySelectorAll('.seg-opt').forEach(opt => {
+            opt.classList.toggle('active', opt.getAttribute('data-value') === active);
+        });
+    });
+}
 
-// Auto-detect API base path so fetch calls work both locally and behind AgentBase proxy.
-// Locally: pathname = '/' → API_BASE = ''
-// Behind proxy: pathname = '/runtime/endpoint-xxx' → API_BASE = '/runtime/endpoint-xxx'
-const API_BASE = (() => {
-    let p = window.location.pathname.replace(/\/$/, '');
-    // Strip trailing filename if any (e.g. /index.html → '')
-    if (/\.[a-z]{2,5}$/i.test(p)) p = p.replace(/\/[^/]+$/, '');
-    return p;
-})();
-
-let websocket = null;
-let audioContext = null;
-let audioWorklet = null;
-let mediaStream = null;
-let sessionId = null;
-let timerInterval = null;
-let startTime = null;
-let allCompletedSegments = [];
-let wsReconnectAttempts = 0;
-let downloadUrl = null;
-
-// Set today's date as default + init vocab hints dropdown + load vocab pool
-document.addEventListener("DOMContentLoaded", () => {
-    const today = new Date().toISOString().split("T")[0];
-    document.getElementById("meeting-date").value = today;
-    // Auto-detect WebSocket host from current page hostname (user can override)
-    const wsEl = document.getElementById("ws-url");
-    wsEl.value = `ws://${window.location.hostname}:9091`;
-
-    initVocabHints();
-    loadVocabPool();
+document.querySelectorAll('.seg-toggle').forEach(toggle => {
+    const type = toggle.getAttribute('data-toggle');
+    toggle.querySelectorAll('.seg-opt').forEach(opt => {
+        opt.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const val = opt.getAttribute('data-value');
+            if (type === 'theme') {
+                applyTheme(val);
+            } else if (type === 'lang') {
+                applyLang(val);
+            }
+        });
+    });
 });
 
-// ─── Recording Controls ─────────────────────────────────────────
+// ── Meeting language (Details panel) — only saves preference, does NOT change UI lang
+langSelect?.addEventListener('change', function() {
+    localStorage.setItem('mee.meetingLang', this.value);
+});
+// Restore saved meeting language
+const savedMeetingLang = localStorage.getItem('mee.meetingLang');
+if (savedMeetingLang && langSelect) langSelect.value = savedMeetingLang;
 
-async function startRecording() {
-    const title = document.getElementById("meeting-title").value.trim();
-    if (!title) {
-        alert("Vui lòng nhập Tên Project.");
-        return;
+// ── Chat toggle ──────────────────────────────────
+function setChatOpen(open) {
+    workspace.classList.toggle('chat-open', open);
+    chatBtn.classList.toggle('active', open);
+    localStorage.setItem(K.chatOpen, open ? 'true' : 'false');
+    if (open) {
+        const w = localStorage.getItem(K.chatWidth) || '380';
+        workspace.style.setProperty('--chat-width', w + 'px');
     }
+}
+chatBtn.addEventListener('click', () => setChatOpen(!workspace.classList.contains('chat-open')));
 
-    const wsUrl = document.getElementById("ws-url").value.trim();
-    const language = document.getElementById("language").value;
+document.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        setChatOpen(!workspace.classList.contains('chat-open'));
+    }
+});
 
-    setStatus("Đang kết nối tới server transcription...", "connecting");
+const stored = localStorage.getItem(K.chatOpen);
+setChatOpen(stored === null ? true : stored === 'true');
 
-    try {
-        // Create session
-        const resp = await fetch(`${API_BASE}/api/session`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                title,
-                purpose: document.getElementById("meeting-purpose").value.trim(),
-                venue: document.getElementById("meeting-venue").value.trim(),
-                date: formatDateVN(document.getElementById("meeting-date").value),
-                chaired_by: document.getElementById("chaired-by").value.trim(),
-                noted_by: document.getElementById("noted-by").value.trim(),
-                attendees: document.getElementById("attendees").value.trim(),
-            }),
+// ── Details toggle ───────────────────────────────
+detailsBtn.addEventListener('click', function() {
+    const p = document.getElementById('details-panel');
+    p.hidden = !p.hidden;
+    detailsBtn.classList.toggle('open', !p.hidden);
+});
+
+// ── Dropdown menus ──────────────────────────────
+function setupDropdown(triggerBtn, menu) {
+    triggerBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        document.querySelectorAll('.dropdown-menu.open').forEach(m => {
+            if (m !== menu) m.classList.remove('open');
         });
-        const data = await resp.json();
-        sessionId = data.session_id;
-
-        // Connect WebSocket
-        websocket = new WebSocket(wsUrl);
-        websocket.onopen = async () => {
-            const vocabHints = document.getElementById("vocab-hints").value.trim();
-            const prompt = await fetchWhisperPrompt(vocabHints, language);
-            const config = {
-                uid: sessionId,
-                language,
-                task: "transcribe",
-                model: "large-v3",
-                use_vad: true,
-                initial_prompt: prompt,
-            };
-            websocket.send(JSON.stringify(config));
-            setStatus("Đang chờ server...", "connecting");
-        };
-        websocket.onmessage = (event) => handleServerMessage(JSON.parse(event.data));
-        websocket.onerror = () => setStatus("Lỗi kết nối. Đang thử lại...", "error");
-        websocket.onclose = () => {
-            if (document.getElementById("btn-stop").disabled) {
-                setStatus("Đã ngắt kết nối", "idle");
-                return;
-            }
-            stopAudioCapture();
-            const delay = Math.min(3000, 1000 * (wsReconnectAttempts + 1));
-            wsReconnectAttempts++;
-            if (wsReconnectAttempts <= 5) {
-                setStatus(`Mất kết nối. Thử lại sau ${delay / 1000}s... (${wsReconnectAttempts}/5)`, "error");
-                setTimeout(() => reconnectWebSocket(wsUrl, language), delay);
-            } else {
-                setStatus("Mất kết nối. Nhấn Dừng rồi Bắt đầu lại.", "error");
-            }
-        };
-    } catch (err) {
-        setStatus(`Lỗi: ${err.message}`, "error");
-    }
-}
-
-function handleServerMessage(msg) {
-    if (msg.message === "SERVER_READY") {
-        wsReconnectAttempts = 0;
-        setStatus("Đang ghi âm...", "recording");
-        startAudioCapture();
-        startTimer();
-        document.getElementById("btn-start").disabled = true;
-        document.getElementById("btn-stop").disabled = false;
-        document.getElementById("btn-generate-notes").disabled = true;
-        return;
-    }
-    if (msg.message === "DISCONNECT") { stopRecording(); return; }
-    if (msg.status === "WAIT") { setStatus(`Server bận. Chờ ~${Math.ceil(msg.message)} phút.`, "connecting"); return; }
-    if (msg.segments) updateTranscript(msg.segments);
-}
-
-function stopRecording() {
-    wsReconnectAttempts = 999;
-    if (websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(new TextEncoder().encode("END_OF_AUDIO"));
-        websocket.close();
-    }
-    stopAudioCapture();
-    stopTimer();
-    setStatus("Đã dừng ghi âm. Bạn có thể tạo biên bản họp.", "idle");
-    document.getElementById("btn-start").disabled = false;
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("btn-generate-notes").disabled = false;
-    document.getElementById("btn-save-transcript").disabled = false;
-}
-
-function reconnectWebSocket(wsUrl, language) {
-    websocket = new WebSocket(wsUrl);
-    websocket.onopen = async () => {
-        const vocabHints = document.getElementById("vocab-hints").value.trim();
-        const prompt = await fetchWhisperPrompt(vocabHints, language);
-        websocket.send(JSON.stringify({
-            uid: sessionId, language, task: "transcribe", model: "large-v3", use_vad: true,
-            initial_prompt: prompt,
-        }));
-    };
-    websocket.onmessage = (e) => handleServerMessage(JSON.parse(e.data));
-    websocket.onerror = () => {};
-    websocket.onclose = () => {
-        if (document.getElementById("btn-stop").disabled) return;
-        wsReconnectAttempts++;
-        if (wsReconnectAttempts <= 5) setTimeout(() => reconnectWebSocket(wsUrl, language), Math.min(3000, wsReconnectAttempts * 1000));
-        else setStatus("Mất kết nối. Nhấn Dừng rồi Bắt đầu lại.", "error");
-    };
-    startAudioCapture();
-}
-
-// ─── Audio Capture ──────────────────────────────────────────────
-
-async function startAudioCapture() {
-    try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
-        });
-        audioContext = new AudioContext();
-        const source = audioContext.createMediaStreamSource(mediaStream);
-        // Inline AudioWorklet via Blob URL — no external file needed on proxy
-        const _apBlob = new Blob([AUDIO_PROCESSOR_CODE], { type: "application/javascript" });
-        const _apUrl = URL.createObjectURL(_apBlob);
-        await audioContext.audioWorklet.addModule(_apUrl);
-        URL.revokeObjectURL(_apUrl);
-        audioWorklet = new AudioWorkletNode(audioContext, "audio-processor");
-        audioWorklet.port.onmessage = (event) => {
-            if (websocket && websocket.readyState === WebSocket.OPEN) {
-                websocket.send(event.data.buffer);
-            }
-        };
-        source.connect(audioWorklet);
-        audioWorklet.connect(audioContext.destination);
-    } catch (err) {
-        setStatus(`Lỗi microphone: ${err.message}`, "error");
-    }
-}
-
-function stopAudioCapture() {
-    audioWorklet?.disconnect(); audioWorklet = null;
-    audioContext?.close(); audioContext = null;
-    mediaStream?.getTracks().forEach(t => t.stop()); mediaStream = null;
-}
-
-// ─── Transcript Display ─────────────────────────────────────────
-
-function updateTranscript(segments) {
-    const container = document.getElementById("transcript");
-    const prevCount = allCompletedSegments.length;
-
-    for (const seg of segments) {
-        if (seg.completed && !allCompletedSegments.some(s => s.start === seg.start && s.text === seg.text)) {
-            allCompletedSegments.push({ ...seg });
-        }
-    }
-
-    const newSegs = allCompletedSegments.slice(prevCount);
-    if (prevCount === 0 && newSegs.length > 0) container.innerHTML = "";
-
-    const oldInProgress = container.querySelector(".segment.in-progress");
-    if (oldInProgress) oldInProgress.remove();
-
-    for (const seg of newSegs) {
-        const div = document.createElement("div");
-        div.className = "segment completed";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
-
-    const inProgress = segments.filter(s => !s.completed);
-    if (inProgress.length > 0) {
-        const seg = inProgress[inProgress.length - 1];
-        const div = document.createElement("div");
-        div.className = "segment in-progress";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
-
-    if (allCompletedSegments.length === 0 && inProgress.length === 0) {
-        container.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
-    }
-
-    container.scrollTop = container.scrollHeight;
-    const countEl = document.getElementById("segment-count");
-    if (countEl) countEl.textContent = `${allCompletedSegments.length} đoạn`;
-}
-
-function getFullTranscript() {
-    // Manual input takes priority if visible and has content
-    const manual = document.getElementById("manual-transcript");
-    if (manual && manual.style.display !== "none" && manual.value.trim()) {
-        return manual.value.trim();
-    }
-    return allCompletedSegments.map(s => s.text.trim()).filter(Boolean).join(" ");
-}
-
-function toggleManualInput() {
-    const manual = document.getElementById("manual-transcript");
-    const auto = document.getElementById("transcript");
-    const isHidden = manual.style.display === "none";
-    manual.style.display = isHidden ? "block" : "none";
-    auto.style.display = isHidden ? "none" : "block";
-    if (isHidden) {
-        document.getElementById("btn-generate-notes").disabled = false;
-        document.getElementById("btn-save-transcript").disabled = false;
-        manual.focus();
-    }
-}
-
-// ─── File Upload ────────────────────────────────────────────────
-
-async function uploadAudioFile(input) {
-    const file = input.files[0];
-    if (!file) return;
-
-    const language = document.getElementById("language").value;
-    const vocabHints = document.getElementById("vocab-hints").value.trim();
-    setStatus(`Đang upload và transcribe "${file.name}"...`, "connecting");
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("language", language);
-    if (vocabHints) formData.append("vocab_hints", vocabHints);
-
-    try {
-        const resp = await fetch(`${API_BASE}/api/transcribe`, { method: "POST", body: formData });
-        if (!resp.ok) throw new Error((await resp.json()).detail || "Transcription failed");
-
-        const result = await resp.json();
-        const text = result.text || "";
-        if (!text.trim()) { setStatus("Không phát hiện giọng nói trong file.", "error"); return; }
-
-        allCompletedSegments = [{ start: "0.000", text, completed: true }];
-        const container = document.getElementById("transcript");
-        container.innerHTML = `<div class="segment completed"><span class="timestamp">[upload]</span><span class="text">${escapeHtml(text)}</span></div>`;
-
-        setStatus(`Đã transcribe "${file.name}". Bạn có thể tạo biên bản họp.`, "idle");
-        document.getElementById("btn-generate-notes").disabled = false;
-        document.getElementById("btn-save-transcript").disabled = false;
-    } catch (err) {
-        setStatus(`Lỗi upload: ${err.message}`, "error");
-    }
-    input.value = "";
-}
-
-// ─── Generate MoM ───────────────────────────────────────────────
-
-async function generateNotes() {
-    const transcript = getFullTranscript();
-    if (!transcript) {
-        alert("Chưa có transcript. Vui lòng ghi âm hoặc upload file audio trước.");
-        return;
-    }
-
-    setStatus("Đang tạo biên bản họp (30-60 giây)...", "assessing");
-    document.getElementById("btn-generate-notes").disabled = true;
-    document.getElementById("btn-new-session").style.display = "inline-block";
-
-    const meetingDate = formatDateVN(document.getElementById("meeting-date").value);
-
-    try {
-        const resp = await fetch(`${API_BASE}/api/generate-notes`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                session_id: sessionId || "manual",
-                title: document.getElementById("meeting-title").value.trim(),
-                purpose: document.getElementById("meeting-purpose").value.trim(),
-                venue: document.getElementById("meeting-venue").value.trim(),
-                date: meetingDate,
-                chaired_by: document.getElementById("chaired-by").value.trim(),
-                noted_by: document.getElementById("noted-by").value.trim(),
-                attendees: document.getElementById("attendees").value.trim(),
-                transcript,
-            }),
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.detail || "Tạo biên bản thất bại");
-        }
-
-        const result = await resp.json();
-        displayMoM(result.notes);
-        downloadUrl = API_BASE + result.download_url;
-
-        const downloadRow = document.getElementById("download-row");
-        downloadRow.style.display = "flex";
-        const dlBtn = document.getElementById("btn-download");
-        dlBtn.disabled = false;
-        document.getElementById("btn-pdf").disabled = false;
-        const exportBtn = document.getElementById("btn-export-tasks");
-        if (exportBtn) exportBtn.style.display = "block";
-
-        setStatus("Biên bản họp đã tạo xong! Bạn có thể tải về.", "idle");
-    } catch (err) {
-        setStatus(`Lỗi tạo biên bản: ${err.message}`, "error");
-        document.getElementById("btn-generate-notes").disabled = false;
-    }
-}
-
-function displayMoM(notes) {
-    const container = document.getElementById("mom-result");
-    let html = "";
-
-    // Header info
-    html += `<div class="mom-section">
-        <div class="mom-section-title">Thông tin cuộc họp</div>
-        <table class="mom-meta-table">
-            <tr><td>Mục đích / Purpose</td><td>${escapeHtml(notes.purpose || "")}</td></tr>
-            <tr><td>Địa điểm / Venue</td><td>${escapeHtml(notes.venue || "")}</td></tr>
-            <tr><td>Ngày họp / Date</td><td>${escapeHtml(notes.date || "")}</td></tr>
-            <tr><td>Người chủ trì / Chaired by</td><td>${escapeHtml(notes.chaired_by || "")}</td></tr>
-            <tr><td>Thư ký / Noted by</td><td>${escapeHtml(notes.noted_by || "")}</td></tr>
-        </table>
-    </div>`;
-
-    // Attendees
-    const attendees = notes.attendees || [];
-    if (attendees.length > 0) {
-        html += `<div class="mom-section">
-            <div class="mom-section-title">Thành phần tham gia</div>
-            <table class="mom-table">
-                <tr><th>No.</th><th>Họ và tên</th><th>Đơn vị</th><th>Chức vụ</th></tr>
-                ${attendees.map((a, i) => `
-                    <tr>
-                        <td>${i + 1}</td>
-                        <td>${escapeHtml(a.name || "")}</td>
-                        <td>${escapeHtml(a.department || "")}</td>
-                        <td>${escapeHtml(a.title || "")}</td>
-                    </tr>`).join("")}
-            </table>
-        </div>`;
-    }
-
-    // Agenda items
-    const agendaItems = notes.agenda_items || [];
-    if (agendaItems.length > 0) {
-        html += `<div class="mom-section">
-            <div class="mom-section-title">Nội dung cuộc họp</div>`;
-        for (const item of agendaItems) {
-            html += `<div class="agenda-item">
-                <div class="agenda-item-header">
-                    <span class="topic-no">${item.topic_no}</span>
-                    <span class="agenda-title">${escapeHtml(item.agenda || "")}</span>
-                </div>
-                <div class="agenda-description">${escapeHtml(item.description || "")}</div>
-            </div>`;
-        }
-        html += `</div>`;
-    }
-
-    // Action items
-    const actionItems = notes.action_items || [];
-    if (actionItems.length > 0) {
-        html += `<div class="mom-section">
-            <div class="action-items-toolbar">
-                <div class="mom-section-title" style="border:none;margin:0;padding:0">Các công việc tiếp theo</div>
-                <button class="btn-export-tasks" onclick="exportTasksJSON()" title="Copy JSON để gửi sang agent khác">📋 Copy Tasks JSON</button>
-            </div>
-            <div id="action-items-table" style="border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;">
-                <div class="action-item" style="background:var(--pink-light);font-size:0.72rem;font-weight:700;color:var(--pink);text-transform:uppercase;letter-spacing:0.5px;padding:4px 10px;">
-                    <span>PIC</span><span>Nội dung công việc</span><span style="text-align:center">Deadline</span>
-                </div>
-                ${actionItems.map((a, i) => `
-                    <div class="action-item" data-idx="${i}">
-                        <input class="action-editable action-editable-pic"
-                               value="${escapeHtml(a.pic || "")}"
-                               placeholder="Assignee"
-                               title="Chỉnh sửa PIC">
-                        <input class="action-editable action-editable-task"
-                               value="${escapeHtml(a.item || "")}"
-                               placeholder="Mô tả task"
-                               title="Chỉnh sửa nội dung">
-                        <input class="action-editable action-editable-deadline"
-                               value="${escapeHtml(a.deadline || "")}"
-                               placeholder="dd/mm/yyyy"
-                               title="Chỉnh sửa deadline">
-                    </div>`).join("")}
-            </div>
-        </div>`;
-    }
-
-    // Summary
-    if (notes.summary) {
-        html += `<div class="mom-section">
-            <div class="mom-section-title">Tóm tắt</div>
-            <div class="mom-summary">${escapeHtml(notes.summary)}</div>
-        </div>`;
-    }
-
-    container.innerHTML = html;
-    container.scrollTop = 0;
-}
-
-function downloadMoM() {
-    if (downloadUrl) window.open(downloadUrl, "_blank");
-}
-
-function downloadPDF() {
-    if (!downloadUrl) return;
-    window.print();
-}
-
-// ─── Editable Action Items ───────────────────────────────────────
-
-/**
- * Thu thập action items hiện tại từ các ô input có thể edit.
- * Trả về array [{pic, item, deadline}] với giá trị người dùng đã chỉnh.
- */
-function getEditedActionItems() {
-    const table = document.getElementById("action-items-table");
-    if (!table) return [];
-    const rows = table.querySelectorAll(".action-item[data-idx]");
-    return Array.from(rows).map(row => ({
-        pic:      (row.querySelector(".action-editable-pic")?.value || "").trim(),
-        item:     (row.querySelector(".action-editable-task")?.value || "").trim(),
-        deadline: (row.querySelector(".action-editable-deadline")?.value || "").trim(),
-    }));
-}
-
-/**
- * Export action items ra JSON và copy vào clipboard.
- * Format phù hợp để gửi sang agent khác (task creation agent).
- */
-async function exportTasksJSON() {
-    const items = getEditedActionItems();
-    if (items.length === 0) {
-        alert("Chưa có action items để export."); return;
-    }
-
-    const meetingTitle = document.getElementById("meeting-title")?.value?.trim() || "";
-    const meetingDate  = document.getElementById("meeting-date")?.value || "";
-
-    const payload = {
-        meeting_title: meetingTitle,
-        meeting_date:  meetingDate,
-        action_items:  items,
-    };
-
-    const json = JSON.stringify(payload, null, 2);
-
-    try {
-        await navigator.clipboard.writeText(json);
-        setStatus(`Đã copy ${items.length} tasks vào clipboard! Paste sang agent tạo task.`, "idle");
-    } catch {
-        // Fallback: hiển thị trong prompt để user copy thủ công
-        prompt("Copy JSON bên dưới rồi paste sang agent tạo task:", json);
-    }
-}
-
-// ─── Save Transcript ─────────────────────────────────────────────
-
-function saveTranscript() {
-    const transcript = getFullTranscript();
-    if (!transcript) { alert("Chưa có transcript."); return; }
-
-    const title = document.getElementById("meeting-title").value.trim() || "meeting";
-    const dateStr = document.getElementById("meeting-date").value || new Date().toISOString().split("T")[0];
-
-    let content = `Title: ${title}\nDate: ${dateStr}\nSegments: ${allCompletedSegments.length}\n${"=".repeat(60)}\n\n`;
-    for (const seg of allCompletedSegments) {
-        content += `[${formatTime(parseFloat(seg.start))}] ${seg.text.trim()}\n`;
-    }
-
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `transcript_${title.replace(/\s+/g, "_")}_${dateStr}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setStatus("Đã lưu transcript.", "idle");
-}
-
-// ─── Timer ──────────────────────────────────────────────────────
-
-function startTimer() {
-    startTime = Date.now();
-    const timerEl = document.getElementById("timer");
-    timerEl.style.display = "block";
-    timerInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        timerEl.textContent = [
-            Math.floor(elapsed / 3600),
-            Math.floor((elapsed % 3600) / 60),
-            elapsed % 60,
-        ].map(n => String(n).padStart(2, "0")).join(":");
-    }, 1000);
-}
-
-function stopTimer() {
-    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
-}
-
-// ─── New Session ────────────────────────────────────────────────
-
-function newSession() {
-    // Reset state for a new meeting without reloading the page
-    allCompletedSegments = [];
-    sessionId = null;
-    downloadUrl = null;
-    wsReconnectAttempts = 0;
-
-    // Clear transcript display
-    const transcript = document.getElementById("transcript");
-    transcript.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
-    const manual = document.getElementById("manual-transcript");
-    if (manual) { manual.value = ""; manual.style.display = "none"; transcript.style.display = "block"; }
-
-    // Clear MoM result
-    const momResult = document.getElementById("mom-result");
-    if (momResult) momResult.innerHTML = "";
-
-    // Reset buttons
-    document.getElementById("btn-start").disabled = false;
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("btn-generate-notes").disabled = true;
-    document.getElementById("btn-save-transcript").disabled = true;
-    document.getElementById("download-row").style.display = "none";
-    document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-pdf").disabled = true;
-    document.getElementById("btn-new-session").style.display = "none";
-    const _exportBtn = document.getElementById("btn-export-tasks");
-    if (_exportBtn) _exportBtn.style.display = "none";
-
-    // Reset meeting fields
-    document.getElementById("meeting-title").value = "";
-    document.getElementById("meeting-purpose").value = "";
-    document.getElementById("meeting-venue").value = "";
-    document.getElementById("chaired-by").value = "";
-    document.getElementById("noted-by").value = "";
-    document.getElementById("attendees").value = "";
-    document.getElementById("meeting-date").value = new Date().toISOString().split("T")[0];
-
-    const countEl = document.getElementById("segment-count");
-    if (countEl) countEl.textContent = "";
-    stopTimer();
-    document.getElementById("timer").style.display = "none";
-    setStatus("Sẵn sàng", "idle");
-}
-
-// ─── Utilities ──────────────────────────────────────────────────
-
-function setStatus(text, state) {
-    const el = document.getElementById("status");
-    el.textContent = text;
-    el.className = `status ${state}`;
-}
-
-function formatTime(seconds) {
-    return [Math.floor(seconds / 60), Math.floor(seconds % 60)].map(n => String(n).padStart(2, "0")).join(":");
-}
-
-function formatDateVN(isoDate) {
-    if (!isoDate) return "";
-    const [y, m, d] = isoDate.split("-");
-    return `${d}/${m}/${y}`;
-}
-
-function escapeHtml(str) {
-    if (!str) return "";
-    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-async function fetchWhisperPrompt(vocabHints, language) {
-    try {
-        const params = new URLSearchParams({ language, vocab_hints: vocabHints });
-        const resp = await fetch(`${API_BASE}/api/vocab-pool/whisper-prompt?${params}`);
-        if (!resp.ok) throw new Error();
-        const data = await resp.json();
-        return data.prompt;
-    } catch {
-        // fallback to local build if server unreachable
-        return buildWhisperPrompt(vocabHints, language);
-    }
-}
-
-function buildWhisperPrompt(vocabHints, language) {
-    if (language !== "vi") return vocabHints || undefined;
-    let prompt =
-        "Đây là bản ghi cuộc họp nội bộ bằng tiếng Việt. " +
-        "Người nói có thể dùng xen kẽ các từ tiếng Anh kỹ thuật như: " +
-        "API, backend, frontend, deploy, pipeline, sprint, backlog, " +
-        "roadmap, OKR, KPI, deadline, meeting, update, review, " +
-        "feature, bug, fix, release, merge, commit, dashboard, report. " +
-        "Giữ nguyên các từ tiếng Anh, không dịch sang tiếng Việt.";
-    if (vocabHints) prompt += ` Chủ đề cuộc họp liên quan đến: ${vocabHints}.`;
-    return prompt;
-}
-
-// ─── Vocab Pool ─────────────────────────────────────────────────
-
-async function loadVocabPool() {
-    try {
-        const resp = await fetch(`${API_BASE}/api/vocab-pool`);
-        if (!resp.ok) return;
-        const pool = await resp.json();
-        renderVocabPool(pool);
-    } catch { /* server not running yet, skip */ }
-}
-
-function renderVocabPool(pool) {
-    const countEl = document.getElementById("vocab-count");
-    const listEl = document.getElementById("corrections-list");
-    if (!countEl || !listEl) return;
-
-    const termCount = (pool.terms || []).length;
-    countEl.textContent = termCount > 0 ? `(${termCount} terms)` : "";
-
-    const corrections = pool.corrections || {};
-    listEl.innerHTML = "";
-    if (Object.keys(corrections).length === 0) {
-        listEl.innerHTML = '<span style="font-size:0.72rem;color:var(--text-light);padding:2px 0">Chưa có sửa lỗi nào.</span>';
-        return;
-    }
-    for (const [wrong, correct] of Object.entries(corrections)) {
-        const tag = document.createElement("div");
-        tag.className = "correction-tag";
-        tag.innerHTML = `
-            <span class="wrong">${escapeHtml(wrong)}</span>
-            <span class="arrow">→</span>
-            <span class="correct">${escapeHtml(correct)}</span>
-            <button class="del-btn" onclick="deleteCorrection('${escapeHtml(wrong)}')" title="Xoá">✕</button>`;
-        listEl.appendChild(tag);
-    }
-}
-
-async function addCorrection() {
-    const wrong = document.getElementById("correction-wrong").value.trim();
-    const correct = document.getElementById("correction-correct").value.trim();
-    if (!wrong || !correct) { alert("Vui lòng nhập cả hai ô."); return; }
-
-    const resp = await fetch(`${API_BASE}/api/vocab-pool/corrections`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wrong, correct }),
+        menu.classList.toggle('open');
+        positionDropdown(triggerBtn, menu);
     });
-    if (!resp.ok) return;
+}
+function positionDropdown(trigger, menu) {
+    const rect = trigger.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 6) + 'px';
+    const isRightSide = rect.right > window.innerWidth - 300;
+    if (isRightSide) {
+        menu.style.right = (window.innerWidth - rect.right) + 'px';
+        menu.style.left = 'auto';
+    } else {
+        menu.style.left = rect.left + 'px';
+        menu.style.right = 'auto';
+    }
+}
+setupDropdown(avatarBtn,   avatarMenu);
+setupDropdown(settingsBtn, settingsMenu);
+setupDropdown(inviteBtn,   inviteMenu);
+
+document.addEventListener('click', function(e) {
+    document.querySelectorAll('.dropdown-menu.open').forEach(m => {
+        if (!m.contains(e.target)) m.classList.remove('open');
+    });
+});
+
+wsBtn?.addEventListener('click', () => { /* future workspace switcher */ });
+
+// ── Avatar dropdown actions ──────────────────────
+const ddProfile = document.getElementById('dd-profile');
+const ddSignout = document.getElementById('dd-signout');
+
+ddProfile?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    avatarMenu.classList.remove('open');
+    alert('Trang Hồ sơ — chưa implement.\nPhase E: M365 OAuth sẽ wire MS Graph profile.');
+});
+
+ddSignout?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    avatarMenu.classList.remove('open');
+    if (confirm('Đăng xuất? (Đây là mock — Phase E sẽ wire OAuth thật)')) {
+        localStorage.removeItem('mee.lang');
+        localStorage.removeItem('mee.theme');
+        location.reload();
+    }
+});
+
+// ── Sidebar (left, collapsible) ──────────────────
+const sidebarEl       = document.getElementById('sidebar');
+const sidebarToggle   = document.getElementById('sidebar-toggle');
+const sidebarCollapse = document.getElementById('sidebar-collapse-btn');
+const sidebarNewBtn   = document.getElementById('sidebar-new-meeting');
+const sidebarListEl   = document.getElementById('sidebar-meetings-list');
+
+const SIDEBAR_KEY = 'mee.sidebarOpen';
+
+function setSidebarOpen(open) {
+    document.body.classList.toggle('sidebar-open', open);
+    document.body.classList.toggle('sidebar-collapsed', !open);
+    localStorage.setItem(SIDEBAR_KEY, open ? '1' : '0');
+}
+
+const sidebarStored = localStorage.getItem(SIDEBAR_KEY);
+setSidebarOpen(sidebarStored === null ? true : sidebarStored === '1');
+
+sidebarToggle?.addEventListener('click', () => {
+    setSidebarOpen(!document.body.classList.contains('sidebar-open'));
+});
+sidebarCollapse?.addEventListener('click', () => setSidebarOpen(false));
+
+sidebarNewBtn?.addEventListener('click', () => {
+    if (typeof window.newSession === 'function') {
+        window.newSession();
+    } else {
+        location.reload();
+    }
+});
+
+async function reloadSidebarMeetings() {
+    if (!sidebarListEl) return;
+    sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Đang tải...</div>';
+    try {
+        const resp = await fetch('/api/meetings');
+        const items = await resp.json();
+        if (!items.length) {
+            sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Chưa có cuộc họp nào</div>';
+            return;
+        }
+        sidebarListEl.innerHTML = items.map(m => `
+            <div class="sidebar-meeting ${window.meetingDbId === m.id ? 'active' : ''}" data-id="${m.id}">
+                <div class="sidebar-meeting-title">${escapeHtml(m.title)}</div>
+                <div class="sidebar-meeting-meta">
+                    ${m.date ? new Date(m.date).toLocaleDateString('vi-VN', {day:'numeric', month:'short'}) : '·'}
+                    ${m.has_mom ? '<span class="sidebar-meeting-badge">MoM</span>' : ''}
+                </div>
+            </div>
+        `).join('');
+        sidebarListEl.querySelectorAll('.sidebar-meeting').forEach(el => {
+            el.addEventListener('click', () => loadMeeting(el.dataset.id));
+        });
+    } catch (err) {
+        sidebarListEl.innerHTML = `<div class="sidebar-empty muted">Lỗi: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+async function loadMeeting(meetingId) {
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const m = await resp.json();
+
+        // Reset chat session (different meeting = different chat)
+        if ('chatSessionId' in window) window.chatSessionId = null;
+        try { chatSessionId = null; } catch (e) {}
+        window.meetingDbId = m.id;
+
+        // Populate fields
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+        setVal('meeting-title', m.title);
+        setVal('meeting-purpose', m.purpose);
+        setVal('meeting-venue', m.venue);
+        setVal('meeting-date', m.date);
+        setVal('chaired-by', m.chaired_by);
+        setVal('noted-by', m.noted_by);
+        if (m.attendees && Array.isArray(m.attendees)) {
+            const attStr = m.attendees.map(a =>
+                a.department ? `${a.name} (${a.department})` : a.name
+            ).join(', ');
+            setVal('attendees', attStr);
+        }
+
+        // Load transcript from segments (fetch each recording's segments)
+        const transcriptLines = [];
+        // Backend returns recordings as array but not segments directly — only segment_count
+        // For full transcript, would need GET /api/recordings/{id}/segments (not yet impl)
+        // Workaround: show MoM only for now
+        const transcriptEl = document.getElementById('transcript');
+        if (transcriptEl) transcriptEl.value = `[Đã load meeting "${m.title}". Segments stored in DB — full transcript view TBD.]`;
+
+        // Show MoM if exists
+        const momEmpty = document.getElementById('mom-empty');
+        const momResult = document.getElementById('mom-result');
+        if (m.mom_json && momResult) {
+            if (momEmpty) momEmpty.style.display = 'none';
+            // Display MoM (reuse displayMoM from app.js)
+            if (typeof window.displayMoM === 'function') {
+                window.displayMoM(m.mom_json);
+            } else {
+                momResult.innerHTML = `<pre>${escapeHtml(JSON.stringify(m.mom_json, null, 2))}</pre>`;
+            }
+        } else {
+            if (momEmpty) momEmpty.style.display = '';
+            if (momResult) momResult.innerHTML = '';
+        }
+
+        // Clear chat thread (welcome msg only)
+        const chatThread = document.getElementById('chat-thread');
+        if (chatThread) {
+            const welcome = chatThread.querySelector('.msg-agent:first-child');
+            const prompts = document.getElementById('suggested-prompts');
+            chatThread.innerHTML = '';
+            if (welcome) chatThread.appendChild(welcome);
+            if (prompts) {
+                chatThread.appendChild(prompts);
+                prompts.style.display = '';
+            }
+        }
+
+        // Update meta + chat subtitle
+        if (typeof window.updateMeta === 'function') window.updateMeta();
+        const chatSub = document.getElementById('chat-subtitle');
+        if (chatSub) chatSub.textContent = `liên kết với: ${m.title}`;
+
+        // Refresh active highlight in sidebar
+        sidebarListEl.querySelectorAll('.sidebar-meeting').forEach(el => {
+            el.classList.toggle('active', el.dataset.id === m.id);
+        });
+    } catch (err) {
+        alert(`Lỗi load meeting: ${err.message}`);
+    }
+}
+
+// Expose for app.js to refresh after generate-mom
+window.reloadSidebarMeetings = reloadSidebarMeetings;
+
+// Initial load
+reloadSidebarMeetings();
+
+// ── Resizable panes ──────────────────────────────
+function makeResizer(handle, getter, setter, min, max, storageKey) {
+    let dragging = false, startX = 0, startV = 0;
+    handle.addEventListener('mousedown', function(e) {
+        dragging = true;
+        startX = e.clientX;
+        startV = getter();
+        handle.classList.add('dragging');
+        document.body.classList.add('resizing');
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+        if (!dragging) return;
+        const delta = e.clientX - startX;
+        const v = Math.max(min, Math.min(max, startV + delta));
+        setter(v);
+    });
+    document.addEventListener('mouseup', function() {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('dragging');
+        document.body.classList.remove('resizing');
+        if (storageKey) localStorage.setItem(storageKey, getter());
+    });
+}
+const resizerMom = document.getElementById('resizer-mom');
+makeResizer(
+    resizerMom,
+    () => document.querySelector('.workspace .pane-transcript').getBoundingClientRect().width,
+    (v) => {
+        const chatOpen = workspace.classList.contains('chat-open');
+        if (chatOpen) workspace.style.gridTemplateColumns = `${v}px 1px 1fr 1px var(--chat-width, 380px)`;
+        else          workspace.style.gridTemplateColumns = `${v}px 1px 1fr`;
+    },
+    280, window.innerWidth - 400,
+    K.mainLeftWidth
+);
+
+const resizerChat = document.getElementById('resizer-chat');
+let chatRDrag = false, chatRStart = 0, chatRStartW = 0;
+resizerChat.addEventListener('mousedown', function(e) {
+    chatRDrag = true;
+    chatRStart = e.clientX;
+    chatRStartW = parseInt(workspace.style.getPropertyValue('--chat-width'), 10) || 380;
+    resizerChat.classList.add('dragging');
+    document.body.classList.add('resizing');
+    e.preventDefault();
+});
+document.addEventListener('mousemove', function(e) {
+    if (!chatRDrag) return;
+    const delta = chatRStart - e.clientX;
+    const newW = Math.max(300, Math.min(500, chatRStartW + delta));
+    workspace.style.setProperty('--chat-width', newW + 'px');
+});
+document.addEventListener('mouseup', function() {
+    if (!chatRDrag) return;
+    chatRDrag = false;
+    resizerChat.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    const w = parseInt(workspace.style.getPropertyValue('--chat-width'), 10);
+    if (w) localStorage.setItem(K.chatWidth, w);
+});
+resizerMom.addEventListener('dblclick',  () => { workspace.style.gridTemplateColumns = ''; });
+resizerChat.addEventListener('dblclick', () => {
+    workspace.style.setProperty('--chat-width', '380px');
+    localStorage.setItem(K.chatWidth, '380');
+});
+
+// ── Chat: wired to /api/chat (Phase D) ────────────────────
+//
+// Flow:
+//   1. ensureMeetingDbId()   — lazy create DB meeting from title
+//   2. ensureChatSession()   — lazy create chat_session bound to that meeting
+//   3. POST messages          — render reply OR pending_action card
+//   4. Approve/Reject buttons — call /api/chat/pending-actions/{id}/...
+//
+let chatSessionId = null;
+window.meetingDbId = window.meetingDbId || null;   // set by D.4 (auto-create meeting)
+
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function parseAttendees(str) {
+    if (!str) return null;
+    return str.split(',').map(s => {
+        s = s.trim();
+        const m = s.match(/^(.+?)\s*\((.+)\)$/);
+        if (m) return { name: m[1].trim(), department: m[2].trim(), title: '' };
+        return { name: s, department: '', title: '' };
+    });
+}
+
+async function ensureMeetingDbId() {
+    if (window.meetingDbId) return window.meetingDbId;
+    const title = document.getElementById('meeting-title').value.trim() || 'Untitled meeting';
+    const dateVal = document.getElementById('meeting-date')?.value || null;
+    const payload = {
+        title,
+        purpose: document.getElementById('meeting-purpose')?.value?.trim() || '',
+        venue:   document.getElementById('meeting-venue')?.value?.trim() || '',
+        date: dateVal || null,
+        chaired_by: document.getElementById('chaired-by')?.value?.trim() || '',
+        noted_by:   document.getElementById('noted-by')?.value?.trim() || '',
+        attendees:  parseAttendees(document.getElementById('attendees')?.value?.trim() || ''),
+    };
+    const resp = await fetch('/api/meetings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error(`Create meeting failed: ${resp.status}`);
     const data = await resp.json();
-    renderVocabPool(data.pool);
-    document.getElementById("correction-wrong").value = "";
-    document.getElementById("correction-correct").value = "";
+    window.meetingDbId = data.id;
+    return window.meetingDbId;
 }
 
-async function deleteCorrection(wrong) {
-    await fetch(`${API_BASE}/api/vocab-pool/corrections/${encodeURIComponent(wrong)}`, { method: "DELETE" });
-    loadVocabPool();
+/**
+ * Import raw transcript text → create recording + segments in DB.
+ * Called by generateNotes() when user pastes text or after Whisper transcribe.
+ * Splits text into segments by newline / sentence boundary.
+ */
+async function importTranscriptToDb(rawText) {
+    const meetingId = await ensureMeetingDbId();
+
+    // Create a recording
+    const recResp = await fetch(`/api/meetings/${meetingId}/recordings`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_label: 'Imported transcript' }),
+    });
+    if (!recResp.ok) throw new Error('Create recording failed');
+    const recording = await recResp.json();
+    const recId = recording.id;
+
+    // Split text into segments — by newline, fall back to sentence
+    let lines = rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (lines.length === 1) {
+        // No newlines — split by sentence
+        lines = rawText.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    // Bulk insert segments (sequentially to keep order — could parallel later)
+    let seq = 1;
+    for (const line of lines) {
+        if (!line) continue;
+        await fetch(`/api/recordings/${recId}/segments`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ seq, original_text: line }),
+        });
+        seq++;
+    }
+
+    return { meetingId, recordingId: recId, segmentCount: seq - 1 };
 }
 
+// Expose to app.js scope
+window.ensureMeetingDbId = ensureMeetingDbId;
+window.importTranscriptToDb = importTranscriptToDb;
+
+async function ensureChatSession() {
+    if (chatSessionId) return chatSessionId;
+    const mid = await ensureMeetingDbId();
+    const resp = await fetch('/api/chat/sessions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ meeting_id: mid }),
+    });
+    if (!resp.ok) throw new Error(`Create chat session failed: ${resp.status}`);
+    const data = await resp.json();
+    chatSessionId = data.id;
+    return chatSessionId;
+}
+
+// ─── Minimal Markdown renderer for agent replies ─────────
+// Handles: **bold**, *italic*, `code`, lists, paragraphs, line breaks.
+// Avoids pulling a full library — covers 95% of LLM output.
+function renderMarkdown(text) {
+    if (!text) return '';
+    let html = escapeHtml(text);
+    // Code blocks (triple backtick) — preserve as <pre>
+    html = html.replace(/```([\s\S]+?)```/g, (_, code) =>
+        `<pre><code>${code.trim()}</code></pre>`);
+    // Inline code
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    // Bold **text** (do bold BEFORE italic to avoid conflict)
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    // Italic *text* (only if not part of **)
+    html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+    // Lists — group consecutive lines starting with - or *
+    const lines = html.split('\n');
+    const out = [];
+    let inList = false;
+    for (const line of lines) {
+        const m = line.match(/^\s*[-*]\s+(.*)$/);
+        if (m) {
+            if (!inList) { out.push('<ul>'); inList = true; }
+            out.push(`<li>${m[1]}</li>`);
+        } else {
+            if (inList) { out.push('</ul>'); inList = false; }
+            if (line.trim()) out.push(line);
+            else out.push('<br>');
+        }
+    }
+    if (inList) out.push('</ul>');
+    return out.join('\n');
+}
+
+function appendMsg(thread, role, text, opts = {}) {
+    const msg = document.createElement('div');
+    msg.className = `msg msg-${role}`;
+    if (opts.html) {
+        msg.innerHTML = text;
+    } else if (role === 'agent' && !opts.plain) {
+        // Render agent replies as markdown
+        msg.innerHTML = renderMarkdown(text);
+    } else {
+        msg.textContent = text;
+    }
+    thread.appendChild(msg);
+    thread.scrollTop = thread.scrollHeight;
+    return msg;
+}
+
+function appendTyping(thread) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-agent typing';
+    el.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+    thread.appendChild(el);
+    thread.scrollTop = thread.scrollHeight;
+    return el;
+}
+
+function renderPendingCard(thread, action) {
+    const card = document.createElement('div');
+    card.className = 'pending-card';
+    card.dataset.actionId = action.id;
+
+    const argsStr = JSON.stringify(action.args, null, 2);
+    card.innerHTML = `
+        <div class="pending-label">Cần phê duyệt</div>
+        <div class="pending-tool">${escapeHtml(action.tool)}</div>
+        <div class="pending-args">${escapeHtml(argsStr)}</div>
+        ${action.rationale ? `<div class="pending-why">${escapeHtml(action.rationale)}</div>` : ''}
+        <div class="pending-actions">
+            <button class="btn btn-primary btn-xs" data-act="approve" type="button">Phê duyệt</button>
+            <button class="btn btn-stop btn-xs" data-act="reject" type="button">Từ chối</button>
+        </div>
+    `;
+
+    card.querySelector('[data-act="approve"]')
+        .addEventListener('click', () => resolveAction(action.id, card, 'approve'));
+    card.querySelector('[data-act="reject"]')
+        .addEventListener('click', () => resolveAction(action.id, card, 'reject'));
+
+    thread.appendChild(card);
+    thread.scrollTop = thread.scrollHeight;
+    return card;
+}
+
+async function resolveAction(actionId, card, decision) {
+    card.querySelectorAll('button').forEach(b => b.disabled = true);
+    const statusEl = document.createElement('div');
+    statusEl.className = 'pending-why';
+    statusEl.style.marginTop = '10px';
+    statusEl.textContent = decision === 'approve' ? 'Đang thực hiện…' : 'Đang xử lý…';
+    card.appendChild(statusEl);
+
+    try {
+        const resp = await fetch(`/api/chat/pending-actions/${actionId}/${decision}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({}),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        const thread = document.getElementById('chat-thread');
+        card.remove();
+        appendMsg(thread, 'agent', data.reply || `(${data.status})`);
+    } catch (err) {
+        statusEl.textContent = `Lỗi: ${err.message}`;
+        statusEl.style.color = 'var(--danger)';
+        card.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
+}
+
+async function sendChat(text) {
+    const input = document.getElementById('chat-input');
+    text = text || input.value.trim();
+    if (!text) return;
+
+    const thread = document.getElementById('chat-thread');
+    const prompts = document.getElementById('suggested-prompts');
+    if (prompts) prompts.style.display = 'none';
+
+    appendMsg(thread, 'user', text);
+    input.value = '';
+    input.style.height = 'auto';
+
+    const typingEl = appendTyping(thread);
+
+    try {
+        const sid = await ensureChatSession();
+        const resp = await fetch(`/api/chat/sessions/${sid}/messages`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ text }),
+        });
+        typingEl.remove();
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+
+        if (data.status === 'interrupted') {
+            renderPendingCard(thread, data.pending_action);
+        } else {
+            appendMsg(thread, 'agent', data.reply || '(empty)');
+        }
+    } catch (err) {
+        if (typingEl.parentNode) typingEl.remove();
+        appendMsg(thread, 'agent', `Lỗi: ${err.message}`);
+    }
+}
+
+document.getElementById('chat-send').addEventListener('click', () => sendChat());
+
+const chatInput = document.getElementById('chat-input');
+chatInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+});
+chatInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChat();
+    }
+});
+document.querySelectorAll('.prompt-chip').forEach(chip => {
+    chip.addEventListener('click', () => sendChat(chip.textContent));
+});
+
+// ── MoM observer ─────────────────────────────────
+const momResult = document.getElementById('mom-result');
+const momEmpty = document.getElementById('mom-empty');
+const momStatusText = document.getElementById('mom-status-text');
+new MutationObserver(() => {
+    const t = STRINGS[currentLang] || STRINGS.vi;
+    const has = momResult.innerHTML.trim().length > 0;
+    momEmpty.style.display = has ? 'none' : '';
+    momStatusText.textContent = has ? t['mom.generated'] : t['mom.empty'];
+}).observe(momResult, { childList: true, subtree: true });
+
+// ── Vocab + meta init ────────────────────────────
+function updateVocabCount() {
+    const el = document.getElementById('vocab-count');
+    if (!el) return;
+    const ta = document.getElementById('vocab-hints');
+    const n = ta.value.split(',').filter(s => s.trim()).length;
+    el.textContent = '(' + n + ')';
+}
+
+function updateMeta() {
+    const t = STRINGS[currentLang] || STRINGS.vi;
+    const date = document.getElementById('meeting-date').value;
+    const att = document.getElementById('attendees').value;
+    const count = att.split(',').filter(s => s.trim()).length;
+    document.getElementById('meta-date').textContent =
+        date
+          ? new Date(date).toLocaleDateString(currentLang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short' })
+          : t['meta.noDate'];
+    document.getElementById('meta-people').textContent =
+        count > 0
+          ? `${count} ${count === 1 ? t['meta.person'] : t['meta.people']}`
+          : t['meta.noPeople'];
+    const title = document.getElementById('meeting-title').value.trim();
+    document.getElementById('chat-subtitle').textContent =
+        title ? `${t['chat.linkedTo']} ${title}` : t['agent.noMeeting'];
+}
+// Expose so applyLang can call
+window.updateMeta = updateMeta;
+
+if (typeof VOCAB_HINTS !== 'undefined') {
+    const container = document.getElementById('vocab-hints-dropdown');
+    Object.entries(VOCAB_HINTS).forEach(([key, value]) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.textContent = key;
+        chip.dataset.hints = value;
+        chip.addEventListener('click', () => {
+            chip.classList.toggle('active');
+            const ta = document.getElementById('vocab-hints');
+            const active = document.querySelectorAll('#vocab-hints-dropdown .active');
+            ta.value = Array.from(active).map(c => c.dataset.hints).join(', ');
+            updateVocabCount();
+        });
+        container.appendChild(chip);
+    });
+}
+
+['meeting-date', 'attendees', 'meeting-title'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateMeta);
+});
+const vt = document.getElementById('vocab-hints');
+if (vt) vt.addEventListener('input', updateVocabCount);
+
+// ── Initial load ─────────────────────────────────
+applyLang(localStorage.getItem(K.lang) || 'vi');
+applyTheme(localStorage.getItem(K.theme) || 'dark');
+updateMeta();
+
+})();
 </script>
 
 </body>
