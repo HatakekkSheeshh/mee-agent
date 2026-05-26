@@ -23,8 +23,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import os
+
 from meeting.db import get_session
 from meeting.db import repositories as repo
+from meeting.graphs import get_checkpointer, run_mom_graph
 from meeting.note_generator import generate_meeting_notes
 
 logger = logging.getLogger(__name__)
@@ -210,38 +213,33 @@ async def add_segment_endpoint(
 async def generate_mom_endpoint(
     meeting_id: str, session: AsyncSession = Depends(get_session)
 ):
-    """Read all segments from DB for this meeting, call LLM, save mom_json."""
-    mid = _parse_uuid(meeting_id)
-    meeting = await repo.get_meeting(session, mid)
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting not found")
+    """
+    Generate MoM via LangGraph (Phase B):
+        load_transcript → read_memory → generate_mom → save_results
 
-    transcript = await repo.join_meeting_transcript(session, mid)
-    if not transcript.strip():
-        raise HTTPException(status_code=400, detail="No transcript segments found")
+    With PostgresSaver checkpointing — fail at any node → re-invoke
+    resumes from that node (uses thread_id = meeting_id).
+    """
+    _parse_uuid(meeting_id)  # validate format only
 
-    # Format attendees for the prompt
-    if meeting.attendees:
-        attendees_str = ", ".join(
-            f"{a.get('name', '')} ({a.get('department', '')})".strip()
-            for a in meeting.attendees if isinstance(a, dict)
-        )
-    else:
-        attendees_str = ""
+    output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output"
+    )
+    checkpointer = get_checkpointer()
 
-    notes = generate_meeting_notes(
-        transcript=transcript,
-        title=meeting.title,
-        purpose=meeting.purpose or "",
-        date=meeting.date.isoformat() if meeting.date else "",
-        chaired_by=meeting.chaired_by or "",
-        noted_by=meeting.noted_by or "Mee Agent",
-        venue=meeting.venue or "",
-        attendees=attendees_str,
+    final_state = await run_mom_graph(
+        meeting_id=meeting_id,
+        session=session,
+        output_dir=output_dir,
+        checkpointer=checkpointer,
     )
 
-    if "error" in notes:
-        raise HTTPException(status_code=500, detail=notes["error"])
+    if final_state.get("error"):
+        raise HTTPException(status_code=500, detail=final_state["error"])
 
-    await repo.save_mom(session, mid, notes)
-    return {"meeting_id": meeting_id, "notes": notes}
+    return {
+        "meeting_id": meeting_id,
+        "notes": final_state.get("mom_json", {}),
+        "saved_paths": final_state.get("saved_paths", {}),
+        "memory_context_count": len(final_state.get("memory_context", [])),
+    }

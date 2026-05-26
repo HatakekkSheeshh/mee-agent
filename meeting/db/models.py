@@ -203,3 +203,163 @@ class TranscriptSegment(Base):
     def text(self) -> str:
         """Effective text — edited if available, else original (COALESCE pattern)."""
         return self.edited_text if self.edited_text is not None else self.original_text
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase B2 — Chat & HITL tables
+# ═══════════════════════════════════════════════════════════════════════
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    meeting_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("meetings.id", ondelete="SET NULL")
+    )
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+    pending_actions: Mapped[list["PendingAction"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)  # user/agent/tool/system
+    content: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    msg_metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    session: Mapped[ChatSession] = relationship(back_populates="messages")
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'agent', 'tool', 'system')",
+            name="ck_messages_role",
+        ),
+    )
+
+
+class PendingAction(Base):
+    __tablename__ = "pending_actions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    thread_id: Mapped[str] = mapped_column(Text, nullable=False)  # LangGraph thread to resume
+    checkpoint_id: Mapped[Optional[str]] = mapped_column(Text)
+    tool_name: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_args: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolution: Mapped[Optional[dict]] = mapped_column(JSONB)
+
+    session: Mapped[ChatSession] = relationship(back_populates="pending_actions")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'executed', 'failed')",
+            name="ck_pending_actions_status",
+        ),
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="SET NULL")
+    )
+    action_type: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_name: Mapped[Optional[str]] = mapped_column(Text)
+    tool_args: Mapped[Optional[dict]] = mapped_column(JSONB)
+    result: Mapped[Optional[dict]] = mapped_column(JSONB)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_msg: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Sprint A — Memory events for cross-meeting context
+# ═══════════════════════════════════════════════════════════════════════
+
+class MemoryEventRow(Base):
+    """
+    Persistent memory events extracted from MoMs.
+    Replaces stub MemoryService.save() — now writes to DB for cross-meeting context.
+    """
+    __tablename__ = "memory_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    meeting_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    topic: Mapped[Optional[str]] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    speaker: Mapped[Optional[str]] = mapped_column(Text)
+    deadline: Mapped[Optional[str]] = mapped_column(Text)
+    event_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('action_item', 'decision', 'commitment', 'blocker', 'update', 'summary')",
+            name="ck_memory_events_type",
+        ),
+    )

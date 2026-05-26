@@ -15,8 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from meeting.db.models import (
+    AuditLog,
+    ChatMessage,
+    ChatSession,
     Meeting,
     MeetingMember,
+    MemoryEventRow,
+    PendingAction,
     Recording,
     TranscriptSegment,
     User,
@@ -234,3 +239,267 @@ async def join_meeting_transcript(
     return "\n".join(s.text for s in segments)
 
 
+# ─── Chat (Phase B2) ──────────────────────────────────────────────
+
+async def create_chat_session(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    meeting_id: Optional[uuid.UUID] = None,
+    title: Optional[str] = None,
+) -> ChatSession:
+    chat = ChatSession(user_id=user_id, meeting_id=meeting_id, title=title)
+    session.add(chat)
+    await session.flush()
+    return chat
+
+
+async def get_chat_session(
+    session: AsyncSession, session_id: uuid.UUID
+) -> Optional[ChatSession]:
+    return await session.get(ChatSession, session_id)
+
+
+async def list_chat_sessions_for_user(
+    session: AsyncSession, user_id: uuid.UUID
+) -> Sequence[ChatSession]:
+    stmt = (
+        select(ChatSession)
+        .where(ChatSession.user_id == user_id)
+        .order_by(ChatSession.last_activity_at.desc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def add_chat_message(
+    session: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    role: str,  # 'user' | 'agent' | 'tool' | 'system'
+    content: dict,
+    metadata: Optional[dict] = None,
+) -> ChatMessage:
+    msg = ChatMessage(
+        session_id=session_id,
+        role=role,
+        content=content,
+        msg_metadata=metadata,
+    )
+    session.add(msg)
+    # Touch last_activity_at
+    chat = await session.get(ChatSession, session_id)
+    if chat:
+        chat.last_activity_at = datetime.utcnow()
+    await session.flush()
+    return msg
+
+
+async def list_chat_messages(
+    session: AsyncSession,
+    session_id: uuid.UUID,
+    limit: int = 50,
+) -> Sequence[ChatMessage]:
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at)
+        .limit(limit)
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+# ─── Pending Actions (HITL) ───────────────────────────────────────
+
+async def create_pending_action(
+    session: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_id: uuid.UUID,
+    thread_id: str,
+    tool_name: str,
+    tool_args: dict,
+    rationale: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
+) -> PendingAction:
+    action = PendingAction(
+        session_id=session_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        rationale=rationale,
+        checkpoint_id=checkpoint_id,
+        status="pending",
+    )
+    session.add(action)
+    await session.flush()
+    return action
+
+
+async def get_pending_action(
+    session: AsyncSession, action_id: uuid.UUID
+) -> Optional[PendingAction]:
+    return await session.get(PendingAction, action_id)
+
+
+async def resolve_pending_action(
+    session: AsyncSession,
+    action_id: uuid.UUID,
+    *,
+    decision: str,  # 'approved' | 'rejected'
+    edited_args: Optional[dict] = None,
+    reason: Optional[str] = None,
+) -> Optional[PendingAction]:
+    action = await session.get(PendingAction, action_id)
+    if not action:
+        return None
+    action.status = decision
+    action.resolved_at = datetime.utcnow()
+    action.resolution = {
+        "action": decision,
+        "edited_args": edited_args,
+        "reason": reason,
+    }
+    if edited_args:
+        action.tool_args = edited_args
+    await session.flush()
+    return action
+
+
+async def mark_action_executed(
+    session: AsyncSession,
+    action_id: uuid.UUID,
+    result: dict,
+    success: bool = True,
+) -> None:
+    action = await session.get(PendingAction, action_id)
+    if action:
+        action.status = "executed" if success else "failed"
+        if action.resolution is None:
+            action.resolution = {}
+        action.resolution = {**action.resolution, "execution_result": result}
+        await session.flush()
+
+
+# ─── Audit Log ────────────────────────────────────────────────────
+
+async def log_audit(
+    session: AsyncSession,
+    *,
+    user_id: Optional[uuid.UUID],
+    session_id: Optional[uuid.UUID],
+    action_type: str,
+    tool_name: Optional[str] = None,
+    tool_args: Optional[dict] = None,
+    result: Optional[dict] = None,
+    success: bool = True,
+    error_msg: Optional[str] = None,
+) -> AuditLog:
+    entry = AuditLog(
+        user_id=user_id,
+        session_id=session_id,
+        action_type=action_type,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        result=result,
+        success=success,
+        error_msg=error_msg,
+    )
+    session.add(entry)
+    await session.flush()
+    return entry
+
+
+# ─── Memory events (Sprint A) ─────────────────────────────────────
+
+async def save_memory_event(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    event_type: str,
+    text: str,
+    topic: Optional[str] = None,
+    speaker: Optional[str] = None,
+    deadline: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> MemoryEventRow:
+    event = MemoryEventRow(
+        user_id=user_id,
+        meeting_id=meeting_id,
+        event_type=event_type,
+        topic=topic,
+        text=text,
+        speaker=speaker,
+        deadline=deadline,
+        event_metadata=metadata,
+    )
+    session.add(event)
+    await session.flush()
+    return event
+
+
+async def save_memory_events_bulk(
+    session: AsyncSession,
+    events: list[dict],
+    *,
+    user_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+) -> int:
+    """Save multiple events at once. events = [{event_type, text, topic?, speaker?, deadline?}, ...]"""
+    count = 0
+    for ev in events:
+        if not ev.get("text") or not ev.get("event_type"):
+            continue
+        session.add(MemoryEventRow(
+            user_id=user_id,
+            meeting_id=meeting_id,
+            event_type=ev["event_type"],
+            text=ev["text"],
+            topic=ev.get("topic"),
+            speaker=ev.get("speaker"),
+            deadline=ev.get("deadline"),
+            event_metadata=ev.get("metadata"),
+        ))
+        count += 1
+    if count:
+        await session.flush()
+    return count
+
+
+async def retrieve_memory_events(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    query: str = "",
+    topic: Optional[str] = None,
+    exclude_meeting_id: Optional[uuid.UUID] = None,
+    event_types: Optional[list[str]] = None,
+    limit: int = 10,
+) -> Sequence[MemoryEventRow]:
+    """
+    Retrieve memory events for a user, optionally filtered by topic/query.
+
+    Use cases:
+        - "What did team commit to last week?" → event_types=['commitment'], limit=5
+        - "Any blockers on deploy?" → query='deploy', event_types=['blocker']
+        - Pre-meeting context → topic matched + recency
+    """
+    stmt = select(MemoryEventRow).where(MemoryEventRow.user_id == user_id)
+    if exclude_meeting_id:
+        stmt = stmt.where(MemoryEventRow.meeting_id != exclude_meeting_id)
+    if event_types:
+        stmt = stmt.where(MemoryEventRow.event_type.in_(event_types))
+    if topic:
+        # Keyword match topic
+        stmt = stmt.where(MemoryEventRow.topic.ilike(f"%{topic}%"))
+    if query:
+        # Postgres full-text search on text column
+        from sqlalchemy import func as sql_func, text as sql_text
+        stmt = stmt.where(
+            sql_func.to_tsvector("simple", MemoryEventRow.text).op("@@")(
+                sql_func.plainto_tsquery("simple", query)
+            )
+        )
+    stmt = stmt.order_by(MemoryEventRow.created_at.desc()).limit(limit)
+    return (await session.execute(stmt)).scalars().all()

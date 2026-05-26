@@ -17,7 +17,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from contextlib import asynccontextmanager
+
+from meeting.api.chat import router as chat_router
 from meeting.api.meetings import router as meetings_router
+from meeting.graphs import close_checkpointer, init_checkpointer
 from meeting.memory_client import save_meeting_events
 from meeting.note_generator import generate_meeting_notes
 from meeting.report_generator import generate_mom_markdown
@@ -59,7 +63,11 @@ class CorrectionRequest(BaseModel):
     correct: str
 
 
-def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
+def _build_whisper_prompt(
+    vocab_hints: str = "",
+    language: str = "vi",
+    attendees: str = "",
+) -> str:
     """
     Build an initial_prompt for Whisper to improve Vietnamese transcription quality.
 
@@ -70,9 +78,15 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
       hallucinations on silent/noisy segments.
     - Listing English tech terms tells Whisper to keep them verbatim instead of
       translating (e.g. "deploy" → "triển khai").
+    - Including attendee names helps Whisper preserve them correctly (Sprint B).
     """
     if language != "vi":
-        return vocab_hints.strip() if vocab_hints.strip() else ""
+        parts = []
+        if attendees.strip():
+            parts.append(f"Meeting attendees: {attendees.strip()}.")
+        if vocab_hints.strip():
+            parts.append(vocab_hints.strip())
+        return " ".join(parts)
 
     base = (
         "Đây là bản ghi cuộc họp nội bộ bằng tiếng Việt. "
@@ -82,6 +96,9 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
         "feature, bug, fix, release, merge, commit, dashboard, report. "
         "Giữ nguyên các từ tiếng Anh, không dịch sang tiếng Việt."
     )
+    if attendees.strip():
+        # Names hint helps Whisper preserve them (Sprint B)
+        base += f" Tham dự cuộc họp: {attendees.strip()}."
     if vocab_hints.strip():
         base += f" Chủ đề cuộc họp liên quan đến: {vocab_hints.strip()}."
     pool_fragment = build_pool_prompt_fragment()
@@ -90,11 +107,19 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
     return base
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: init LangGraph PostgresSaver. Shutdown: close pool."""
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
 def create_app(output_dir: str = None) -> FastAPI:
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
 
-    app = FastAPI(title="Meeting Note Agent")
+    app = FastAPI(title="Meeting Note Agent", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -107,6 +132,8 @@ def create_app(output_dir: str = None) -> FastAPI:
 
     # Phase A — DB-backed meetings router
     app.include_router(meetings_router)
+    # Phase B2 — Chat + HITL router
+    app.include_router(chat_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):
@@ -219,8 +246,13 @@ def create_app(output_dir: str = None) -> FastAPI:
         file: UploadFile = File(...),
         language: str = Form(default="vi"),
         vocab_hints: str = Form(default=""),
+        attendees: str = Form(default=""),
     ):
-        """Upload an audio file and transcribe via VNGCloud MaaS Whisper API."""
+        """Upload an audio file and transcribe via VNGCloud MaaS Whisper API.
+
+        attendees: comma-separated names of meeting attendees → passed to Whisper
+        initial_prompt to preserve proper nouns (Sprint B speaker hint).
+        """
         base_url = os.getenv("WHISPER_BASE_URL", "").rstrip("/")
         api_key = os.getenv("WHISPER_API_KEY", "")
         model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3")
@@ -242,7 +274,7 @@ def create_app(output_dir: str = None) -> FastAPI:
             except Exception:
                 pass
 
-        prompt = _build_whisper_prompt(vocab_hints, language)
+        prompt = _build_whisper_prompt(vocab_hints, language, attendees)
 
         try:
             resp = requests.post(

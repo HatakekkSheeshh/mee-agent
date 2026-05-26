@@ -26,20 +26,66 @@ NOTE_PROMPT = """Bạn là trợ lý tóm tắt cuộc họp chuyên nghiệp. P
 ## Bản ghi cuộc họp
 {transcript}
 
-## Hướng dẫn xử lý theo độ dài transcript
+## Cách phân loại nội dung (QUAN TRỌNG)
 
-**Nếu transcript ngắn (dưới ~300 từ):**
-- Chỉ cần tóm tắt những gì đã nói vào `agenda_items`
-- `action_items` để mảng rỗng `[]` nếu không rõ next step
-- `summary` ngắn gọn 1-2 câu là đủ
+Phân tách thông tin thành 4 nhóm riêng biệt:
 
-**Nếu transcript đầy đủ:**
-- Nhóm nội dung theo chủ đề thành các `agenda_items`
-- Trích xuất `action_items` có PIC và deadline nếu được đề cập
+**1. action_items** — việc cần LÀM trong tương lai
+- Có PIC (người chịu trách nhiệm) + deadline (nếu có)
+- Ví dụ: "Tuấn deploy v1 trước thứ 5", "Linh review PR #142 cuối tuần"
+
+**2. decisions** — quyết định ĐÃ CHỐT trong meeting
+- Không phải "sẽ làm" mà là "đã quyết định"
+- Ví dụ: "Team chốt dùng Postgres thay vì MySQL", "Approved budget $5K"
+
+**3. commitments** — cam kết của member (ai hứa làm gì)
+- Khác action_items: không nhất thiết có deadline cụ thể
+- Ví dụ: "Mai cam kết sẽ research solution X tuần này", "Em sẽ phụ trách backend"
+
+**4. blockers** — vấn đề đang BLOCK team
+- Việc không thể tiến hành vì lý do gì
+- Ví dụ: "Database migration đang block deploy", "Đợi review từ legal team"
+
+## Few-shot examples
+
+**Input sample (transcript):**
+> "Tuấn nói: deploy v1 đang bị block bởi database migration. Linh chốt: tuần này
+> Tuấn focus xử lý migration, deploy lùi sang tuần sau. Mai sẽ research solution
+> caching mới, em sẽ làm POC cuối tuần."
+
+**Output mong đợi:**
+```
+"action_items": [
+  {{"pic": "Tuấn", "deadline": "Chưa xác định", "item": "Xử lý database migration"}},
+  {{"pic": "Mai", "deadline": "Chưa xác định", "item": "POC solution caching"}}
+],
+"decisions": [
+  {{"text": "Deploy v1 lùi sang tuần sau", "by": "Linh"}}
+],
+"commitments": [
+  {{"text": "Research solution caching mới", "by": "Mai"}}
+],
+"blockers": [
+  {{"text": "Database migration đang block deploy v1", "by": "Tuấn"}}
+]
+```
 
 ## Lưu ý xử lý ngôn ngữ
 - Transcript có thể chứa từ tiếng Anh xen lẫn tiếng Việt (code-switching) — giữ nguyên các từ kỹ thuật tiếng Anh, không dịch (ví dụ: "deploy", "sprint", "API", "backend" giữ nguyên).
 - Nếu Whisper nghe sai một từ rõ ràng (ví dụ tên người, tên sản phẩm lạ), hãy dựa vào ngữ cảnh để hiểu đúng nghĩa, nhưng không tự bịa thêm thông tin.
+- Phân biệt câu HỎI vs câu TRẢ LỜI để gán đúng speaker khi extract events.
+- Xưng hô tiếng Việt ("em", "anh", "chị") → infer speaker từ context attendees nếu có thể.
+
+## Hướng dẫn xử lý theo độ dài transcript
+
+**Nếu transcript ngắn (dưới ~300 từ):**
+- `agenda_items`: tóm tắt những gì đã nói
+- `action_items`, `decisions`, `commitments`, `blockers`: có thể `[]` nếu không rõ
+- `summary` 1-2 câu
+
+**Nếu transcript đầy đủ:**
+- Nhóm `agenda_items` theo chủ đề
+- Extract đầy đủ 4 nhóm trên với chi tiết PIC
 
 ## Yêu cầu đầu ra
 Trả về CHỈ JSON hợp lệ (không markdown fences, không giải thích). QUAN TRỌNG: không dùng dòng mới thô trong giá trị string — nếu cần xuống dòng, dùng ký tự `\\n`. Cấu trúc:
@@ -65,7 +111,25 @@ Trả về CHỈ JSON hợp lệ (không markdown fences, không giải thích).
       "item": "<nội dung công việc>"
     }}
   ],
-  "summary": "<tóm tắt 1-3 câu>"
+  "decisions": [
+    {{
+      "text": "<nội dung quyết định đã chốt>",
+      "by": "<người ra quyết định, nếu rõ>"
+    }}
+  ],
+  "commitments": [
+    {{
+      "text": "<nội dung cam kết>",
+      "by": "<người cam kết>"
+    }}
+  ],
+  "blockers": [
+    {{
+      "text": "<nội dung blocker>",
+      "by": "<người raise blocker, nếu rõ>"
+    }}
+  ],
+  "summary": "<tóm tắt 1-3 câu, nhắc đến decisions chính>"
 }}
 """
 

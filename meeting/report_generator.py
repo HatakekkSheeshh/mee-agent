@@ -101,6 +101,54 @@ def generate_mom_markdown(
 
     lines.append("")
 
+    # Decisions
+    decisions = notes.get("decisions", [])
+    if decisions:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Quyết định / Decisions")
+        lines.append("")
+        for d in decisions:
+            if isinstance(d, dict):
+                text = d.get("text", "")
+                by = d.get("by", "")
+                lines.append(f"- **{text}**" + (f" _({by})_" if by else ""))
+            elif isinstance(d, str):
+                lines.append(f"- **{d}**")
+        lines.append("")
+
+    # Commitments
+    commitments = notes.get("commitments", [])
+    if commitments:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Cam kết / Commitments")
+        lines.append("")
+        for c in commitments:
+            if isinstance(c, dict):
+                text = c.get("text", "")
+                by = c.get("by", "")
+                lines.append(f"- {text}" + (f" — _{by}_" if by else ""))
+            elif isinstance(c, str):
+                lines.append(f"- {c}")
+        lines.append("")
+
+    # Blockers
+    blockers = notes.get("blockers", [])
+    if blockers:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Vấn đề / Blockers")
+        lines.append("")
+        for b in blockers:
+            if isinstance(b, dict):
+                text = b.get("text", "")
+                by = b.get("by", "")
+                lines.append(f"- ⚠ {text}" + (f" _(raised by {by})_" if by else ""))
+            elif isinstance(b, str):
+                lines.append(f"- ⚠ {b}")
+        lines.append("")
+
     # Summary
     summary = notes.get("summary", "")
     if summary:
