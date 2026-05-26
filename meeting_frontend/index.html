@@ -853,13 +853,38 @@ async function loadMeeting(meetingId) {
             setVal('attendees', attStr);
         }
 
-        // Load transcript from segments (fetch each recording's segments)
-        const transcriptLines = [];
-        // Backend returns recordings as array but not segments directly — only segment_count
-        // For full transcript, would need GET /api/recordings/{id}/segments (not yet impl)
-        // Workaround: show MoM only for now
+        // Load raw transcript text from DB
         const transcriptEl = document.getElementById('transcript');
-        if (transcriptEl) transcriptEl.value = `[Đã load meeting "${m.title}". Segments stored in DB — full transcript view TBD.]`;
+        if (transcriptEl) {
+            transcriptEl.value = '(đang load transcript...)';
+            try {
+                const tResp = await fetch(`/api/meetings/${m.id}/transcript`);
+                if (tResp.ok) {
+                    const tData = await tResp.json();
+                    transcriptEl.value = tData.transcript || '(meeting chưa có transcript)';
+                } else {
+                    transcriptEl.value = '(không load được transcript)';
+                }
+            } catch (e) {
+                transcriptEl.value = `(lỗi load: ${e.message})`;
+            }
+        }
+
+        // Reset clean view — user phải click toggle Clean để fetch lại
+        if (typeof cleanFetched !== 'undefined') {
+            cleanFetched = false;
+        }
+        const cleanContainer = document.getElementById('transcript-clean');
+        if (cleanContainer) {
+            cleanContainer.innerHTML = `
+                <div class="transcript-clean-empty muted">
+                    Click "Clean" để LLM format lại transcript của meeting này.
+                </div>`;
+        }
+        // Switch về Raw view khi load meeting
+        if (typeof setTranscriptView === 'function') {
+            setTranscriptView('raw');
+        }
 
         // Show MoM if exists
         const momEmpty = document.getElementById('mom-empty');

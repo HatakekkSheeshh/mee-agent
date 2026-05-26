@@ -156,6 +156,19 @@ async def get_meeting_endpoint(
     }
 
 
+@router.get("/meetings/{meeting_id}/transcript")
+async def get_meeting_transcript_endpoint(
+    meeting_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Return joined raw transcript text of all segments in this meeting."""
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    text = await repo.join_meeting_transcript(session, mid)
+    return {"meeting_id": meeting_id, "transcript": text}
+
+
 @router.post("/meetings/{meeting_id}/recordings")
 async def start_recording_endpoint(
     meeting_id: str,
