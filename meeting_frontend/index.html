@@ -188,6 +188,10 @@
         <section class="pane pane-transcript">
             <div class="pane-header pane-header-actions">
                 <span class="pane-title" data-i18n="pane.transcript">Transcript</span>
+                <div class="view-toggle" id="transcript-view-toggle">
+                    <button class="view-toggle-btn active" data-view="raw" type="button">Raw</button>
+                    <button class="view-toggle-btn" data-view="clean" type="button">Clean</button>
+                </div>
                 <div class="pane-actions">
                     <button id="btn-start" class="btn btn-record btn-sm" type="button" onclick="startRecording()">
                         <span class="rec-dot"></span>
@@ -215,6 +219,13 @@
                 <textarea id="transcript" class="transcript-box"
                           placeholder="Start recording, upload audio, or paste your transcript here." data-i18n-ph="transcriptPlaceholder"></textarea>
                 <textarea id="manual-transcript" class="transcript-box hidden" placeholder="Paste or type your transcript here..." data-i18n-ph="transcriptPlaceholder"></textarea>
+
+                <!-- Sprint C — Clean transcript view (LLM post-processed) -->
+                <div id="transcript-clean" class="transcript-clean hidden">
+                    <div class="transcript-clean-empty muted">
+                        Bấm "Clean" để LLM format lại transcript (gán speaker, bỏ filler, group theo người nói).
+                    </div>
+                </div>
 
                 <div class="pane-footer">
                     <button id="btn-save-transcript" class="btn btn-ghost btn-sm" type="button" onclick="saveTranscript()" disabled data-i18n="btn.saveTxt">Save .txt</button>
@@ -898,6 +909,95 @@ window.reloadSidebarMeetings = reloadSidebarMeetings;
 
 // Initial load
 reloadSidebarMeetings();
+
+// ── Sprint C — Raw / Clean transcript toggle ─────────────────
+const viewToggle = document.getElementById('transcript-view-toggle');
+const rawTextarea = document.getElementById('transcript');
+const cleanContainer = document.getElementById('transcript-clean');
+let cleanFetched = false;
+
+function setTranscriptView(view) {
+    if (!viewToggle) return;
+    viewToggle.querySelectorAll('.view-toggle-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === view);
+    });
+    if (view === 'raw') {
+        rawTextarea.classList.remove('hidden');
+        cleanContainer.classList.add('hidden');
+    } else {
+        rawTextarea.classList.add('hidden');
+        cleanContainer.classList.remove('hidden');
+        if (!cleanFetched) fetchCleanTranscript();
+    }
+}
+
+async function fetchCleanTranscript() {
+    if (!window.meetingDbId) {
+        cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">Cần Generate MoM trước để có meeting trong DB.</div>';
+        return;
+    }
+    cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">Đang xử lý LLM, đợi ~30-60 giây...</div>';
+    try {
+        const resp = await fetch(`/api/meetings/${window.meetingDbId}/clean-transcript`, {
+            method: 'POST',
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        renderCleanSegments(data.clean_segments || []);
+        cleanFetched = true;
+    } catch (err) {
+        cleanContainer.innerHTML = `<div class="transcript-clean-empty muted">Lỗi: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function renderCleanSegments(segments) {
+    if (!segments.length) {
+        cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">LLM không tạo được clean view.</div>';
+        return;
+    }
+    const tagColors = {
+        commitment: 'tag-commitment',
+        decision:   'tag-decision',
+        blocker:    'tag-blocker',
+        question:   'tag-question',
+        update:     'tag-update',
+    };
+    cleanContainer.innerHTML = `
+        <div class="transcript-clean-actions">
+            <button class="btn btn-ghost btn-xs" id="refresh-clean" type="button">↻ Re-run LLM</button>
+        </div>
+        ${segments.map(s => `
+            <div class="clean-block">
+                <div class="clean-speaker">${escapeHtml(s.speaker)}</div>
+                <div class="clean-text">${escapeHtml(s.text)}</div>
+                ${(s.tags || []).length ? `
+                    <div class="clean-tags">
+                        ${s.tags.map(t => `<span class="tag ${tagColors[t] || ''}">${escapeHtml(t)}</span>`).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        `).join('')}
+    `;
+    const refreshBtn = document.getElementById('refresh-clean');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => { cleanFetched = false; fetchCleanTranscript(); });
+    }
+}
+
+viewToggle?.querySelectorAll('.view-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => setTranscriptView(btn.dataset.view));
+});
+
+// Reset cleanFetched flag when newSession (so next meeting fetches fresh)
+const origNewSession = window.newSession;
+window.newSession = function() {
+    cleanFetched = false;
+    setTranscriptView('raw');
+    if (typeof origNewSession === 'function') origNewSession();
+};
 
 // ── Resizable panes ──────────────────────────────
 function makeResizer(handle, getter, setter, min, max, storageKey) {

@@ -29,6 +29,7 @@ from meeting.db import get_session
 from meeting.db import repositories as repo
 from meeting.graphs import get_checkpointer, run_mom_graph
 from meeting.note_generator import generate_meeting_notes
+from meeting.services import clean_transcript
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["meetings"])
@@ -206,6 +207,48 @@ async def add_segment_endpoint(
         "id": str(segment.id),
         "seq": segment.seq,
         "original_text": segment.original_text,
+    }
+
+
+@router.post("/meetings/{meeting_id}/clean-transcript")
+async def clean_transcript_endpoint(
+    meeting_id: str, session: AsyncSession = Depends(get_session)
+):
+    """
+    Sprint C — LLM post-process raw transcript → clean structured view.
+
+    Reads all segments across all recordings of this meeting, calls LLM
+    to: detect speakers, group consecutive sentences, remove filler words,
+    add punctuation, tag commitment/decision/blocker/etc.
+
+    Returns: {"segments": [{speaker, text, tags}, ...]}
+    """
+    mid = _parse_uuid(meeting_id)
+
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    raw_text = await repo.join_meeting_transcript(session, mid)
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="No transcript segments to clean")
+
+    # Attendees for speaker hint
+    attendees_str = ""
+    if meeting.attendees:
+        attendees_str = ", ".join(
+            a.get("name", "") for a in meeting.attendees if isinstance(a, dict)
+        )
+
+    result = clean_transcript(raw_text=raw_text, attendees=attendees_str)
+
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return {
+        "meeting_id": meeting_id,
+        "raw_char_count": len(raw_text),
+        "clean_segments": result.get("segments", []),
     }
 
 
