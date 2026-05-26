@@ -426,11 +426,26 @@ def create_app(output_dir: str = None) -> FastAPI:
         try:
             text = _call_whisper_api(
                 audio_bytes, filename, base_url, api_key, model, prompt, language,
-                timeout=60,
+                timeout=180,  # 3 min — file 20-24MB có thể cần 1-2 phút
             )
-            return {"text": text, "chunked": False}
+            return {"text": text, "chunked": False, "size_mb": round(original_size_mb, 1)}
+        except requests.exceptions.HTTPError as e:
+            # Whisper trả HTTP error status — include detail
+            detail = f"Whisper HTTP error: {e}"
+            if hasattr(e, "response") and e.response is not None:
+                body = (e.response.text or "")[:500]
+                detail += f" (status={e.response.status_code}, body={body!r})"
+            logging.error(detail)
+            raise HTTPException(status_code=502, detail=detail)
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Whisper timeout: {e}")
+            raise HTTPException(
+                status_code=504,
+                detail=f"Whisper timeout sau 60s. File có thể quá lớn → restart server (auto-chunk sẽ trigger ở > 24MB)",
+            )
         except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=502, detail=f"Whisper API error: {str(e)}")
+            logging.error(f"Whisper network error: {e}")
+            raise HTTPException(status_code=502, detail=f"Whisper network error: {e}")
 
     @app.get("/api/vocab-pool")
     async def get_vocab_pool():
