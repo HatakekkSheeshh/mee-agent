@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from meeting.api.meetings import router as meetings_router
 from meeting.memory_client import save_meeting_events
 from meeting.note_generator import generate_meeting_notes
 from meeting.report_generator import generate_mom_markdown
@@ -103,6 +104,9 @@ def create_app(output_dir: str = None) -> FastAPI:
     )
 
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "meeting_frontend")
+
+    # Phase A — DB-backed meetings router
+    app.include_router(meetings_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):

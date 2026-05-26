@@ -6,3 +6,10 @@ soundfile>=0.12.1
 numpy<2
 openai>=1.30.0
 python-dotenv>=1.0.0
+websockets
+
+# === Database (Phase A) ===
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
