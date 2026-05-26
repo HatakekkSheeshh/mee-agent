@@ -1125,36 +1125,28 @@ async function ensureMeetingDbId() {
 async function importTranscriptToDb(rawText) {
     const meetingId = await ensureMeetingDbId();
 
-    // Create a recording
-    const recResp = await fetch(`/api/meetings/${meetingId}/recordings`, {
+    // Single endpoint — atomic: delete old recordings + create new + split segments
+    // replace=true (default) → tránh bug accumulate khi paste nhiều lần
+    const resp = await fetch(`/api/meetings/${meetingId}/import-transcript`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ session_label: 'Imported transcript' }),
+        body: JSON.stringify({
+            text: rawText,
+            session_label: 'Imported transcript',
+            replace: true,
+        }),
     });
-    if (!recResp.ok) throw new Error('Create recording failed');
-    const recording = await recResp.json();
-    const recId = recording.id;
-
-    // Split text into segments — by newline, fall back to sentence
-    let lines = rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (lines.length === 1) {
-        // No newlines — split by sentence
-        lines = rawText.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || 'Import transcript failed');
     }
-
-    // Bulk insert segments (sequentially to keep order — could parallel later)
-    let seq = 1;
-    for (const line of lines) {
-        if (!line) continue;
-        await fetch(`/api/recordings/${recId}/segments`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ seq, original_text: line }),
-        });
-        seq++;
-    }
-
-    return { meetingId, recordingId: recId, segmentCount: seq - 1 };
+    const data = await resp.json();
+    return {
+        meetingId,
+        recordingId: data.recording_id,
+        segmentCount: data.segments_count,
+        deletedRecordings: data.deleted_recordings,
+    };
 }
 
 // Expose to app.js scope

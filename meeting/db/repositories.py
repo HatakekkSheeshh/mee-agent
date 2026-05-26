@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -153,6 +153,22 @@ async def end_recording(
     recording.status = "done"
     await session.flush()
     return recording
+
+
+async def delete_all_recordings_for_meeting(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> int:
+    """Hard-delete all recordings (segments cascaded via FK). Returns count deleted."""
+    # Count first for return value
+    count_stmt = select(Recording).where(Recording.meeting_id == meeting_id)
+    rows = (await session.execute(count_stmt)).scalars().all()
+    count = len(rows)
+    # Delete (FK CASCADE removes segments)
+    await session.execute(
+        delete(Recording).where(Recording.meeting_id == meeting_id)
+    )
+    await session.flush()
+    return count
 
 
 # ─── Segments ─────────────────────────────────────────────────────

@@ -72,6 +72,12 @@ class RecordingCreate(BaseModel):
     session_label: Optional[str] = None
 
 
+class TranscriptImport(BaseModel):
+    text: str
+    session_label: Optional[str] = "Imported transcript"
+    replace: bool = True  # True = xoá recordings cũ trước khi import
+
+
 # ─── Helpers ──────────────────────────────────────────────────────
 
 def _meeting_to_out(m) -> MeetingOut:
@@ -184,6 +190,62 @@ async def end_recording_endpoint(
         "status": recording.status,
         "ended_at": recording.ended_at.isoformat() if recording.ended_at else None,
         "duration_sec": recording.duration_sec,
+    }
+
+
+@router.post("/meetings/{meeting_id}/import-transcript")
+async def import_transcript_endpoint(
+    meeting_id: str,
+    req: TranscriptImport,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Import raw text transcript → create recording + segments atomically.
+
+    If `replace=True` (default), xoá tất cả recordings cũ của meeting trước khi
+    import → tránh accumulate khi user paste nhiều lần.
+    Set `replace=False` nếu muốn append (vd multi-session meeting).
+
+    Splits text into segments by newlines, falls back to sentence boundaries.
+    """
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Empty transcript text")
+
+    deleted_count = 0
+    if req.replace:
+        deleted_count = await repo.delete_all_recordings_for_meeting(session, mid)
+
+    # Create new recording
+    recording = await repo.start_recording(
+        session, meeting_id=mid, session_label=req.session_label,
+    )
+
+    # Split text into segments
+    lines = [s.strip() for s in req.text.split("\n") if s.strip()]
+    if len(lines) <= 1:
+        # No newlines → split by sentence boundary
+        import re
+        lines = [s.strip() for s in re.split(r"(?<=[.!?])\s+", req.text) if s.strip()]
+
+    # Bulk insert segments
+    for seq, line in enumerate(lines, start=1):
+        await repo.add_segment(
+            session,
+            recording_id=recording.id,
+            seq=seq,
+            original_text=line,
+        )
+
+    return {
+        "meeting_id": meeting_id,
+        "recording_id": str(recording.id),
+        "segments_count": len(lines),
+        "deleted_recordings": deleted_count,
     }
 
 
