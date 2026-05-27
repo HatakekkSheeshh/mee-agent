@@ -21,11 +21,28 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError(
         "DATABASE_URL env var is required. "
-        "See .env.example for format: postgresql+asyncpg://user:pass@host:port/db"
+        "Format: postgresql://user:pass@host:port/db (driver auto-added)"
     )
 
+
+def _to_async_url(url: str) -> str:
+    """Normalize URL to use asyncpg driver. Accepts plain postgres://, postgresql://, or postgresql+asyncpg://."""
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql+"):
+        # Other driver explicitly specified — replace with asyncpg
+        return "postgresql+asyncpg://" + url.split("://", 1)[1]
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):  # Heroku/Render style
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
+
+
+ASYNC_DATABASE_URL = _to_async_url(DATABASE_URL)
+
 async_engine = create_async_engine(
-    DATABASE_URL,
+    ASYNC_DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
     pool_size=10,

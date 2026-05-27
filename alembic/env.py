@@ -10,7 +10,7 @@ from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
-load_dotenv()
+load_dotenv(interpolate=False)
 
 # Import models so Base.metadata is populated
 from meeting.db.base import Base  # noqa: E402
@@ -18,14 +18,27 @@ from meeting.db import models  # noqa: E402, F401
 
 config = context.config
 
-# Override sqlalchemy.url from environment (fail-fast if not set)
-db_url = os.getenv("DATABASE_URL_SYNC")
+
+def _to_sync_url(url: str) -> str:
+    """Normalize to psycopg2 driver for Alembic (sync)."""
+    if url.startswith("postgresql+psycopg2://"):
+        return url
+    if url.startswith("postgresql+"):
+        return "postgresql+psycopg2://" + url.split("://", 1)[1]
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg2://", 1)
+    return url
+
+
+# Prefer DATABASE_URL_SYNC if set, otherwise derive from DATABASE_URL
+db_url = os.getenv("DATABASE_URL_SYNC") or os.getenv("DATABASE_URL")
 if not db_url:
     raise RuntimeError(
-        "DATABASE_URL_SYNC env var is required. "
-        "See .env.example for format: postgresql+psycopg2://user:pass@host:port/db"
+        "DATABASE_URL (or DATABASE_URL_SYNC) env var is required."
     )
-config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", _to_sync_url(db_url))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
