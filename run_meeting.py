@@ -29,7 +29,7 @@ from websockets.exceptions import ConnectionClosed
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    load_dotenv(override=True, interpolate=False)
 except ImportError:
     pass
 

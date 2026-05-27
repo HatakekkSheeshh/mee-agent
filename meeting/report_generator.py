@@ -52,9 +52,26 @@ def generate_mom_markdown(
     attendees = notes.get("attendees", [])
     if attendees:
         for i, att in enumerate(attendees, 1):
-            name = att.get("name", "")
-            dept = att.get("department", "")
-            title = att.get("title", "")
+            # LLM có thể trả về dict {name, department, title} hoặc plain string
+            if isinstance(att, dict):
+                name = att.get("name", "")
+                dept = att.get("department", "")
+                title = att.get("title", "")
+            elif isinstance(att, str):
+                # Parse "Name (Dept - Title)" or just "Name"
+                s = att.strip()
+                if "(" in s and ")" in s:
+                    name = s[:s.index("(")].strip()
+                    info = s[s.index("(") + 1:s.index(")")].strip()
+                    if "-" in info:
+                        dept, title = [x.strip() for x in info.split("-", 1)]
+                    else:
+                        dept, title = info, ""
+                else:
+                    name, dept, title = s, "", ""
+            else:
+                # Unknown type — skip safely
+                continue
             lines.append(f"| {i} | {name} | {dept} | {title} |")
     else:
         lines.append("| 1 | | | |")

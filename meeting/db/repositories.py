@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -139,6 +139,28 @@ async def start_recording(
     return recording
 
 
+async def get_recording(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> Optional[Recording]:
+    return await session.get(Recording, recording_id)
+
+
+async def join_recording_transcript(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> str:
+    """Return joined text of all segments in 1 recording (COALESCE edited/original)."""
+    stmt = (
+        select(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == recording_id,
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .order_by(TranscriptSegment.seq)
+    )
+    segments = (await session.execute(stmt)).scalars().all()
+    return "\n".join(s.text for s in segments)
+
+
 async def end_recording(
     session: AsyncSession, recording_id: uuid.UUID
 ) -> Optional[Recording]:
@@ -153,6 +175,22 @@ async def end_recording(
     recording.status = "done"
     await session.flush()
     return recording
+
+
+async def delete_all_recordings_for_meeting(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> int:
+    """Hard-delete all recordings (segments cascaded via FK). Returns count deleted."""
+    # Count first for return value
+    count_stmt = select(Recording).where(Recording.meeting_id == meeting_id)
+    rows = (await session.execute(count_stmt)).scalars().all()
+    count = len(rows)
+    # Delete (FK CASCADE removes segments)
+    await session.execute(
+        delete(Recording).where(Recording.meeting_id == meeting_id)
+    )
+    await session.flush()
+    return count
 
 
 # ─── Segments ─────────────────────────────────────────────────────

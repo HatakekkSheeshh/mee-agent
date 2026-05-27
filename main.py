@@ -3,7 +3,7 @@ import uvicorn
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    load_dotenv(override=True, interpolate=False)
 except ImportError:
     pass
 

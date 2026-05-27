@@ -29,6 +29,7 @@ from meeting.db import get_session
 from meeting.db import repositories as repo
 from meeting.graphs import get_checkpointer, run_mom_graph
 from meeting.note_generator import generate_meeting_notes
+from meeting.services import clean_transcript
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["meetings"])
@@ -69,6 +70,12 @@ class SegmentCreate(BaseModel):
 
 class RecordingCreate(BaseModel):
     session_label: Optional[str] = None
+
+
+class TranscriptImport(BaseModel):
+    text: str
+    session_label: Optional[str] = "Imported transcript"
+    replace: bool = True  # True = xoá recordings cũ trước khi import
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -149,6 +156,19 @@ async def get_meeting_endpoint(
     }
 
 
+@router.get("/meetings/{meeting_id}/transcript")
+async def get_meeting_transcript_endpoint(
+    meeting_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Return joined raw transcript text of all segments in this meeting."""
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    text = await repo.join_meeting_transcript(session, mid)
+    return {"meeting_id": meeting_id, "transcript": text}
+
+
 @router.post("/meetings/{meeting_id}/recordings")
 async def start_recording_endpoint(
     meeting_id: str,
@@ -170,6 +190,57 @@ async def start_recording_endpoint(
     }
 
 
+@router.get("/recordings/{recording_id}/transcript")
+async def get_recording_transcript_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Return joined raw transcript text of 1 specific recording."""
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    text = await repo.join_recording_transcript(session, rid)
+    return {
+        "recording_id": recording_id,
+        "meeting_id": str(recording.meeting_id),
+        "session_label": recording.session_label,
+        "transcript": text,
+    }
+
+
+@router.post("/recordings/{recording_id}/clean")
+async def clean_recording_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """LLM clean transcript view for 1 specific recording."""
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    raw_text = await repo.join_recording_transcript(session, rid)
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="No segments to clean")
+
+    # Get meeting attendees for speaker hints
+    meeting = await repo.get_meeting(session, recording.meeting_id)
+    attendees_str = ""
+    if meeting and meeting.attendees:
+        attendees_str = ", ".join(
+            a.get("name", "") for a in meeting.attendees if isinstance(a, dict)
+        )
+
+    result = clean_transcript(raw_text=raw_text, attendees=attendees_str)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return {
+        "recording_id": recording_id,
+        "raw_char_count": len(raw_text),
+        "clean_segments": result.get("segments", []),
+    }
+
+
 @router.post("/recordings/{recording_id}/end")
 async def end_recording_endpoint(
     recording_id: str, session: AsyncSession = Depends(get_session)
@@ -183,6 +254,62 @@ async def end_recording_endpoint(
         "status": recording.status,
         "ended_at": recording.ended_at.isoformat() if recording.ended_at else None,
         "duration_sec": recording.duration_sec,
+    }
+
+
+@router.post("/meetings/{meeting_id}/import-transcript")
+async def import_transcript_endpoint(
+    meeting_id: str,
+    req: TranscriptImport,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Import raw text transcript → create recording + segments atomically.
+
+    If `replace=True` (default), xoá tất cả recordings cũ của meeting trước khi
+    import → tránh accumulate khi user paste nhiều lần.
+    Set `replace=False` nếu muốn append (vd multi-session meeting).
+
+    Splits text into segments by newlines, falls back to sentence boundaries.
+    """
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Empty transcript text")
+
+    deleted_count = 0
+    if req.replace:
+        deleted_count = await repo.delete_all_recordings_for_meeting(session, mid)
+
+    # Create new recording
+    recording = await repo.start_recording(
+        session, meeting_id=mid, session_label=req.session_label,
+    )
+
+    # Split text into segments
+    lines = [s.strip() for s in req.text.split("\n") if s.strip()]
+    if len(lines) <= 1:
+        # No newlines → split by sentence boundary
+        import re
+        lines = [s.strip() for s in re.split(r"(?<=[.!?])\s+", req.text) if s.strip()]
+
+    # Bulk insert segments
+    for seq, line in enumerate(lines, start=1):
+        await repo.add_segment(
+            session,
+            recording_id=recording.id,
+            seq=seq,
+            original_text=line,
+        )
+
+    return {
+        "meeting_id": meeting_id,
+        "recording_id": str(recording.id),
+        "segments_count": len(lines),
+        "deleted_recordings": deleted_count,
     }
 
 
@@ -206,6 +333,48 @@ async def add_segment_endpoint(
         "id": str(segment.id),
         "seq": segment.seq,
         "original_text": segment.original_text,
+    }
+
+
+@router.post("/meetings/{meeting_id}/clean-transcript")
+async def clean_transcript_endpoint(
+    meeting_id: str, session: AsyncSession = Depends(get_session)
+):
+    """
+    Sprint C — LLM post-process raw transcript → clean structured view.
+
+    Reads all segments across all recordings of this meeting, calls LLM
+    to: detect speakers, group consecutive sentences, remove filler words,
+    add punctuation, tag commitment/decision/blocker/etc.
+
+    Returns: {"segments": [{speaker, text, tags}, ...]}
+    """
+    mid = _parse_uuid(meeting_id)
+
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    raw_text = await repo.join_meeting_transcript(session, mid)
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="No transcript segments to clean")
+
+    # Attendees for speaker hint
+    attendees_str = ""
+    if meeting.attendees:
+        attendees_str = ", ".join(
+            a.get("name", "") for a in meeting.attendees if isinstance(a, dict)
+        )
+
+    result = clean_transcript(raw_text=raw_text, attendees=attendees_str)
+
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return {
+        "meeting_id": meeting_id,
+        "raw_char_count": len(raw_text),
+        "clean_segments": result.get("segments", []),
     }
 
 
