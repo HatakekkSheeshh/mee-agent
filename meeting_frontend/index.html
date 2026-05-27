@@ -800,6 +800,14 @@ sidebarNewBtn?.addEventListener('click', () => {
     }
 });
 
+const expandedMeetings = new Set();  // meetingIds that user expanded
+
+function shortDate(s) {
+    if (!s) return '·';
+    try { return new Date(s).toLocaleDateString('vi-VN', {day:'numeric', month:'short'}); }
+    catch { return '·'; }
+}
+
 async function reloadSidebarMeetings() {
     if (!sidebarListEl) return;
     sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Đang tải...</div>';
@@ -810,22 +818,188 @@ async function reloadSidebarMeetings() {
             sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Chưa có cuộc họp nào</div>';
             return;
         }
-        sidebarListEl.innerHTML = items.map(m => `
-            <div class="sidebar-meeting ${window.meetingDbId === m.id ? 'active' : ''}" data-id="${m.id}">
-                <div class="sidebar-meeting-title">${escapeHtml(m.title)}</div>
-                <div class="sidebar-meeting-meta">
-                    ${m.date ? new Date(m.date).toLocaleDateString('vi-VN', {day:'numeric', month:'short'}) : '·'}
-                    ${m.has_mom ? '<span class="sidebar-meeting-badge">MoM</span>' : ''}
+
+        // Always expand the currently-active meeting
+        if (window.meetingDbId) expandedMeetings.add(window.meetingDbId);
+
+        sidebarListEl.innerHTML = items.map(m => {
+            const expanded = expandedMeetings.has(m.id);
+            const isActiveMeeting = window.meetingDbId === m.id;
+            return `
+                <div class="sidebar-meeting-group ${expanded ? 'expanded' : ''}" data-id="${m.id}">
+                    <div class="sidebar-meeting ${isActiveMeeting ? 'active' : ''}" data-id="${m.id}">
+                        <svg class="sidebar-caret" viewBox="0 0 12 12" width="9" height="9"><path fill="currentColor" d="M4 2l5 4-5 4z"/></svg>
+                        <div class="sidebar-meeting-content">
+                            <div class="sidebar-meeting-title">${escapeHtml(m.title)}</div>
+                            <div class="sidebar-meeting-meta">
+                                ${shortDate(m.date)}
+                                ${m.has_mom ? '<span class="sidebar-meeting-badge">MoM</span>' : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sidebar-recordings" data-meeting="${m.id}">
+                        ${expanded ? '<div class="sidebar-rec-loading muted">Đang load...</div>' : ''}
+                    </div>
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
+
+        // Click meeting row: expand/collapse + load
         sidebarListEl.querySelectorAll('.sidebar-meeting').forEach(el => {
-            el.addEventListener('click', () => loadMeeting(el.dataset.id));
+            el.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const meetingId = el.dataset.id;
+                const group = el.parentElement;
+                const wasExpanded = expandedMeetings.has(meetingId);
+
+                if (wasExpanded) {
+                    expandedMeetings.delete(meetingId);
+                    group.classList.remove('expanded');
+                } else {
+                    expandedMeetings.add(meetingId);
+                    group.classList.add('expanded');
+                    // Lazy fetch recordings for this meeting
+                    await renderRecordingsForMeeting(meetingId, group.querySelector('.sidebar-recordings'));
+                }
+
+                // Always load meeting on click (even if collapsing)
+                if (!wasExpanded || window.meetingDbId !== meetingId) {
+                    await loadMeeting(meetingId);
+                }
+            });
         });
+
+        // Pre-populate recordings for currently-active meeting
+        if (window.meetingDbId && expandedMeetings.has(window.meetingDbId)) {
+            const activeGroup = sidebarListEl.querySelector(`.sidebar-meeting-group[data-id="${window.meetingDbId}"]`);
+            if (activeGroup) {
+                await renderRecordingsForMeeting(
+                    window.meetingDbId,
+                    activeGroup.querySelector('.sidebar-recordings'),
+                );
+            }
+        }
     } catch (err) {
         sidebarListEl.innerHTML = `<div class="sidebar-empty muted">Lỗi: ${escapeHtml(err.message)}</div>`;
     }
 }
+
+async function renderRecordingsForMeeting(meetingId, containerEl) {
+    if (!containerEl) return;
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const recordings = data.recordings || [];
+        if (!recordings.length) {
+            containerEl.innerHTML = `
+                <div class="sidebar-add-rec" data-meeting="${meetingId}">
+                    ⊕ Thêm phiên ghi âm
+                </div>`;
+        } else {
+            containerEl.innerHTML = recordings.map((r, idx) => `
+                <div class="sidebar-recording ${window.currentRecordingId === r.id ? 'active' : ''}" data-rec="${r.id}">
+                    <span class="rec-num">${idx + 1}</span>
+                    <span class="rec-label">${escapeHtml(r.session_label || 'Recording')}</span>
+                    <span class="rec-segs">${r.segment_count} đoạn</span>
+                </div>
+            `).join('') + `
+                <div class="sidebar-add-rec" data-meeting="${meetingId}">
+                    ⊕ Thêm phiên ghi âm
+                </div>`;
+        }
+
+        // Wire recording click
+        containerEl.querySelectorAll('.sidebar-recording').forEach(rel => {
+            rel.addEventListener('click', (e) => {
+                e.stopPropagation();
+                loadRecording(meetingId, rel.dataset.rec);
+            });
+        });
+        // Wire add-recording click
+        containerEl.querySelectorAll('.sidebar-add-rec').forEach(addEl => {
+            addEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                promptAddRecording(addEl.dataset.meeting);
+            });
+        });
+    } catch (err) {
+        containerEl.innerHTML = `<div class="sidebar-rec-loading muted">Lỗi: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+async function loadRecording(meetingId, recordingId) {
+    // If switching meeting context, also load meeting fields/MoM
+    if (window.meetingDbId !== meetingId) {
+        await loadMeeting(meetingId);
+    }
+    window.currentRecordingId = recordingId;
+
+    // Update sidebar active highlight
+    sidebarListEl.querySelectorAll('.sidebar-recording').forEach(el => {
+        el.classList.toggle('active', el.dataset.rec === recordingId);
+    });
+
+    // Fetch recording transcript
+    const transcriptEl = document.getElementById('transcript');
+    if (transcriptEl) {
+        transcriptEl.value = '(đang load recording...)';
+        try {
+            const resp = await fetch(`/api/recordings/${recordingId}/transcript`);
+            const data = await resp.json();
+            transcriptEl.value = data.transcript || '(recording không có segments)';
+        } catch (err) {
+            transcriptEl.value = `(lỗi: ${err.message})`;
+        }
+    }
+
+    // Reset clean view
+    if (typeof cleanFetched !== 'undefined') cleanFetched = false;
+    const cleanContainer = document.getElementById('transcript-clean');
+    if (cleanContainer) {
+        cleanContainer.innerHTML = `
+            <div class="transcript-clean-empty muted">
+                Click "Clean" để LLM format lại recording này.
+            </div>`;
+    }
+    if (typeof setTranscriptView === 'function') setTranscriptView('raw');
+}
+
+function promptAddRecording(meetingId) {
+    const text = prompt('Paste transcript text cho phiên ghi âm mới:');
+    if (!text || !text.trim()) return;
+    addRecordingToMeeting(meetingId, text.trim());
+}
+
+async function addRecordingToMeeting(meetingId, rawText) {
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}/import-transcript`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                text: rawText,
+                session_label: `Recording ${new Date().toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'})}`,
+                replace: false,   // ← append, không xóa cũ
+            }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || 'Add recording failed');
+        }
+        const data = await resp.json();
+        // Refresh sidebar recordings list
+        expandedMeetings.add(meetingId);
+        await reloadSidebarMeetings();
+        // Auto-switch to new recording
+        await loadRecording(meetingId, data.recording_id);
+    } catch (err) {
+        alert(`Lỗi: ${err.message}`);
+    }
+}
+
+// Expose
+window.loadRecording = loadRecording;
+window.promptAddRecording = promptAddRecording;
 
 async function loadMeeting(meetingId) {
     try {
@@ -957,6 +1131,10 @@ function setTranscriptView(view) {
 }
 
 async function fetchCleanTranscript() {
+    // Per-recording clean view (if recording selected), else meeting-level (joined)
+    if (window.currentRecordingId) {
+        return fetchCleanForRecording(window.currentRecordingId);
+    }
     if (!window.meetingDbId) {
         cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">Cần Generate MoM trước để có meeting trong DB.</div>';
         return;
@@ -966,6 +1144,22 @@ async function fetchCleanTranscript() {
         const resp = await fetch(`/api/meetings/${window.meetingDbId}/clean-transcript`, {
             method: 'POST',
         });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        renderCleanSegments(data.clean_segments || []);
+        cleanFetched = true;
+    } catch (err) {
+        cleanContainer.innerHTML = `<div class="transcript-clean-empty muted">Lỗi: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+async function fetchCleanForRecording(recordingId) {
+    cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">Đang xử lý LLM cho recording này...</div>';
+    try {
+        const resp = await fetch(`/api/recordings/${recordingId}/clean`, { method: 'POST' });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.detail || `HTTP ${resp.status}`);

@@ -190,6 +190,57 @@ async def start_recording_endpoint(
     }
 
 
+@router.get("/recordings/{recording_id}/transcript")
+async def get_recording_transcript_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Return joined raw transcript text of 1 specific recording."""
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    text = await repo.join_recording_transcript(session, rid)
+    return {
+        "recording_id": recording_id,
+        "meeting_id": str(recording.meeting_id),
+        "session_label": recording.session_label,
+        "transcript": text,
+    }
+
+
+@router.post("/recordings/{recording_id}/clean")
+async def clean_recording_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """LLM clean transcript view for 1 specific recording."""
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    raw_text = await repo.join_recording_transcript(session, rid)
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="No segments to clean")
+
+    # Get meeting attendees for speaker hints
+    meeting = await repo.get_meeting(session, recording.meeting_id)
+    attendees_str = ""
+    if meeting and meeting.attendees:
+        attendees_str = ", ".join(
+            a.get("name", "") for a in meeting.attendees if isinstance(a, dict)
+        )
+
+    result = clean_transcript(raw_text=raw_text, attendees=attendees_str)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return {
+        "recording_id": recording_id,
+        "raw_char_count": len(raw_text),
+        "clean_segments": result.get("segments", []),
+    }
+
+
 @router.post("/recordings/{recording_id}/end")
 async def end_recording_endpoint(
     recording_id: str, session: AsyncSession = Depends(get_session)

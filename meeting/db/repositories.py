@@ -139,6 +139,28 @@ async def start_recording(
     return recording
 
 
+async def get_recording(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> Optional[Recording]:
+    return await session.get(Recording, recording_id)
+
+
+async def join_recording_transcript(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> str:
+    """Return joined text of all segments in 1 recording (COALESCE edited/original)."""
+    stmt = (
+        select(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == recording_id,
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .order_by(TranscriptSegment.seq)
+    )
+    segments = (await session.execute(stmt)).scalars().all()
+    return "\n".join(s.text for s in segments)
+
+
 async def end_recording(
     session: AsyncSession, recording_id: uuid.UUID
 ) -> Optional[Recording]:
