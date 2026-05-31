@@ -46,16 +46,32 @@ class ServeClientMaaS(ServeClientBase):
 
     # Common Whisper hallucinations in Vietnamese (YouTube training data leakage)
     HALLUCINATION_PATTERNS = [
+        # YouTube outros
         "subscribe", "la la school", "ghiền mì gõ", "không bỏ lỡ",
         "video hấp dẫn", "cảm ơn các bạn đã theo dõi", "nhớ like",
         "nhấn chuông", "đăng ký kênh", "xin chào các bạn", "like share",
         "kênh youtube", "theo dõi kênh", "bấm nút", "phụ đề",
         "thuyết minh", "vietsub",
+        # Video closing phrases — common on silence/noise
+        "hẹn gặp lại các bạn", "hẹn gặp lại các bạn trong",
+        "video tiếp theo", "video sau", "tập tiếp theo",
+        "trong những video tiếp theo", "trong tập tiếp theo",
+        "cảm ơn các bạn đã xem", "cảm ơn các bạn đã đón xem",
+        # Vague hooks that Whisper inserts on silence
+        "các bạn có thể nhìn thấy", "bạn có thể nhìn thấy",
+        "các bạn thấy", "như các bạn thấy",
+        # English YouTube fillers
+        "thanks for watching", "see you next time", "see you in the next video",
     ]
 
     # Regex patterns for hallucinated single characters/noise at start of segment
     import re
     _NOISE_PREFIX_RE = re.compile(r"^[ĐđÔôƠơÊê]\s*$|^[A-ZĐ]\.$")
+    # Pure-filler segments (single particle ± punctuation), no real speech
+    _FILLER_ONLY_RE = re.compile(
+        r"^[\s.,!?…]*(?:à|ờ|ừm?|ư|ơi|ah|uh|um|mm|hmm|ah\.?|eh|oh)[\s.,!?…]*$",
+        re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -168,6 +184,15 @@ class ServeClientMaaS(ServeClientBase):
             chunk_duration = len(chunk) / self.RATE
 
             try:
+                # Skip silent chunks before calling Whisper — prevents YouTube-style
+                # hallucinations ("Hẹn gặp lại...", "subscribe", etc.) on dead air.
+                if self._is_silent(chunk):
+                    logging.info(f"Skipping silent chunk ({chunk_duration:.1f}s, RMS too low)")
+                    self.processed_samples = total_samples
+                    self.absolute_time += unprocessed_duration
+                    time.sleep(0.5)
+                    continue
+
                 text = self._call_whisper_api(chunk)
 
                 if text is None:
@@ -279,10 +304,15 @@ class ServeClientMaaS(ServeClientBase):
             return True
         stripped = text.strip()
         lower = stripped.lower()
-        if len(lower) <= 2:
+        # Length check ignoring punctuation/whitespace
+        bare = "".join(c for c in lower if c.isalpha())
+        if len(bare) <= 2:
             return True
         # Single noise character (e.g. lone "Đ", "Ô", "Ê")
         if self._NOISE_PREFIX_RE.match(stripped):
+            return True
+        # Pure filler particle ("à", "ờ.", "ừm", "à!", etc.)
+        if self._FILLER_ONLY_RE.match(stripped):
             return True
         for pattern in self.HALLUCINATION_PATTERNS:
             if pattern in lower:
@@ -306,6 +336,13 @@ class ServeClientMaaS(ServeClientBase):
         # but catch partial: "anh anh anh nói" -> "anh nói")
         cleaned = re.sub(r'\b(\S+)(\s+\1){2,}\b', r'\1', cleaned)
         return cleaned.strip()
+
+    def _is_silent(self, audio_chunk: np.ndarray, rms_threshold: float = 0.005) -> bool:
+        """RMS-based silence detector. Whisper hallucinates badly on silent input."""
+        if audio_chunk.size == 0:
+            return True
+        rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2)))
+        return rms < rms_threshold
 
     def _audio_to_wav_bytes(self, audio_np: np.ndarray) -> bytes:
         """Convert float32 numpy audio array to WAV bytes."""

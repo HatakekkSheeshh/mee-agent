@@ -1,14 +1,27 @@
+# Local Postgres + Adminer for development. NOT started by default — the app
+# uses the remote DATABASE_URL in .env (e.g. VDB / Neon / Supabase). Spin these
+# up only when you want a local DB instead:
+#
+#     docker compose --profile local up -d        # start postgres + adminer
+#     docker compose --profile local down         # stop them
+#
+# After starting, update .env →
+#     DATABASE_URL=postgresql://mee:mee_dev_password@localhost:5435/mee
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: mee-postgres
+    profiles: ["local"]
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER env var required — see .env.example}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env var required — see .env.example}
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB env var required — see .env.example}
+      # Defaults are placeholder-grade — set real values in .env for the local
+      # profile, or these get used as-is (fine for throwaway dev DBs).
+      POSTGRES_USER: ${POSTGRES_USER:-mee}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mee_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-mee}
     ports:
-      - "5435:5432"   # host 5435 → container 5432 (5432/5433 đang bị chiếm bởi services khác)
+      - "5435:5432"   # host 5435 → container 5432 (5432/5433 thường bị chiếm)
     volumes:
       - mee_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,15 +33,14 @@ services:
   adminer:
     image: adminer:latest
     container_name: mee-adminer
+    profiles: ["local"]
     restart: unless-stopped
     ports:
       - "8080:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      ADMINER_DEFAULT_SERVER: postgres
-      ADMINER_DESIGN: dracula     # dark theme (đổi sang 'flat' nếu muốn light)
+      ADMINER_DESIGN: dracula     # dark theme (đổi 'flat' nếu muốn light)
+      # ADMINER_DEFAULT_SERVER intentionally unset — for local DB enter
+      # "postgres" (container name), for remote VDB enter "host:5432" at login.
 
 volumes:
   mee_pg_data:
