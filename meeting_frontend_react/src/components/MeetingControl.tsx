@@ -29,6 +29,23 @@ export function MeetingControl() {
     ? t("sidebar.recordingPlaceholder")
     : t("meeting.titlePlaceholder");
 
+  // Duration + segment count from the selected recording (or summed across
+  // recordings in project-overview mode).
+  function fmtDuration(sec: number | null | undefined): string {
+    if (!sec || sec <= 0) return "00:00";
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+  const totalDuration = currentRec
+    ? currentRec.duration_sec || 0
+    : (currentMeeting?.recordings.reduce((sum, r) => sum + (r.duration_sec || 0), 0) || 0);
+  const totalSegments = currentRec
+    ? currentRec.segment_count || 0
+    : (currentMeeting?.recordings.reduce((sum, r) => sum + (r.segment_count || 0), 0) || 0);
+
   // Save title on blur / Enter — PATCH recording.session_label OR meeting.title
   // depending on what's currently in focus.
   async function saveTitle(next: string) {
@@ -99,8 +116,8 @@ export function MeetingControl() {
             <circle cx="12" cy="12" r="10" />
             <polyline points="12 6 12 12 16 14" />
           </svg>
-          <span className="mono">00:00</span>
-          <span className="mc-sub">· <span>0</span> {t("meta.seg")}</span>
+          <span className="mono">{fmtDuration(totalDuration)}</span>
+          <span className="mc-sub">· <span>{totalSegments}</span> {t("meta.seg")}</span>
         </span>
         <button
           className="mc-meta-pill"

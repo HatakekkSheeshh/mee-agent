@@ -13,6 +13,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { CleanResponse } from "../types/api";
+import { CleanEditor } from "./CleanEditor";
+import { useLiveRecording, type LiveSegment } from "../hooks/useLiveRecording";
 
 type ViewMode = "raw" | "clean";
 
@@ -37,8 +39,83 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   const [view, setView] = useState<ViewMode>("raw");
   const [rawText, setRawText] = useState<string>("");
   const [cleanSegs, setCleanSegs] = useState<CleanResponse["clean_segments"] | null>(null);
+  const [editedHtml, setEditedHtml] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Live record (WebSocket Whisper) ───
+  // Each Record session APPENDS to whatever the textarea already holds —
+  // doesn't wipe. completedRef = segments captured in THIS session only.
+  // baseTextRef = textarea content frozen at the moment Record was clicked.
+  const completedRef = useRef<LiveSegment[]>([]);
+  const baseTextRef = useRef<string>("");
+  const onLiveSegments = useCallback((segs: LiveSegment[]) => {
+    for (const s of segs) {
+      if (s.completed && !completedRef.current.some((c) => c.start === s.start && c.text === s.text)) {
+        completedRef.current.push(s);
+      }
+    }
+    const inProgress = segs.filter((s) => !s.completed);
+    const sessionLines = completedRef.current.map((s) => s.text.trim()).filter(Boolean);
+    if (inProgress.length > 0) {
+      const last = inProgress[inProgress.length - 1];
+      sessionLines.push(`${last.text.trim()} …`);
+    }
+    const sessionText = sessionLines.join("\n");
+    // Merge: base + (blank line separator if base had content) + this session
+    const base = baseTextRef.current;
+    const next = base ? (sessionText ? `${base}\n${sessionText}` : base) : sessionText;
+    setRawText(next);
+  }, []);
+  const onLiveStatus = useCallback(
+    (kind: "info" | "connecting" | "recording" | "error" | "idle", msg: string) => {
+      const map: Record<typeof kind, "info" | "assessing" | "success" | "error"> = {
+        info: "info",
+        connecting: "assessing",
+        recording: "success",
+        error: "error",
+        idle: "info",
+      };
+      setStatus({ kind: map[kind], msg });
+    },
+    [setStatus],
+  );
+  const live = useLiveRecording({
+    uid: currentRecordingId || "",
+    language: "vi",
+    onSegments: onLiveSegments,
+    onStatus: onLiveStatus,
+  });
+
+  async function handleStartRecord() {
+    if (!currentRecordingId) {
+      alert("Chọn 1 phiên họp trước");
+      return;
+    }
+    // Snapshot current text BEFORE starting — new live segments will be
+    // appended below it (record/stop/record again keeps prior content).
+    baseTextRef.current = rawText;
+    completedRef.current = [];
+    await live.start();
+  }
+
+  async function handleStopRecord() {
+    live.stop();
+    // After stop, persist accumulated text to DB so Clean + Generate MoM can read it.
+    if (currentMeetingId && currentRecordingId && rawText.trim()) {
+      try {
+        await api.meetings.importTranscript(currentMeetingId, {
+          text: rawText,
+          recording_id: currentRecordingId,
+          replace: false,
+        });
+        await reloadCurrentMeeting();
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.detail : (e as Error).message;
+        setStatus({ kind: "error", msg: `Lưu transcript lỗi: ${msg}` });
+      }
+    }
+  }
 
   // ─── Load transcript whenever the selected recording changes ───
   useEffect(() => {
@@ -53,7 +130,8 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         const r = await api.recordings.transcript(currentRecordingId);
         if (cancelled) return;
         setRawText(r.transcript || "");
-        setCleanSegs(null); // invalidate clean cache on recording switch
+        setCleanSegs(null);    // invalidate clean cache on recording switch
+        setEditedHtml(null);
       } catch (e) {
         if (!cancelled) {
           setStatus({ kind: "error", msg: `Tải transcript lỗi: ${(e as Error).message}` });
@@ -164,6 +242,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       try {
         const r = await api.recordings.clean(currentRecordingId, false);
         setCleanSegs(r.clean_segments);
+        setEditedHtml(r.edited_html || null);
         setStatus({
           kind: "success",
           msg: r.cached ? "Clean (cache) ✓" : "Clean ✓",
@@ -187,6 +266,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       .clean(currentRecordingId, true)
       .then((r) => {
         setCleanSegs(r.clean_segments);
+        setEditedHtml(r.edited_html || null);
         setStatus({ kind: "success", msg: "Clean ✓" });
       })
       .catch((e) => {
@@ -241,13 +321,19 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           <button
             className="btn btn-record btn-sm"
             type="button"
-            disabled
-            title="Live record — Phase B.2"
+            onClick={handleStartRecord}
+            disabled={!currentRecordingId || live.isRecording || busy}
+            title={!currentRecordingId ? "Chọn 1 phiên họp trước" : t("btn.record")}
           >
             <span className="rec-dot"></span>
             <span>{t("btn.record")}</span>
           </button>
-          <button className="btn btn-stop btn-sm" type="button" disabled>
+          <button
+            className="btn btn-stop btn-sm"
+            type="button"
+            onClick={handleStopRecord}
+            disabled={!live.isRecording}
+          >
             <svg viewBox="0 0 12 12" width="9" height="9">
               <rect x="2" y="2" width="8" height="8" fill="currentColor" />
             </svg>
@@ -311,25 +397,16 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                     type="button"
                     onClick={regenerateClean}
                     disabled={busy}
+                    title="LLM clean lại từ raw (giữ nguyên user edits)"
                   >
                     ↻ Regenerate
                   </button>
                 </div>
-                {cleanSegs.map((seg, i) => (
-                  <div key={i} className="clean-block">
-                    {seg.speaker && <div className="clean-speaker">{seg.speaker}</div>}
-                    <div className="clean-text">{seg.text}</div>
-                    {seg.tags && seg.tags.length > 0 && (
-                      <div className="clean-tags">
-                        {seg.tags.map((tag, j) => (
-                          <span key={j} className={`tag tag-${tag}`}>
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                <CleanEditor
+                  recordingId={currentRecordingId!}
+                  segments={cleanSegs}
+                  editedHtml={editedHtml}
+                />
               </>
             )}
           </div>
