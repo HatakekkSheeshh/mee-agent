@@ -1,6 +1,6 @@
 # Mee — Meeting Note Agent
 
-> Project (= folder) chứa nhiều phiên họp. Mỗi phiên = transcript (paste / upload audio / live record). Hệ thống dùng LangGraph + LLM để sinh **Biên bản họp (MoM)** tự động + **Clean view** dễ đọc.
+> AI meeting agent cho tiếng Việt: **paste / upload audio / live record** → transcript → **WYSIWYG Clean editor** → **Biên bản phiên họp (MoM)** + **Tổng kết project**. Powered by LangGraph + Qwen3 LLM + PhoWhisper STT.
 
 ---
 
@@ -8,73 +8,80 @@
 
 | Feature | Mô tả |
 |---|---|
-| **Project / Phiên họp** | UX kiểu ChatGPT: Project = folder, mỗi project chứa N phiên họp (recordings) |
-| **3 input modes** | Paste text · Upload audio (mp3/wav/m4a) · Live record (mic + WebSocket streaming) |
-| **Vietnamese-tuned MoM** | LLM extract 4 nhóm: `action_items` · `decisions` · `commitments` · `blockers` (theo VN style + few-shot examples) |
-| **Clean view (cached)** | LLM format raw transcript → speaker blocks + tags, lưu cache trong DB → click lần sau instant |
+| **Project / Phiên họp 2 cấp** | Project (folder) chứa N phiên họp. Mỗi phiên = 1 transcript + 1 biên bản riêng |
+| **3 input modes** | Paste text · Upload audio (mp3/wav/m4a, auto-chunk >24MB) · Live record (mic + WebSocket → Whisper streaming) |
+| **MoM per-recording** | Biên bản sinh ra cho **1 phiên cụ thể** (không phải toàn project). Lưu `recordings.mom_json` |
+| **Project summary** | Tổng kết toàn project = timeline các quyết định theo thời gian + narrative LLM (aggregate từ N MoM của các phiên) |
+| **TipTap WYSIWYG Clean editor** | User edit transcript inline với bold/italic/lists/headings + tag chips (commitment/decision/blocker) + auto-save 1.5s |
+| **MoM dùng edited Clean** | Khi tạo MoM, ưu tiên transcript đã edit (cleaner input → quality cao hơn) |
+| **Self-hosted PhoWhisper + pyannote** | Tiếng Việt 8.85% WER (BSD-3) + speaker diarization, deploy trên L40 GPU |
+| **Hybrid memory** | Cross-meeting memory: keyword tsvector + semantic bge-m3 (1024-dim pgvector) + RRF fusion, optional LLM rerank |
 | **Chat HITL** | Chat agent với Human-in-the-Loop: classify intent → propose action → user approve/reject → execute |
-| **Sidebar context menu** | Hover project → ⋯ menu: Share / Rename / Pin / Delete (với DB sync) |
-| **Audio device picker** | Chọn mic / loa cụ thể, lưu preference vào localStorage |
+| **Sidebar context menu** | Hover project → ⋮ → Share / Rename / Pin / Delete. Hover phiên → × delete |
+| **i18n VI/EN** | Toàn bộ UI có 2 ngôn ngữ, switch trong settings |
+| **Theme dark/light** | Persist localStorage. Default = dark (GreenNode aesthetic) |
 
 ---
 
 ## 🔄 Workflow
 
-### Luồng chính: Tạo Biên bản họp
+### Luồng chính: Tạo Biên bản
 
 ```mermaid
 flowchart TD
-    A["👤 Click 'Project mới'"] -->|POST /api/meetings| B[(Postgres<br/>meeting row tạo)]
-    B --> C["Vào 'Phiên họp chưa đặt tên'"]
+    A["👤 Click 'Project mới' → tạo Phiên 1"] -->|POST /api/meetings + /recordings| B[(meetings + recordings)]
+    B --> C{Choose input}
 
     C --> D1[📝 Paste text]
-    C --> D2[📁 Upload .mp3]
+    C --> D2[📁 Upload audio]
     C --> D3[🎤 Live record]
 
-    D2 -->|POST /api/transcribe| W{{Whisper API<br/>VNG MaaS}}
-    D3 -->|WSS :9091 mic stream| W
+    D2 -->|POST /api/transcribe| W{{Whisper API<br/>PhoWhisper L40 / VNG MaaS}}
+    D3 -->|WSS :9091| W
 
-    D1 --> T[Transcript có sẵn<br/>trong textarea]
+    D1 --> T[Raw transcript]
     W --> T
+    T -->|/import-transcript<br/>recording_id| RS[(transcript_segments)]
 
-    T -->|Click 'Tạo biên bản'<br/>POST /generate-mom| LG
+    RS --> CE{Optional}
+    CE -->|Click 'Clean' tab| TT[🪶 TipTap Editor<br/>LLM clean + user edit]
+    TT -->|PATCH /clean-edited| EDT[(clean_segments.<br/>edited_html<br/>edited_text)]
 
-    subgraph LG[" "]
-        direction TB
-        LGT[🧠 LangGraph 4 nodes]
-        N1[① load_transcript<br/>SELECT segments]
-        N2[② read_memory<br/>top 5 events]
-        N3[③ generate_mom<br/>LLM Qwen3-5-27b<br/>≤30k → 1 call<br/>>30k → map-reduce]
-        N4[④ save_results]
-        LGT --> N1 --> N2 --> N3 --> N4
-    end
+    RS --> GM
+    EDT -->|preferred| GM[Click 'Biên bản phiên này']
 
-    LG --> OUT[💾 Outputs]
-    OUT --> O1[(meetings.mom_json)]
-    OUT --> O2[(memory_events<br/>5-15 rows)]
-    OUT --> O3[output/MoM_*.md file]
-    OUT --> O4[(checkpoints<br/>state snapshots)]
+    GM -->|POST /recordings/{id}/generate-mom| LG[🧠 MomGraph 4 nodes]
+    LG --> N1[load_transcript<br/>edited_text > raw]
+    N1 --> N2[read_memory<br/>hybrid retrieval]
+    N2 --> N3[generate_mom<br/>Qwen3-8B map-reduce]
+    N3 --> N4[save_results]
+    N4 --> O1[(recordings.mom_json)]
+    N4 --> O2[(memory_events<br/>+ bge-m3 vector)]
+    N4 --> O3[output/MoM_*.md]
 
-    OUT --> UI[🖥 Hiển thị MoM<br/>+ download .md]
+    O1 --> UI[📋 MoM Pane render]
 
-    style A fill:#d0ebff,stroke:#1971c2
-    style C fill:#d0ebff,stroke:#1971c2
-    style T fill:#fff3bf,stroke:#e67700
-    style LG fill:#e5dbff,stroke:#862e9c
-    style UI fill:#d3f9d8,stroke:#2f9e44
+    PS["📊 Click 'Tổng kết project'"] -->|/generate-project-summary| PSG[project_summarizer]
+    PSG -->|aggregate all recording.mom_json by started_at ASC| PS2[(meetings.project_summary_json)]
+    PS2 --> UI
+
     style W fill:#ffe8cc,stroke:#fd7e14
+    style LG fill:#e5dbff,stroke:#862e9c
+    style TT fill:#fff3bf,stroke:#e67700
+    style UI fill:#d3f9d8,stroke:#2f9e44
 ```
 
 ### Output ở đâu?
 
 | Loại | Vị trí | Mô tả |
 |---|---|---|
-| **MoM file Markdown** | `./output/MoM_<title>_<date>_<id>.md` | Local file, có thể tải về qua UI |
-| **MoM JSON** | Postgres → `meetings.mom_json` (JSONB) | Render lại trên UI, edit qua API |
-| **Memory events** | Postgres → `memory_events` (rows) | Context cross-meeting cho các MoM sau |
-| **Clean transcript cache** | Postgres → `recordings.clean_segments` (JSONB) | Click Clean lần sau instant (no LLM) |
-| **LangGraph checkpoints** | Postgres → `checkpoints`, `checkpoint_writes`, `checkpoint_blobs` | Resume nếu fail giữa chừng |
-| **Whisper transcript backup** | `./output/transcript_<title>_<date>_<id>.txt` (legacy path) | Phòng khi LLM fail |
+| **Biên bản phiên (MoM)** | `recordings.mom_json` (JSONB) | Per-recording. Render qua MoMPane + download `.md` |
+| **Tổng kết project** | `meetings.project_summary_json` (JSONB) | Timeline decisions + narrative |
+| **Clean transcript edited** | `recordings.clean_segments.edited_html` + `.edited_text` | TipTap output, dùng làm input cho MoM nếu có |
+| **Clean transcript LLM-output** | `recordings.clean_segments.segments[]` | Speaker blocks + tags (raw LLM) |
+| **Memory events** | `memory_events` rows + `embedding` vector(1024) | Cross-meeting context cho MoM sau |
+| **LangGraph checkpoints** | `checkpoints`, `checkpoint_writes`, `checkpoint_blobs` | Resume nếu fail giữa chừng (thread_id = recording_id) |
+| **MoM markdown** | `./output/MoM_<label>_<id>.md` | Local file backup |
 
 ---
 
@@ -83,17 +90,17 @@ flowchart TD
 ### 1. Yêu cầu
 
 - Python ≥ 3.11
-- Postgres ≥ 14 (remote VDB hoặc local docker)
+- Node.js ≥ 18 (cho React frontend)
+- Postgres ≥ 14 **với pgvector extension** (remote VDB hoặc local docker)
 - Browser hiện đại (Chrome/Firefox/Edge)
-- VNG Cloud MaaS API key (Whisper + LLM)
+- VNG Cloud MaaS API key HOẶC self-hosted Qwen3 + bge-m3
 
-### 2. Clone & install
+### 2. Clone & install backend
 
 ```bash
 git clone <repo-url>
 cd mee-meeting-agent
 
-# Tạo virtualenv + install deps
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -102,27 +109,36 @@ python -m venv .venv
 
 ```bash
 cp .env.example .env
-nano .env   # fill in real values
+nano .env
 ```
 
-Các biến cần thiết:
+Biến cần thiết:
 
 ```env
-# Whisper (STT) — VNG Cloud MaaS
+# Whisper (STT) — chọn 1
+# Option A: VNG MaaS
 WHISPER_BASE_URL=https://maas-llm-aiplatform-hcm.api.vngcloud.vn/maas/user-<id>/openai/whisper-large-v3
 WHISPER_API_KEY=vn-...
 WHISPER_MODEL=openai/whisper-large-v3
+# Option B: self-hosted PhoWhisper + pyannote (xem tools/phowhisper-server/README.md)
+# WHISPER_BASE_URL=http://<L40_IP>:9100/v1
+# WHISPER_MODEL=phowhisper
 
-# LLM (chat + MoM) — đổi tùy provider
-LLM_BASE_URL=https://maas-llm-aiplatform-hcm.api.vngcloud.vn/maas/user-<id>/qwen/qwen3-5-27b/v1
-LLM_API_KEY=vn-...
-LLM_MODEL=qwen/qwen3-5-27b
+# LLM — self-hosted Qwen3 (vLLM) hoặc VNG MaaS
+LLM_BASE_URL=http://<your-llm-host>:8000/v1
+LLM_API_KEY="EMPTY"
+LLM_MODEL=Qwen/Qwen3-8B
 
-# Database — remote VDB (recommended) hoặc local docker
+# Embedding — bge-m3 (1024-dim, qua VNG MaaS)
+EMBEDDING_BASE_URL=https://maas-embedding-aiplatform-hcm.api.vngcloud.vn/maas/user-<id>/bge-m3/v1
+EMBEDDING_API_KEY=vn-...
+EMBEDDING_MODEL=BAAI/bge-m3
+
+# Database — phải bật pgvector
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
-> Code tự thêm driver prefix (`+asyncpg` cho app, `+psycopg2` cho Alembic). Password có `$` được preserve (dotenv `interpolate=False`).
+> Code tự thêm driver prefix (`+asyncpg` / `+psycopg2`). Password có `$` được preserve (dotenv `interpolate=False`).
 
 ### 4. Apply DB migrations
 
@@ -130,68 +146,95 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 .venv/bin/alembic upgrade head
 ```
 
-Tạo các tables: `users`, `meetings`, `recordings`, `transcript_segments`, `meeting_members`, `memory_events`, `chat_*`, + LangGraph internal tables.
+Tạo 13+ tables: `users`, `meetings`, `recordings`, `transcript_segments`, `meeting_members`, `memory_events` (với `embedding` vector(1024) + IVFFlat index), `chat_*`, LangGraph internal tables.
 
-### 5. Run server
+Migrations:
+- `0001_initial_schema` — core tables
+- `0002_chat_tables` — chat sessions/messages/pending_actions
+- `0003_memory_events` — cross-meeting memory
+- `0004_meeting_pin` — `meetings.is_pinned`
+- `0005_clean_cache` — `recordings.clean_segments` JSONB
+- `0006_memory_embedding` — pgvector + IVFFlat
+- `0007_mom_two_level` — `recordings.mom_json` + `meetings.project_summary_json`
+
+### 5. Run backend
 
 ```bash
 .venv/bin/python run_meeting.py
 ```
 
 Server khởi động:
-- **HTTP API + FE** ở `http://localhost:8001`
+- **HTTP API** ở `http://localhost:8001`
 - **WebSocket transcription** ở `ws://localhost:9091`
 
-Banner sẽ log info Postgres + endpoints sẵn sàng. Mở browser tại `http://localhost:8001`.
+### 6. Run React frontend (dev mode, recommended)
 
-Adminer GUI tại `http://localhost:8080`.
+```bash
+cd meeting_frontend_react
+npm install
+npm run dev
+```
+
+Vite dev server ở `http://localhost:5173`. Proxy `/api` → backend `:8001`, `/ws` → `:9091`.
+
+Build cho production: `npm run build` → `dist/`.
+
+Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8001/`.
+
+### 7. (Optional) Self-host PhoWhisper + pyannote
+
+Nếu muốn STT chất lượng cao tiếng Việt + speaker diarization:
+
+```bash
+cd tools/phowhisper-server
+# Đọc README.md để deploy lên L40
+```
+
+Server expose `/v1/audio/transcriptions` OpenAI-compatible. Update `WHISPER_BASE_URL` trong `.env`.
 
 ---
 
 ## 🎯 Cách dùng (User flow)
 
-### A. Tạo project + phiên họp đầu tiên
+### A. Tạo project + phiên đầu tiên
 
-1. Click **"Project mới"** (sidebar trái) → modal hỏi tên project
-2. Type tên → Enter → project xuất hiện trong sidebar
-3. Right panel: title field rỗng (placeholder "Phiên họp chưa đặt tên") + textarea trống
-4. Chọn 1 trong 3 cách:
-   - **Paste**: copy transcript text → dán vào textarea
-   - **Upload**: click "Tải lên" → chọn file `.mp3/.wav/.m4a`
-   - **Record**: click "Ghi âm" → cho phép mic → nói → "Dừng"
-5. Type tên phiên họp vào title field
-6. Click **"Tạo biên bản"** → đợi 10-60s → MoM hiện ở panel phải
+1. Sidebar trái → click **"+ Project"** → nhập tên
+2. Auto-tạo "Phiên 1" trong project → vào workspace
+3. Title field hiển thị tên phiên (có thể đổi bằng cách click + gõ + blur → tự save)
+4. Chọn input mode:
+   - **Paste**: dán text vào textarea Raw
+   - **Upload**: click "Tải lên" → chọn audio
+   - **Record**: click "Ghi âm" → cho phép mic → "Dừng" khi xong
+5. Click **"Biên bản phiên này"** → MoM hiện ở MoMPane phải
 
-### B. Thêm phiên họp vào project có sẵn
+### B. Thêm phiên vào project có sẵn
 
-1. Click project trong sidebar
-2. Nếu có 1 phiên → vào thẳng phiên đó. Nếu nhiều → list cards, click chọn
-3. Click **"+ Thêm phiên họp"** → vào "Phiên họp chưa đặt tên" mới
-4. Lặp lại flow A bước 4-6
+1. Click project trong sidebar (nếu >1 phiên, hiện overview với cards + project summary bên phải)
+2. Click **"+ Phiên họp mới"** trong sidebar → tự tạo "Phiên N+1"
+3. Lặp flow A từ bước 4
 
-### C. Quản lý project
+### C. Edit Clean transcript (TipTap WYSIWYG)
 
-- **Hover** project trong sidebar → ⋯ icon hiện ở góc phải
-- **Click ⋯** → menu:
-  - **Share project**: copy URL vào clipboard
-  - **Rename project**: prompt sửa tên
-  - **Pin/Unpin project**: ghim lên đầu sidebar (lưu DB)
-  - **Delete project**: soft delete (giữ recordings cho audit)
+1. Trong workspace của 1 phiên → tab **"Clean"**
+2. Lần đầu: LLM clean → render trong editor
+3. Edit thẳng: bold/italic/lists, hoặc bôi đen + click tag **Commit / Decision / Blocker** để highlight
+4. Auto-save sau 1.5s không gõ (hoặc Ctrl+S force)
+5. Khi click "Biên bản phiên này", LLM sẽ dùng phiên bản đã edit làm input
 
-### D. Xem Clean view (LLM format)
+### D. Tổng kết project
 
-1. Click vào 1 phiên họp
-2. Toggle tab **"Clean"** (cạnh "Raw")
-3. Lần đầu: LLM chạy (~5-15s), kết quả cache vào DB
-4. Lần sau: instant (cache hit)
-5. Nút **↻** (refresh) cạnh tab → force re-run LLM
+1. Project có ≥1 phiên đã có MoM → click vào project (không click phiên cụ thể)
+2. Vào ProjectOverview mode → MoMPane phải hiển thị empty summary
+3. Click **"Tổng kết project"** ở MoMPane header
+4. Hiện timeline decisions theo `started_at` của từng phiên + narrative
 
-### E. Chọn mic / loa
+### E. Quản lý
 
-1. Click 🎤 icon cạnh nút "Ghi âm"
-2. Modal hiện list mic + loa
-3. Chọn → Lưu → preference lưu localStorage
-4. Lần record sau dùng mic đã chọn
+- **Hover project** → ⋮ menu: Share / Pin / Rename / Delete (red)
+- **Hover phiên** → × delete
+- **Settings (gear icon)** → Theme (light/dark) + Language (VI/EN)
+- **Chat toggle (góc phải)** → mở/đóng chat panel (HITL chat agent)
+- **Sidebar toggle (≡)** → collapse sidebar
 
 ---
 
@@ -199,86 +242,53 @@ Adminer GUI tại `http://localhost:8080`.
 
 ```mermaid
 flowchart TB
-    subgraph FE["🖥 Frontend (Browser)"]
-        direction TB
-        FE1[Sidebar: Projects list]
-        FE2[Workspace: Title + Transcript + MoM]
-        FE3[Chat panel: HITL]
+    subgraph FE["🖥 Frontend"]
+        FE1[React 18 + TS + Vite<br/>+ TipTap editor]
+        FE2[Legacy vanilla JS<br/>meeting_frontend/]
     end
 
-    subgraph BE["⚙️ FastAPI Server &nbsp;&nbsp;:8001 HTTP &nbsp;·&nbsp; :9091 WSS"]
-        direction TB
-
-        subgraph API["API endpoints"]
-            API1[meetings.py — REST]
-            API2[chat.py — Chat + HITL]
-        end
-
-        subgraph SVC["Services"]
-            SVC1[note_generator.py — LLM + chunking]
-            SVC2[transcript_cleaner.py — Clean + cache]
-            SVC3[memory_service.py — Cross-meeting memory]
-        end
-
-        subgraph LG["LangGraph"]
-            LG1[mom_graph.py — 4 nodes]
-            LG2[chat_graph.py — Chat HITL]
-            LG3[checkpointer.py — AsyncPostgresSaver]
-        end
-
-        subgraph DB["DB layer (SQLAlchemy 2 async)"]
-            DB1[models.py — ORM]
-            DB2[repositories.py — SQL]
-            DB3[base.py — Engine]
-        end
-
-        subgraph WSP["Whisper streaming"]
-            WSP1[VAD buffer 8s]
-            WSP2[Silence detection]
-            WSP3[Hallucination filter]
-            WSP4[VNG MaaS adapter]
-        end
-
-        API --> SVC
-        API --> LG
-        SVC --> DB
-        LG --> DB
-        WSP -.->|frames| API
+    subgraph BE["⚙️ FastAPI Backend"]
+        API[API endpoints<br/>meetings.py · chat.py]
+        SVC[Services<br/>memory · cleaner · summarizer · embedding · reranker]
+        LG[LangGraph<br/>MomGraph · ChatGraph<br/>AsyncPostgresSaver]
+        WSP[WhisperLive streaming<br/>maas_backend.py]
     end
 
-    subgraph EXT["☁️ External"]
-        direction TB
-        PG[("🗄 Postgres<br/>12 tables<br/>+ LangGraph checkpoints")]
-        MAAS{{"🤖 VNG Cloud MaaS<br/>• Whisper API<br/>• Qwen3-5-27b LLM"}}
+    subgraph EXT["☁️ AI services"]
+        STT[STT cluster L40<br/>PhoWhisper + pyannote<br/>OR VNG MaaS Whisper]
+        LLM[LLM<br/>Qwen3-8B self-hosted vLLM<br/>OR VNG MaaS]
+        EMB[bge-m3 embedding<br/>VNG MaaS]
     end
 
-    FE -->|HTTP + WSS| BE
-    BE --> PG
-    BE --> MAAS
+    PG[("🗄 Postgres + pgvector<br/>13 tables")]
+
+    FE -->|HTTP REST<br/>WebSocket| BE
+    API --> SVC
+    API --> LG
+    LG --> SVC
+    SVC --> PG
+    LG --> PG
+    WSP --> STT
+    SVC --> EMB
+    SVC --> LLM
+    LG --> LLM
 
     style FE fill:#d0ebff,stroke:#1971c2
-    style API fill:#fff3bf,stroke:#e67700
-    style SVC fill:#d3f9d8,stroke:#2f9e44
-    style LG fill:#e5dbff,stroke:#862e9c
-    style DB fill:#ffe8cc,stroke:#fd7e14
-    style WSP fill:#ffdeeb,stroke:#d6336c
+    style BE fill:#fff3bf,stroke:#e67700
+    style EXT fill:#ffe8cc,stroke:#fd7e14
     style PG fill:#e7f5ff,stroke:#1971c2
-    style MAAS fill:#fff9db,stroke:#f59f00
 ```
 
-### DB Schema (12 tables)
+### DB Schema (13 tables)
 
-3-cấp chính:
-1. **`meetings`** (= Project) — container với title, attendees, mom_json, is_pinned
-2. **`recordings`** (= Phiên họp) — session_label, started_at, clean_segments cache
-3. **`transcript_segments`** — seq, original_text, edited_text per câu
-
-Side tables:
-- `users` — anchor entity (M365 OAuth defer)
-- `meeting_members` — sharing role (owner/editor/viewer)
-- `memory_events` — cross-meeting events (action_item/decision/...)
-- `chat_sessions`, `chat_messages`, `pending_actions`, `audit_log` — Chat HITL
-- `checkpoints`, `checkpoint_writes`, `checkpoint_blobs` — LangGraph state
+| Cấp | Table | Description |
+|---|---|---|
+| 1 | `meetings` | Project — title, attendees, is_pinned, project_summary_json |
+| 2 | `recordings` | Phiên họp — session_label, started_at, mom_json, clean_segments |
+| 3 | `transcript_segments` | Raw segments per câu — seq, original_text, edited_text |
+| Side | `users` · `meeting_members` · `memory_events` (+ embedding) | Auth + sharing + cross-meeting memory |
+| Chat | `chat_sessions` · `chat_messages` · `pending_actions` · `audit_log` | Chat HITL |
+| LangGraph | `checkpoints` · `checkpoint_writes` · `checkpoint_blobs` | Resume state |
 
 ---
 
@@ -286,56 +296,99 @@ Side tables:
 
 ```
 mee-meeting-agent/
-├── meeting/                    # Backend Python package
+├── meeting/                          # Backend Python package
 │   ├── api/
-│   │   ├── meetings.py         # REST endpoints
-│   │   └── chat.py             # Chat HITL endpoints
+│   │   ├── meetings.py               # REST endpoints (meetings + recordings + MoM + summary)
+│   │   └── chat.py                   # Chat HITL endpoints
 │   ├── db/
-│   │   ├── base.py             # SQLAlchemy engine + session
-│   │   ├── models.py           # ORM models
-│   │   └── repositories.py     # SQL queries
+│   │   ├── base.py                   # SQLAlchemy engine + session
+│   │   ├── models.py                 # ORM (meetings, recordings, segments, memory_events, ...)
+│   │   └── repositories.py           # SQL queries
 │   ├── graphs/
-│   │   ├── mom_graph.py        # MoM LangGraph
-│   │   ├── chat_graph.py       # Chat LangGraph
-│   │   └── checkpointer.py     # AsyncPostgresSaver
+│   │   ├── mom_graph.py              # MoM LangGraph (per-recording, prefers edited Clean)
+│   │   ├── chat_graph.py             # Chat LangGraph (HITL)
+│   │   └── checkpointer.py           # AsyncPostgresSaver
 │   ├── services/
-│   │   ├── memory_service.py   # Cross-meeting memory
-│   │   ├── transcript_cleaner.py # Clean view LLM
-│   │   └── tools.py            # Chat tools registry
-│   ├── app.py                  # FastAPI factory
-│   ├── note_generator.py       # MoM LLM (chunking + prompts)
-│   ├── report_generator.py     # MoM JSON → Markdown
-│   └── memory_client.py        # Legacy AgentBase memory (defer)
+│   │   ├── memory_service.py         # Hybrid keyword + semantic + RRF retrieval
+│   │   ├── transcript_cleaner.py     # Clean view LLM
+│   │   ├── project_summarizer.py     # Aggregate per-recording MoMs → timeline summary
+│   │   ├── embedding.py              # bge-m3 client
+│   │   └── reranker.py               # Optional LLM rerank
+│   ├── app.py                        # FastAPI factory
+│   ├── note_generator.py             # MoM LLM (map-reduce + Qwen3 think-strip)
+│   └── report_generator.py           # MoM JSON → Markdown
 │
-├── meeting_frontend/           # Frontend SPA
-│   ├── index.html              # All UI markup + JS modules
-│   ├── app.js                  # Recording + MoM generation logic
-│   ├── style.css               # Dark theme + GreenNode green
-│   └── audioprocessor.js       # AudioWorklet for mic capture
+├── meeting_frontend_react/           # New React frontend (recommended)
+│   ├── package.json                  # Vite + React 18 + TS + TipTap
+│   ├── vite.config.ts                # Proxy /api → :8001, /ws → :9091
+│   ├── public/audioprocessor.js      # AudioWorklet PCM resampler
+│   └── src/
+│       ├── App.tsx
+│       ├── api/client.ts             # Typed fetch wrapper
+│       ├── types/api.ts              # Backend response types
+│       ├── store/AppContext.tsx      # Global state + theme/lang/chat/sidebar prefs
+│       ├── hooks/
+│       │   ├── useLiveRecording.ts   # WebSocket Whisper streaming
+│       │   └── useResizer.ts         # Drag-to-resize panes
+│       ├── i18n.ts                   # vi/en strings (60+ keys)
+│       └── components/
+│           ├── Sidebar.tsx           # Projects tree + ⋮ menu + × delete
+│           ├── Topbar.tsx            # Brand + workspace + settings + avatar
+│           ├── MeetingControl.tsx    # Title input + meta + details panel
+│           ├── Workspace.tsx         # 3-pane layout + resizers
+│           ├── TranscriptPane.tsx    # Raw + Clean toggle + Record/Upload/Save
+│           ├── CleanEditor.tsx       # TipTap WYSIWYG (auto-save + tags)
+│           ├── MeetingTag.ts         # Custom mark — commitment/decision/blocker
+│           ├── MoMPane.tsx           # Render MoM + project summary
+│           ├── ProjectOverview.tsx   # Cards view for project with multiple phiên
+│           ├── ChatPane.tsx          # HITL chat
+│           ├── Dropdown.tsx          # Reusable portal dropdown
+│           └── ConfirmDialog.tsx     # Branded confirm modal
 │
-├── whisper_live/               # Whisper streaming backend
-│   └── backend/
-│       ├── base.py             # Base ServeClient
-│       └── maas_backend.py     # VNG MaaS adapter
+├── meeting_frontend/                 # Legacy vanilla SPA (kept as fallback)
+│   ├── index.html · app.js · style.css · audioprocessor.js
 │
-├── alembic/                    # DB migrations
-│   ├── env.py
-│   └── versions/
-│       ├── 0001_initial_schema.py
-│       ├── 0002_chat_tables.py
-│       ├── 0003_memory_events.py
-│       ├── 0004_meeting_pin.py
-│       └── 0005_clean_cache.py
+├── whisper_live/                     # Whisper streaming backend
+│   └── backend/maas_backend.py       # VNG MaaS adapter
 │
-├── output/                     # Generated MoM .md files
-├── docs/                       # Internal docs
-├── run_meeting.py              # Main entry point
-├── main.py                     # Alternative entry (uvicorn)
-├── docker-compose.yml          # Local Postgres + Adminer (profile=local)
-├── alembic.ini
+├── tools/phowhisper-server/          # Self-hosted PhoWhisper + pyannote (deploy lên L40)
+│   ├── server.py                     # FastAPI OpenAI-compatible STT + diarize
+│   ├── requirements.txt
+│   └── README.md                     # SCP + setup guide
+│
+├── alembic/versions/                 # DB migrations 0001-0007
+│
+├── scripts/backfill_embeddings.py    # One-shot: embed existing memory_events
+├── output/                           # Generated MoM .md files
+├── docs/                             # Internal docs + drawio diagrams
+├── run_meeting.py                    # Main entry (HTTP + WebSocket)
+├── docker-compose.yml                # Local Postgres+pgvector (profile=local)
 ├── requirements.txt
 ├── .env.example
-└── README.md                   # This file
+└── README.md                         # This file
+```
+
+---
+
+## 🧪 Test workflow nhanh
+
+```bash
+# Terminal 1: backend
+.venv/bin/python run_meeting.py
+
+# Terminal 2: React dev (recommended)
+cd meeting_frontend_react && npm run dev
+
+# Browser: http://localhost:5173
+# 1. "+ Project" → "Test"
+# 2. Auto vào "Phiên 1"
+# 3. Click "Tải lên" → chọn 1 file .wav/.mp3
+# 4. Đợi transcribe + import
+# 5. Tab "Clean" → đợi LLM → edit gì đó → auto-save sau 1.5s
+# 6. "Biên bản phiên này" → MoMPane render meta + agenda + actions + decisions
+# 7. "+ Phiên họp mới" → "Phiên 2" → upload audio khác → lặp lại
+# 8. Click project (không click phiên) → ProjectOverview + nút "Tổng kết project"
+# 9. Click "Tổng kết" → timeline decisions của cả 2 phiên
 ```
 
 ---
@@ -346,4 +399,4 @@ Internal project — VNG Cloud / GreenNode AI team.
 
 ---
 
-**Built with**: FastAPI · SQLAlchemy 2 async · LangGraph · langchain-text-splitters · openai SDK · VNGCloud MaaS (Whisper + Qwen3-5-27b)
+**Built with**: FastAPI · SQLAlchemy 2 async · LangGraph · pgvector · openai SDK · React 18 · TypeScript · Vite · TipTap · Qwen3-8B · bge-m3 · PhoWhisper-large · pyannote 3.1
