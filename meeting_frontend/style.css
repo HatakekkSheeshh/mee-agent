@@ -806,6 +806,16 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 .action-pic { font-weight: 500; color: var(--text); }
 .action-task { line-height: 1.55; color: var(--text-mute); }
 .action-deadline { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); text-align: right; letter-spacing: 0; }
+/* Consecutive rows with the same PIC: blank PIC cell + remove dividing border
+   between them so the group reads as one unit under the first row's name. */
+.action-item.merged {
+    padding-top: 4px;
+    padding-bottom: 8px;
+}
+.action-item:has(+ .action-item.merged) {
+    border-bottom: none;
+    padding-bottom: 4px;
+}
 
 .mom-summary {
     background: var(--surface);
@@ -1779,4 +1789,384 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
     .resizer { display: none; }
     .pane-mom, .pane-chat { display: none; }
     .pane-content { padding: 18px; }
+}
+
+/* ─── Phase E5: Sidebar context menu + new-recording banner + toast ───── */
+
+/* Make the meeting row a positioning context for the ⋯ button */
+.sidebar-meeting { position: relative; }
+
+/* ⋯ button — hidden by default, shown on row hover or when active */
+.sidebar-meeting-menu-btn {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 8px;
+    color: var(--text-muted, #888);
+    opacity: 0;
+    transition: opacity 0.12s, background 0.12s;
+}
+.sidebar-meeting:hover .sidebar-meeting-menu-btn,
+.sidebar-meeting.active .sidebar-meeting-menu-btn {
+    opacity: 1;
+}
+.sidebar-meeting-menu-btn:hover {
+    background: rgba(127, 127, 127, 0.16);
+    color: var(--text, #222);
+}
+
+/* Pin icon inline in meeting title */
+.pin-icon {
+    font-size: 11px;
+    margin-right: 2px;
+    opacity: 0.85;
+}
+
+/* Floating context menu — theme-aware (dark by default) */
+.ctx-menu {
+    position: fixed;
+    z-index: 9999;
+    min-width: 184px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-sm);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.04) inset,
+        0 14px 32px rgba(0, 0, 0, 0.55),
+        0 4px 12px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    backdrop-filter: blur(6px);
+    animation: ctx-menu-in 0.14s var(--ease);
+}
+@keyframes ctx-menu-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.ctx-item {
+    padding: 8px 12px;
+    border-radius: var(--r-xs);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-2);
+    user-select: none;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.ctx-item:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+.ctx-item.ctx-danger {
+    color: var(--danger);
+}
+.ctx-item.ctx-danger:hover {
+    background: rgba(255, 107, 133, 0.08);
+    color: var(--danger);
+}
+
+/* "Phiên họp mới · gắn vào: ..." banner */
+.new-recording-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px 0;
+    padding: 10px 14px;
+    background: linear-gradient(135deg, var(--accent-soft), rgba(0, 232, 155, 0.04));
+    border: 1px solid var(--accent-glow);
+    border-radius: var(--r-sm);
+    font-size: 13px;
+    color: var(--text);
+}
+.new-recording-banner .nrb-icon {
+    font-size: 16px;
+    color: var(--accent);
+}
+.new-recording-banner .nrb-text { flex: 1; }
+.new-recording-banner .nrb-text strong { font-weight: 600; color: var(--text); }
+.new-recording-banner .nrb-close {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    color: var(--text-mute);
+}
+.new-recording-banner .nrb-close:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+/* Print mode — when user uses browser print/Save-as-PDF, hide everything
+   except the MoM panel content so the PDF is clean (no sidebar/chat/toolbars). */
+@media print {
+    body { background: white !important; color: black !important; }
+    .sidebar, .topbar, .pane-chat, .resizer,
+    .pane-transcript, .meeting-control,
+    .pane-mom .pane-header,
+    .new-recording-banner, .mee-modal, .mee-toast {
+        display: none !important;
+    }
+    .workspace { grid-template-columns: 1fr !important; display: block !important; }
+    .pane-mom {
+        display: block !important;
+        width: 100% !important;
+        max-width: none !important;
+        background: white !important;
+        color: black !important;
+    }
+    .pane-mom * { color: black !important; background: white !important; border-color: #ddd !important; }
+    .mom-section { page-break-inside: avoid; }
+    .app, body { padding: 0 !important; margin: 0 !important; }
+}
+
+/* Project overview MODE — when a project with > 1 recording is selected,
+   hide everything except title + recording list cards (cleaner UX). */
+body.project-overview-mode .mc-meta-row { display: none; }
+body.project-overview-mode #btn-details { display: none; }
+body.project-overview-mode .details-panel { display: none !important; }
+body.project-overview-mode .pane-transcript .pane-header { display: none; }
+body.project-overview-mode .pane-transcript .pane-footer { display: none; }
+body.project-overview-mode .pane-mom { display: none; }
+body.project-overview-mode .resizer { display: none; }
+
+/* Project overview — shown when project has 0 or >1 recordings */
+.project-overview {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 4px;
+}
+.project-overview-empty {
+    text-align: center;
+    padding: 60px 20px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+.po-header {
+    margin-bottom: 20px;
+}
+.po-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.po-subtitle {
+    font-size: 13px;
+}
+.po-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.po-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.po-card:hover {
+    background: var(--surface-2);
+    border-color: var(--border-3);
+    transform: translateX(2px);
+}
+.po-card-num {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--surface-3);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+}
+.po-card-main {
+    flex: 1;
+    min-width: 0;
+}
+.po-card-title {
+    font-size: 14px;
+    color: var(--text);
+    font-weight: 500;
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.po-card-meta {
+    font-size: 12px;
+}
+
+/* Themed prompt modal (used by Project mới) */
+.mee-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: mee-modal-in 0.14s var(--ease);
+}
+.mee-modal.hidden { display: none; }
+.mee-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(3px);
+}
+.mee-modal-card {
+    position: relative;
+    width: 90%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.04) inset,
+        0 20px 48px rgba(0, 0, 0, 0.6),
+        0 6px 16px rgba(0, 0, 0, 0.4);
+    padding: 22px 24px 18px;
+}
+.mee-modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 14px;
+}
+.mee-modal-body {
+    margin-bottom: 18px;
+}
+.mee-modal-input {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font-size: 14px;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.mee-modal-input::placeholder { color: var(--text-faint); }
+.mee-modal-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-2);
+    margin-bottom: 6px;
+}
+.mee-modal-hint {
+    font-size: 11px;
+    line-height: 1.5;
+}
+/* style <select> like other inputs */
+select.mee-modal-input {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23c8c8cc' d='M3 5l3 3 3-3z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 10px;
+    padding-right: 28px;
+}
+.mee-modal-input:focus {
+    border-color: var(--accent);
+    background: var(--surface-2);
+}
+.mee-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+@keyframes mee-modal-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+/* Contextual pane status — inline banner inside content area (not header) */
+.pane-inline-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px 0;
+    padding: 8px 12px;
+    border-radius: var(--r-xs);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-2);
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+    transition: opacity var(--dur) var(--ease);
+}
+.pane-inline-status.hidden { display: none; }
+.pane-inline-status.connecting,
+.pane-inline-status.assessing {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-glow);
+}
+.pane-inline-status.connecting::before,
+.pane-inline-status.assessing::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    border-top-color: transparent;
+    animation: spin 0.8s linear infinite;
+}
+.pane-inline-status.success {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-glow);
+}
+.pane-inline-status.error {
+    color: var(--danger);
+    background: rgba(255, 107, 133, 0.10);
+    border-color: rgba(255, 107, 133, 0.30);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Toast notifications */
+.mee-toast {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-sm);
+    padding: 10px 18px;
+    font-size: 13px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+    z-index: 10000;
+    opacity: 0;
+    transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.mee-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+.mee-toast.success {
+    border-left: 2px solid var(--accent);
+}
+.mee-toast.error {
+    border-left: 2px solid var(--danger);
 }
