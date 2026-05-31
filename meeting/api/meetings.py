@@ -88,7 +88,10 @@ class RecordingCreate(BaseModel):
 
 class TranscriptImport(BaseModel):
     text: str
-    session_label: Optional[str] = "Imported transcript"
+    # Default None — only override the recording's session_label if caller
+    # explicitly passes a value. Previously defaulted to "Imported transcript"
+    # which silently renamed recordings created with a meaningful label.
+    session_label: Optional[str] = None
     replace: bool = True  # True = xoá recordings cũ trước khi import (chỉ áp khi recording_id=None)
     duration_sec: Optional[int] = None  # caller can pass actual duration (live record, audio file)
     recording_id: Optional[str] = None  # target an EXISTING recording — overwrites its segments
@@ -356,6 +359,8 @@ async def clean_recording_endpoint(
             "recording_id": recording_id,
             "cached": True,
             "clean_segments": cached.get("segments", []),
+            "edited_html": cached.get("edited_html"),
+            "edited_text": cached.get("edited_text"),
         }
 
     raw_text = await repo.join_recording_transcript(session, rid)
@@ -373,8 +378,12 @@ async def clean_recording_endpoint(
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
 
-    # Persist as cache (overwrite if regenerate=True)
-    recording.clean_segments = {"segments": result.get("segments", [])}
+    # Preserve user edits across regenerate — only refresh `segments`.
+    existing = recording.clean_segments or {}
+    existing["segments"] = result.get("segments", [])
+    recording.clean_segments = existing
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(recording, "clean_segments")
     await session.flush()
 
     return {
@@ -382,7 +391,43 @@ async def clean_recording_endpoint(
         "cached": False,
         "raw_char_count": len(raw_text),
         "clean_segments": result.get("segments", []),
+        "edited_html": existing.get("edited_html"),
+        "edited_text": existing.get("edited_text"),
     }
+
+
+@router.patch("/recordings/{recording_id}/clean-edited")
+async def save_clean_edited_endpoint(
+    recording_id: str,
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save user-edited Clean transcript (TipTap WYSIWYG).
+
+    Body: { "html": "<...>", "text": "plain text extraction" }
+    Stored in recordings.clean_segments as {edited_html, edited_text, segments?}.
+    The original LLM-generated `segments` array is preserved alongside so user
+    can revert (future feature). MoMGraph prefers edited_text over raw transcript.
+    """
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    html = (payload.get("html") or "").strip()
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty edited text")
+
+    existing = recording.clean_segments or {}
+    existing["edited_html"] = html
+    existing["edited_text"] = text
+    recording.clean_segments = existing
+    # SQLAlchemy needs a hint for JSONB mutation tracking
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(recording, "clean_segments")
+    await session.flush()
+    return {"recording_id": recording_id, "edited_chars": len(text)}
 
 
 @router.post("/recordings/{recording_id}/end")

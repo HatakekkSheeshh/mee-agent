@@ -93,9 +93,17 @@ def make_load_transcript(session: AsyncSession):
         if not meeting:
             return {"error": f"Parent meeting {recording.meeting_id} not found"}
 
-        transcript = await repo.join_recording_transcript(
-            session, uuid.UUID(recording_id)
-        )
+        # Prefer user-edited clean transcript (TipTap WYSIWYG output) if it
+        # exists — that's the curated source. Fall back to raw joined segments.
+        clean = recording.clean_segments or {}
+        edited = (clean.get("edited_text") or "").strip()
+        if edited:
+            transcript = edited
+            logger.info(f"[Node load_transcript] using user-edited clean ({len(edited)} chars)")
+        else:
+            transcript = await repo.join_recording_transcript(
+                session, uuid.UUID(recording_id)
+            )
         if not transcript.strip():
             return {"error": "No transcript segments for this recording"}
 
