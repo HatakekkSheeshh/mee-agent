@@ -1,0 +1,62 @@
+/* Legacy Mee design system — preserved verbatim from meeting_frontend/style.css.
+   Includes :root tokens, theme switching, layout grid, components, animations. */
+@import "./styles-legacy.css";
+
+/* React mount: original layout relies on body[display:grid] with sidebar + .app
+   as DIRECT children. React wraps everything in #root, which would collapse to
+   a single grid item. `display: contents` makes #root invisible to layout so
+   <aside.sidebar> + <div.app> behave as if they were body's children. */
+#root {
+  display: contents;
+}
+
+/* Project-overview mode overrides:
+   - Show MoMPane on the right (legacy hid it); it renders the project summary
+   - Remove the divider line between meeting-control and overview cards
+   - Keep resizers visible so user can adjust the split */
+body.project-overview-mode .meeting-control { border-bottom: none; }
+body.project-overview-mode .pane-mom { display: flex !important; }
+body.project-overview-mode .resizer { display: block !important; }
+
+/* Per-row delete buttons in sidebar — hidden until row is hovered. */
+.row-delete-btn {
+  opacity: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: var(--r-xs);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.sidebar-meeting:hover .row-delete-btn,
+.sidebar-recording:hover .row-delete-btn { opacity: 1; }
+.row-delete-btn:hover { color: var(--danger); background: var(--surface-3); }
+
+/* Danger filled button (red) — for destructive confirm dialogs. */
+.btn-danger {
+  background: var(--danger);
+  color: white;
+  border: 1px solid var(--danger);
+}
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 88%, white); }
+
+/* Vertical 3-dot menu button (project row) — visible on hover. */
+.row-menu-btn {
+  opacity: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--r-xs);
+  display: inline-flex;
+  align-items: center;
+  transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.sidebar-meeting:hover .row-menu-btn,
+.sidebar-meeting.active .row-menu-btn,
+.row-menu-btn.open { opacity: 1; }
+.row-menu-btn:hover, .row-menu-btn.open { background: var(--surface-3); color: var(--text); }
