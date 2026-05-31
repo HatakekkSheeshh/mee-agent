@@ -10,19 +10,32 @@ from datetime import date as date_cls
 def generate_mom_markdown(
     notes: dict,
     output_dir: str = "output",
+    recording_label: str = None,
 ) -> str:
     """
     Generate a Markdown MoM file from structured notes dict.
 
-    Returns:
-        Path to the generated .md file.
+    Filename pattern:
+        MoM_<project>_<recording>_<date>.md   (when recording_label provided)
+        MoM_<project>_<date>.md               (legacy / no recording label)
+
+    Returns path to the generated .md file.
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    def _safe(s, maxlen=40):
+        return (s or "").replace(" ", "_").replace("/", "-").replace("\\", "-")[:maxlen]
+
     meeting_date = notes.get("date", date_cls.today().strftime("%d/%m/%Y"))
-    safe_title = (notes.get("title") or "meeting").replace(" ", "_").replace("/", "-")[:40]
+    safe_project = _safe(notes.get("title")) or "project"
+    safe_record = _safe(recording_label) if recording_label else ""
     safe_date = meeting_date.replace("/", "-").replace(" ", "_")
-    filename = f"MoM_{safe_title}_{safe_date}.md"
+
+    parts = ["MoM", safe_project]
+    if safe_record:
+        parts.append(safe_record)
+    parts.append(safe_date)
+    filename = "_".join(parts) + ".md"
     filepath = os.path.join(output_dir, filename)
 
     lines = []

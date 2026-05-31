@@ -1,6 +1,9 @@
 """
 MoM Generation Graph — LangGraph StateGraph với 4 nodes.
 
+Scope: PER-RECORDING (one MoM per phiên ghi âm).
+Project-level summary is a separate graph/service (project_summarizer).
+
 Flow:
     load_transcript → read_memory → generate_mom → save_results → END
 
@@ -8,15 +11,16 @@ State passing:
     Mỗi node nhận state, trả về partial update dict. LangGraph tự merge.
 
 Checkpointing:
-    Compiled với AsyncPostgresSaver. Mỗi node xong → state save. Fail ở node 3
-    → re-invoke với same thread_id → resume từ node 3 (skip node 1+2).
+    Compiled với AsyncPostgresSaver. thread_id = recording_id → resume per
+    recording (re-run cùng recording_id sẽ resume từ node fail).
 
-Memory context (Phase B mock):
-    read_memory dùng MemoryService stub trả [] cho mock. Phase F sẽ wire real.
+Memory context:
+    read_memory dùng MemoryService (hybrid retrieval) trả past events related
+    to current meeting's topic, excluding this meeting itself.
 
 Usage:
     from meeting.graphs import run_mom_graph
-    result = await run_mom_graph(meeting_id, session, output_dir)
+    result = await run_mom_graph(recording_id, session, output_dir)
 """
 from __future__ import annotations
 
@@ -43,14 +47,18 @@ class MomState(TypedDict, total=False):
     State đi xuyên qua graph. `total=False` cho phép field optional.
 
     Convention:
-        - Input fields: required khi invoke (meeting_id, output_dir)
-        - Output fields: filled by nodes
+        - Input: recording_id (required), output_dir (optional)
+        - Filled by load_transcript: meeting_id, transcript, meeting_meta
+        - Filled by read_memory: memory_context
+        - Filled by generate_mom: mom_json
+        - Filled by save_results: saved_paths
     """
-    # ── Input (provided when invoking graph) ──
-    meeting_id: str
+    # ── Input ──
+    recording_id: str
     output_dir: str
 
     # ── Filled by load_transcript ──
+    meeting_id: str
     transcript: str
     meeting_meta: dict          # title, purpose, attendees, etc.
 
@@ -73,40 +81,54 @@ def make_load_transcript(session: AsyncSession):
     """Factory: bind AsyncSession into node closure."""
 
     async def load_transcript(state: MomState) -> dict:
-        """Node 1: SELECT segments từ DB, COALESCE(edited, original), join."""
-        meeting_id = state["meeting_id"]
-        logger.info(f"[Node load_transcript] meeting_id={meeting_id}")
+        """Node 1: SELECT segments của 1 recording, join thành transcript."""
+        recording_id = state["recording_id"]
+        logger.info(f"[Node load_transcript] recording_id={recording_id}")
 
-        meeting = await repo.get_meeting(session, uuid.UUID(meeting_id))
+        recording = await repo.get_recording(session, uuid.UUID(recording_id))
+        if not recording:
+            return {"error": f"Recording {recording_id} not found"}
+
+        meeting = await repo.get_meeting(session, recording.meeting_id)
         if not meeting:
-            return {"error": f"Meeting {meeting_id} not found"}
+            return {"error": f"Parent meeting {recording.meeting_id} not found"}
 
-        transcript = await repo.join_meeting_transcript(
-            session, uuid.UUID(meeting_id)
+        transcript = await repo.join_recording_transcript(
+            session, uuid.UUID(recording_id)
         )
         if not transcript.strip():
-            return {"error": "No transcript segments for this meeting"}
+            return {"error": "No transcript segments for this recording"}
 
         logger.info(f"[Node load_transcript] loaded {len(transcript)} chars")
 
-        # Pack meta for downstream nodes
+        # Pack meta for downstream nodes — title is project + session label
         attendees_str = ""
         if meeting.attendees:
             attendees_str = ", ".join(
                 f"{a.get('name', '')} ({a.get('department', '')})".strip()
                 for a in meeting.attendees if isinstance(a, dict)
             )
+        rec_label = recording.session_label or "Phiên họp"
+        title = f"{meeting.title} — {rec_label}" if meeting.title else rec_label
         meta = {
-            "title": meeting.title,
+            "title": title,
+            "project_title": meeting.title,
+            "session_label": rec_label,
             "purpose": meeting.purpose or "",
-            "date": meeting.date.isoformat() if meeting.date else "",
+            "date": recording.started_at.isoformat() if recording.started_at else (
+                meeting.date.isoformat() if meeting.date else ""
+            ),
             "chaired_by": meeting.chaired_by or "",
             "noted_by": meeting.noted_by or "Mee Agent",
             "venue": meeting.venue or "",
             "attendees": attendees_str,
             "topic": meeting.topic or "",
         }
-        return {"transcript": transcript, "meeting_meta": meta}
+        return {
+            "meeting_id": str(meeting.id),
+            "transcript": transcript,
+            "meeting_meta": meta,
+        }
 
     return load_transcript
 
@@ -117,11 +139,10 @@ def make_read_memory(memory_service: MemoryService, session: AsyncSession):
     async def read_memory(state: MomState) -> dict:
         """Node 2: Fetch past events related to meeting's topic (DB-backed)."""
         meta = state.get("meeting_meta", {})
-        query = meta.get("topic") or meta.get("title", "")
+        query = meta.get("topic") or meta.get("project_title") or meta.get("title", "")
         meeting_id = state.get("meeting_id")
         logger.info(f"[Node read_memory] query={query[:80]!r}")
 
-        # Get current user (dev user for now until M365 auth)
         user = await repo.get_or_create_dev_user(session)
 
         events = await memory_service.retrieve(
@@ -131,7 +152,6 @@ def make_read_memory(memory_service: MemoryService, session: AsyncSession):
             user_id=user.id,
             exclude_meeting_id=uuid.UUID(meeting_id) if meeting_id else None,
         )
-        # Serialize MemoryEvent → dict for state (TypedDict prefers plain dicts)
         serialized = [
             {"topic": e.topic, "text": e.text, "speaker": e.speaker}
             for e in events
@@ -164,31 +184,39 @@ async def generate_mom(state: MomState) -> dict:
 
     if "error" in notes:
         return {"error": notes["error"]}
-    return {"mom_json": notes}
+    return {"mom_json": notes, "error": None}
 
 
 def make_save_results(session: AsyncSession, memory_service: MemoryService):
     """Factory: bind session + memory."""
 
     async def save_results(state: MomState) -> dict:
-        """Node 4: Save mom_json to DB + write .md file + save memory events (DB-backed)."""
-        meeting_id = state["meeting_id"]
+        """Node 4: Save mom_json to recording.mom_json + write .md + extract memory events."""
+        recording_id = state["recording_id"]
+        meeting_id = state.get("meeting_id")
         mom = state.get("mom_json", {})
         output_dir = state.get("output_dir", "output")
-        topic = state.get("meeting_meta", {}).get("topic") or mom.get("title", "")
+        meta = state.get("meeting_meta", {})
+        topic = meta.get("topic") or mom.get("title", "")
 
-        # 1. Save MoM JSON to DB
-        await repo.save_mom(session, uuid.UUID(meeting_id), mom)
+        # 1. Save MoM JSON to the RECORDING row (per-recording MoM)
+        await repo.save_recording_mom(session, uuid.UUID(recording_id), mom)
 
-        # 2. Generate .md file
-        md_path = generate_mom_markdown(notes=mom, output_dir=output_dir)
+        # 2. Generate .md file — filename uses session_label so files are
+        # distinguishable across recordings of the same project.
+        md_path = generate_mom_markdown(
+            notes=mom,
+            output_dir=output_dir,
+            recording_label=meta.get("session_label"),
+        )
         logger.info(f"[Node save_results] saved md → {md_path}")
 
-        # 3. Extract structured events from MoM → memory_events table
+        # 3. Extract structured events from MoM → memory_events table.
+        # Events are tagged with meeting_id (project-level) so cross-recording
+        # memory retrieval still works.
         user = await repo.get_or_create_dev_user(session)
         events: list[MemoryEvent] = []
 
-        # 3a. Action items → 'action_item' events with PIC + deadline
         for ai in mom.get("action_items", []) or []:
             if ai.get("item"):
                 events.append(MemoryEvent(
@@ -200,7 +228,6 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                     deadline=ai.get("deadline"),
                 ))
 
-        # 3b. Decisions (from new prompt extraction — Sprint D)
         for dec in mom.get("decisions", []) or []:
             if isinstance(dec, str) and dec.strip():
                 events.append(MemoryEvent(
@@ -214,7 +241,6 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                     speaker=dec.get("by"),
                 ))
 
-        # 3c. Commitments
         for c in mom.get("commitments", []) or []:
             if isinstance(c, str) and c.strip():
                 events.append(MemoryEvent(
@@ -228,7 +254,6 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                     speaker=c.get("by"),
                 ))
 
-        # 3d. Blockers
         for b in mom.get("blockers", []) or []:
             if isinstance(b, str) and b.strip():
                 events.append(MemoryEvent(
@@ -242,7 +267,6 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                     speaker=b.get("by"),
                 ))
 
-        # 3e. Summary
         summary = mom.get("summary")
         if summary:
             events.append(MemoryEvent(
@@ -250,7 +274,6 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                 event_type="summary", text=summary,
             ))
 
-        # Save all events to DB
         saved_count = 0
         if events:
             await memory_service.save(
@@ -279,14 +302,6 @@ def build_mom_graph(
     memory_service: MemoryService,
     checkpointer=None,
 ):
-    """
-    Build + compile MomGraph.
-
-    Args:
-        session: SQLAlchemy AsyncSession (request-scoped)
-        memory_service: stub now, real later
-        checkpointer: AsyncPostgresSaver or None (no resume support)
-    """
     g = StateGraph(MomState)
 
     g.add_node("load_transcript", make_load_transcript(session))
@@ -294,8 +309,16 @@ def build_mom_graph(
     g.add_node("generate_mom", generate_mom)
     g.add_node("save_results", make_save_results(session, memory_service))
 
+    def _route_after_load(state: MomState) -> str:
+        if state.get("error") and not state.get("transcript"):
+            return END
+        return "read_memory"
+
     g.set_entry_point("load_transcript")
-    g.add_edge("load_transcript", "read_memory")
+    g.add_conditional_edges(
+        "load_transcript", _route_after_load,
+        {END: END, "read_memory": "read_memory"},
+    )
     g.add_edge("read_memory", "generate_mom")
     g.add_edge("generate_mom", "save_results")
     g.add_edge("save_results", END)
@@ -306,29 +329,27 @@ def build_mom_graph(
 # ─── High-level runner (used by endpoint) ────────────────────────
 
 async def run_mom_graph(
-    meeting_id: str,
+    recording_id: str,
     session: AsyncSession,
     output_dir: str = "output",
     checkpointer=None,
     memory_service: Optional[MemoryService] = None,
 ) -> MomState:
     """
-    Invoke the graph and return final state.
-
-    thread_id = meeting_id → resume works if invoked again with same meeting.
+    Invoke the graph for 1 recording. thread_id = recording_id → per-recording resume.
     """
     if memory_service is None:
         memory_service = get_memory_service()
 
     graph = build_mom_graph(session, memory_service, checkpointer)
 
-    config = {"configurable": {"thread_id": meeting_id}}
+    config = {"configurable": {"thread_id": recording_id}}
     initial_state: MomState = {
-        "meeting_id": meeting_id,
+        "recording_id": recording_id,
         "output_dir": output_dir,
     }
 
-    logger.info(f"=== Running MomGraph for meeting {meeting_id} ===")
+    logger.info(f"=== Running MomGraph for recording {recording_id} ===")
     result: MomState = await graph.ainvoke(initial_state, config=config)
     logger.info(f"=== MomGraph done. saved_paths={result.get('saved_paths')} ===")
     return result

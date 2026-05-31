@@ -57,7 +57,21 @@ class MeetingOut(BaseModel):
     noted_by: Optional[str]
     attendees: Optional[list]
     status: str
-    has_mom: bool
+    # Per-recording MoM existence is fetched separately. has_summary = whether
+    # the project-level summary has been generated at least once.
+    has_summary: bool = False
+    is_pinned: bool = False
+
+
+class MeetingPatch(BaseModel):
+    title: Optional[str] = None
+    is_pinned: Optional[bool] = None
+    purpose: Optional[str] = None
+    venue: Optional[str] = None
+    date: Optional[date_type] = None
+    chaired_by: Optional[str] = None
+    noted_by: Optional[str] = None
+    attendees: Optional[list] = None
 
 
 class SegmentCreate(BaseModel):
@@ -75,7 +89,9 @@ class RecordingCreate(BaseModel):
 class TranscriptImport(BaseModel):
     text: str
     session_label: Optional[str] = "Imported transcript"
-    replace: bool = True  # True = xoá recordings cũ trước khi import
+    replace: bool = True  # True = xoá recordings cũ trước khi import (chỉ áp khi recording_id=None)
+    duration_sec: Optional[int] = None  # caller can pass actual duration (live record, audio file)
+    recording_id: Optional[str] = None  # target an EXISTING recording — overwrites its segments
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -91,7 +107,8 @@ def _meeting_to_out(m) -> MeetingOut:
         noted_by=m.noted_by,
         attendees=m.attendees,
         status=m.status,
-        has_mom=m.mom_json is not None,
+        has_summary=getattr(m, "project_summary_json", None) is not None,
+        is_pinned=getattr(m, "is_pinned", False),
     )
 
 
@@ -149,11 +166,81 @@ async def get_meeting_endpoint(
                 "duration_sec": r.duration_sec,
                 "status": r.status,
                 "segment_count": len([s for s in r.segments if not s.is_deleted]),
+                "mom_json": r.mom_json,
+                "has_clean": r.clean_segments is not None,
             }
             for r in meeting.recordings
         ],
-        "mom_json": meeting.mom_json,
+        "project_summary_json": meeting.project_summary_json,
     }
+
+
+@router.patch("/meetings/{meeting_id}", response_model=MeetingOut)
+async def patch_meeting_endpoint(
+    meeting_id: str,
+    req: MeetingPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update title and/or pin state."""
+    mid = _parse_uuid(meeting_id)
+    updated = await repo.update_meeting(
+        session, mid, title=req.title, is_pinned=req.is_pinned
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return _meeting_to_out(updated)
+
+
+@router.delete("/meetings/{meeting_id}")
+async def delete_meeting_endpoint(
+    meeting_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Soft-delete a meeting (sets deleted_at; recordings/segments stay for audit)."""
+    mid = _parse_uuid(meeting_id)
+    ok = await repo.soft_delete_meeting(session, mid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return {"meeting_id": meeting_id, "deleted": True}
+
+
+@router.get("/meetings/{meeting_id}/download")
+async def download_meeting_summary(
+    meeting_id: str,
+    fmt: str = "md",
+    session: AsyncSession = Depends(get_session),
+):
+    """Download project summary (tổng kết project) as Markdown or JSON.
+
+    For per-recording MoM, use /api/recordings/{id}/download instead.
+    """
+    from fastapi.responses import FileResponse, JSONResponse
+    from meeting.report_generator import generate_mom_markdown
+    import os as _os
+
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if not meeting.project_summary_json:
+        raise HTTPException(
+            status_code=400,
+            detail="Tổng kết project chưa được tạo. Generate qua POST /api/meetings/{id}/generate-project-summary",
+        )
+
+    if fmt == "json":
+        return JSONResponse(content=meeting.project_summary_json)
+
+    out_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "output")
+    md_path = generate_mom_markdown(
+        notes=meeting.project_summary_json,
+        output_dir=out_dir,
+        recording_label=f"{meeting.title}-summary",
+    )
+    return FileResponse(
+        md_path,
+        media_type="text/markdown",
+        filename=_os.path.basename(md_path),
+    )
 
 
 @router.get("/meetings/{meeting_id}/transcript")
@@ -194,35 +281,87 @@ async def start_recording_endpoint(
 async def get_recording_transcript_endpoint(
     recording_id: str, session: AsyncSession = Depends(get_session)
 ):
-    """Return joined raw transcript text of 1 specific recording."""
+    """Return joined raw transcript text + meta (segment_count, duration_sec) of 1 recording."""
+    from meeting.db.models import TranscriptSegment
+    from sqlalchemy import select, func
+
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
     text = await repo.join_recording_transcript(session, rid)
+    # Count non-deleted segments
+    seg_count = await session.scalar(
+        select(func.count())
+        .select_from(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == rid,
+            TranscriptSegment.is_deleted.is_(False),
+        )
+    )
     return {
         "recording_id": recording_id,
         "meeting_id": str(recording.meeting_id),
         "session_label": recording.session_label,
         "transcript": text,
+        "segment_count": seg_count or 0,
+        "duration_sec": recording.duration_sec,
+        "started_at": recording.started_at.isoformat() if recording.started_at else None,
+        "ended_at": recording.ended_at.isoformat() if recording.ended_at else None,
+    }
+
+
+class RecordingPatch(BaseModel):
+    session_label: Optional[str] = None
+
+
+@router.patch("/recordings/{recording_id}")
+async def patch_recording_endpoint(
+    recording_id: str,
+    req: RecordingPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename a recording (update session_label)."""
+    rid = _parse_uuid(recording_id)
+    updated = await repo.update_recording_label(session, rid, req.session_label or "")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return {
+        "recording_id": str(updated.id),
+        "session_label": updated.session_label,
     }
 
 
 @router.post("/recordings/{recording_id}/clean")
 async def clean_recording_endpoint(
-    recording_id: str, session: AsyncSession = Depends(get_session)
+    recording_id: str,
+    regenerate: bool = False,
+    session: AsyncSession = Depends(get_session),
 ):
-    """LLM clean transcript view for 1 specific recording."""
+    """LLM clean transcript for 1 recording, cached per-recording in DB.
+
+    First call runs the LLM and persists the result to `recordings.clean_segments`.
+    Subsequent calls return the cached value to avoid re-billing the LLM. Pass
+    `?regenerate=true` to force a fresh LLM run (overwrites the cache).
+    """
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
 
+    # Return cache hit unless caller forces regenerate
+    if not regenerate and recording.clean_segments:
+        cached = recording.clean_segments or {}
+        return {
+            "recording_id": recording_id,
+            "cached": True,
+            "clean_segments": cached.get("segments", []),
+        }
+
     raw_text = await repo.join_recording_transcript(session, rid)
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="No segments to clean")
 
-    # Get meeting attendees for speaker hints
     meeting = await repo.get_meeting(session, recording.meeting_id)
     attendees_str = ""
     if meeting and meeting.attendees:
@@ -234,8 +373,13 @@ async def clean_recording_endpoint(
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
 
+    # Persist as cache (overwrite if regenerate=True)
+    recording.clean_segments = {"segments": result.get("segments", [])}
+    await session.flush()
+
     return {
         "recording_id": recording_id,
+        "cached": False,
         "raw_char_count": len(raw_text),
         "clean_segments": result.get("segments", []),
     }
@@ -255,6 +399,21 @@ async def end_recording_endpoint(
         "ended_at": recording.ended_at.isoformat() if recording.ended_at else None,
         "duration_sec": recording.duration_sec,
     }
+
+
+@router.delete("/recordings/{recording_id}")
+async def delete_recording_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Hard-delete a recording. FK CASCADE removes its transcript_segments.
+    Per-recording MoM (recordings.mom_json) and clean cache (clean_segments)
+    are part of the recording row, so they go with it. The parent project's
+    project_summary_json is left untouched (may need re-generate)."""
+    rid = _parse_uuid(recording_id)
+    ok = await repo.delete_recording(session, rid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return {"recording_id": recording_id, "deleted": True}
 
 
 @router.post("/meetings/{meeting_id}/import-transcript")
@@ -281,13 +440,31 @@ async def import_transcript_endpoint(
         raise HTTPException(status_code=400, detail="Empty transcript text")
 
     deleted_count = 0
-    if req.replace:
-        deleted_count = await repo.delete_all_recordings_for_meeting(session, mid)
-
-    # Create new recording
-    recording = await repo.start_recording(
-        session, meeting_id=mid, session_label=req.session_label,
-    )
+    if req.recording_id:
+        # Target an EXISTING recording → overwrite its segments. No new recording
+        # is created. `replace` flag ignored (it's about deleting OTHER recordings).
+        from sqlalchemy import delete as sa_delete
+        from meeting.db.models import TranscriptSegment
+        rid = _parse_uuid(req.recording_id)
+        recording = await repo.get_recording(session, rid)
+        if not recording or recording.meeting_id != mid:
+            raise HTTPException(status_code=404, detail="Recording not found in this meeting")
+        # Wipe old segments of this recording
+        await session.execute(
+            sa_delete(TranscriptSegment).where(TranscriptSegment.recording_id == rid)
+        )
+        # Update label if changed
+        if req.session_label and req.session_label != recording.session_label:
+            recording.session_label = req.session_label
+        # Invalidate cached clean view since transcript changed
+        recording.clean_segments = None
+    else:
+        if req.replace:
+            deleted_count = await repo.delete_all_recordings_for_meeting(session, mid)
+        # Create new recording
+        recording = await repo.start_recording(
+            session, meeting_id=mid, session_label=req.session_label,
+        )
 
     # Split text into segments
     lines = [s.strip() for s in req.text.split("\n") if s.strip()]
@@ -305,10 +482,21 @@ async def import_transcript_endpoint(
             original_text=line,
         )
 
+    # Set duration_sec — caller-provided (live record / audio file) takes priority.
+    # Otherwise estimate from text: 150 words/min Vietnamese ≈ 2.5 wps.
+    if req.duration_sec and req.duration_sec > 0:
+        recording.duration_sec = req.duration_sec
+    else:
+        word_count = sum(len(l.split()) for l in lines)
+        # 2.5 words/sec average → seconds = words / 2.5
+        recording.duration_sec = max(1, int(word_count / 2.5)) if word_count > 0 else None
+    await session.flush()
+
     return {
         "meeting_id": meeting_id,
         "recording_id": str(recording.id),
         "segments_count": len(lines),
+        "duration_sec": recording.duration_sec,
         "deleted_recordings": deleted_count,
     }
 
@@ -378,18 +566,37 @@ async def clean_transcript_endpoint(
     }
 
 
-@router.post("/meetings/{meeting_id}/generate-mom")
-async def generate_mom_endpoint(
+@router.post("/meetings/{meeting_id}/generate-project-summary")
+async def generate_project_summary_endpoint(
     meeting_id: str, session: AsyncSession = Depends(get_session)
 ):
+    """Generate / regenerate project summary (tổng kết) from all per-recording MoMs.
+
+    Aggregates decisions across recordings into a chronological timeline + LLM
+    narrative. Writes to meetings.project_summary_json. Idempotent — re-run
+    after new recordings produce updated summary.
     """
-    Generate MoM via LangGraph (Phase B):
+    from meeting.services.project_summarizer import generate_project_summary
+
+    mid = _parse_uuid(meeting_id)
+    summary = await generate_project_summary(session, mid)
+    if "error" in summary:
+        raise HTTPException(status_code=500, detail=summary["error"])
+    return {"meeting_id": meeting_id, "summary": summary}
+
+
+@router.post("/recordings/{recording_id}/generate-mom")
+async def generate_recording_mom_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """
+    Generate per-recording MoM (biên bản phiên họp) via LangGraph:
         load_transcript → read_memory → generate_mom → save_results
 
-    With PostgresSaver checkpointing — fail at any node → re-invoke
-    resumes from that node (uses thread_id = meeting_id).
+    Output saved to recordings.mom_json. thread_id = recording_id so each
+    recording has its own resume state on the PostgresSaver checkpointer.
     """
-    _parse_uuid(meeting_id)  # validate format only
+    _parse_uuid(recording_id)  # validate format only
 
     output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output"
@@ -397,18 +604,67 @@ async def generate_mom_endpoint(
     checkpointer = get_checkpointer()
 
     final_state = await run_mom_graph(
-        meeting_id=meeting_id,
+        recording_id=recording_id,
         session=session,
         output_dir=output_dir,
         checkpointer=checkpointer,
     )
 
-    if final_state.get("error"):
+    if final_state.get("error") and not final_state.get("mom_json"):
         raise HTTPException(status_code=500, detail=final_state["error"])
 
     return {
-        "meeting_id": meeting_id,
+        "recording_id": recording_id,
+        "meeting_id": final_state.get("meeting_id"),
         "notes": final_state.get("mom_json", {}),
         "saved_paths": final_state.get("saved_paths", {}),
         "memory_context_count": len(final_state.get("memory_context", [])),
     }
+
+
+@router.get("/recordings/{recording_id}/mom")
+async def get_recording_mom_endpoint(
+    recording_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Return cached MoM for a recording (404 if not generated yet)."""
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if not recording.mom_json:
+        raise HTTPException(status_code=404, detail="MoM chưa được tạo")
+    return {"recording_id": recording_id, "mom_json": recording.mom_json}
+
+
+@router.get("/recordings/{recording_id}/download")
+async def download_recording_mom(
+    recording_id: str,
+    fmt: str = "md",
+    session: AsyncSession = Depends(get_session),
+):
+    """Download per-recording MoM as Markdown (fmt=md) or JSON (fmt=json)."""
+    from fastapi.responses import FileResponse, JSONResponse
+    from meeting.report_generator import generate_mom_markdown
+    import os as _os
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if not recording.mom_json:
+        raise HTTPException(status_code=400, detail="MoM chưa được tạo cho phiên này")
+
+    if fmt == "json":
+        return JSONResponse(content=recording.mom_json)
+
+    out_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "output")
+    md_path = generate_mom_markdown(
+        notes=recording.mom_json,
+        output_dir=out_dir,
+        recording_label=recording.session_label,
+    )
+    return FileResponse(
+        md_path,
+        media_type="text/markdown",
+        filename=_os.path.basename(md_path),
+    )
