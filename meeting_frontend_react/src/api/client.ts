@@ -96,6 +96,10 @@ export const api = {
         "POST",
         `/api/recordings/${id}/clean${regenerate ? "?regenerate=true" : ""}`,
       ),
+    saveCleanEdited: (id: string, html: string, text: string) =>
+      http<{ recording_id: string; edited_chars: number }>(
+        "PATCH", `/api/recordings/${id}/clean-edited`, { html, text },
+      ),
     end: (id: string) =>
       http<{ id: string; status: string; duration_sec?: number }>(
         "POST", `/api/recordings/${id}/end`,

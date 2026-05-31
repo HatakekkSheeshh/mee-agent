@@ -93,6 +93,9 @@ export interface CleanResponse {
   recording_id: string;
   cached: boolean;
   clean_segments: { speaker?: string; text: string; tags?: string[] }[];
+  /** User-edited HTML (TipTap output) if the user has touched this transcript. */
+  edited_html?: string | null;
+  edited_text?: string | null;
 }
 
 // ─── Chat ──────────────────────────────────────────────────────────
