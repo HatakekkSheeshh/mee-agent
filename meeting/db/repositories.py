@@ -98,7 +98,10 @@ async def get_meeting(session: AsyncSession, meeting_id: uuid.UUID) -> Optional[
 async def list_meetings_for_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> Sequence[Meeting]:
-    """List meetings where user is an active member (any role)."""
+    """List meetings where user is an active member (any role).
+
+    Sort: pinned first, then by creation date (newest first).
+    """
     stmt = (
         select(Meeting)
         .join(MeetingMember, MeetingMember.meeting_id == Meeting.id)
@@ -107,17 +110,60 @@ async def list_meetings_for_user(
             MeetingMember.revoked_at.is_(None),
             Meeting.deleted_at.is_(None),
         )
-        .order_by(Meeting.created_at.desc())
+        .order_by(Meeting.is_pinned.desc(), Meeting.created_at.desc())
     )
     return (await session.execute(stmt)).scalars().all()
 
 
-async def save_mom(
-    session: AsyncSession, meeting_id: uuid.UUID, mom_json: dict
+async def update_meeting(
+    session: AsyncSession,
+    meeting_id: uuid.UUID,
+    *,
+    title: Optional[str] = None,
+    is_pinned: Optional[bool] = None,
+) -> Optional[Meeting]:
+    """Patch selected fields on a meeting. Returns updated row or None if not found."""
+    meeting = await session.get(Meeting, meeting_id)
+    if not meeting or meeting.deleted_at is not None:
+        return None
+    if title is not None and title.strip():
+        meeting.title = title.strip()
+    if is_pinned is not None:
+        meeting.is_pinned = is_pinned
+    await session.flush()
+    return meeting
+
+
+async def soft_delete_meeting(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> bool:
+    """Mark meeting as deleted (does not cascade to recordings/segments)."""
+    from datetime import datetime, timezone
+    meeting = await session.get(Meeting, meeting_id)
+    if not meeting or meeting.deleted_at is not None:
+        return False
+    meeting.deleted_at = datetime.now(timezone.utc)
+    await session.flush()
+    return True
+
+
+async def save_recording_mom(
+    session: AsyncSession, recording_id: uuid.UUID, mom_json: dict
 ) -> None:
+    """Save per-recording MoM (biên bản phiên họp) to recordings.mom_json."""
+    recording = await session.get(Recording, recording_id)
+    if recording:
+        recording.mom_json = mom_json
+        await session.flush()
+
+
+async def save_project_summary(
+    session: AsyncSession, meeting_id: uuid.UUID, summary_json: dict
+) -> None:
+    """Save project-level summary (tổng kết) to meetings.project_summary_json."""
     meeting = await session.get(Meeting, meeting_id)
     if meeting:
-        meeting.mom_json = mom_json
+        meeting.project_summary_json = summary_json
         await session.flush()
 
 
@@ -143,6 +189,19 @@ async def get_recording(
     session: AsyncSession, recording_id: uuid.UUID
 ) -> Optional[Recording]:
     return await session.get(Recording, recording_id)
+
+
+async def update_recording_label(
+    session: AsyncSession, recording_id: uuid.UUID, label: str
+) -> Optional[Recording]:
+    """Rename a recording's session_label."""
+    recording = await session.get(Recording, recording_id)
+    if not recording:
+        return None
+    if label and label.strip():
+        recording.session_label = label.strip()
+        await session.flush()
+    return recording
 
 
 async def join_recording_transcript(
@@ -191,6 +250,19 @@ async def delete_all_recordings_for_meeting(
     )
     await session.flush()
     return count
+
+
+async def delete_recording(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> bool:
+    """Hard-delete a single recording. FK CASCADE removes transcript_segments.
+    Returns True if a row was deleted, False if not found."""
+    recording = await session.get(Recording, recording_id)
+    if not recording:
+        return False
+    await session.delete(recording)
+    await session.flush()
+    return True
 
 
 # ─── Segments ─────────────────────────────────────────────────────
@@ -484,11 +556,21 @@ async def save_memory_events_bulk(
     user_id: uuid.UUID,
     meeting_id: uuid.UUID,
 ) -> int:
-    """Save multiple events at once. events = [{event_type, text, topic?, speaker?, deadline?}, ...]"""
-    count = 0
-    for ev in events:
-        if not ev.get("text") or not ev.get("event_type"):
-            continue
+    """Save multiple events at once. events = [{event_type, text, topic?, ...}, ...].
+
+    Embeds `text` in batch (1 API call for N events) before INSERT.
+    Falls back to NULL embedding if embedding service unavailable.
+    """
+    from meeting.services.embedding import embed_batch
+
+    valid = [ev for ev in events if ev.get("text") and ev.get("event_type")]
+    if not valid:
+        return 0
+
+    # Batch embed (1 API call). Returns None per slot on failure.
+    embeddings = embed_batch([ev["text"] for ev in valid])
+
+    for ev, emb in zip(valid, embeddings):
         session.add(MemoryEventRow(
             user_id=user_id,
             meeting_id=meeting_id,
@@ -498,11 +580,10 @@ async def save_memory_events_bulk(
             speaker=ev.get("speaker"),
             deadline=ev.get("deadline"),
             event_metadata=ev.get("metadata"),
+            embedding=emb,
         ))
-        count += 1
-    if count:
-        await session.flush()
-    return count
+    await session.flush()
+    return len(valid)
 
 
 async def retrieve_memory_events(
@@ -515,29 +596,88 @@ async def retrieve_memory_events(
     event_types: Optional[list[str]] = None,
     limit: int = 10,
 ) -> Sequence[MemoryEventRow]:
-    """
-    Retrieve memory events for a user, optionally filtered by topic/query.
+    """Hybrid retrieval: keyword FTS + vector similarity (RRF) + LLM rerank.
 
-    Use cases:
-        - "What did team commit to last week?" → event_types=['commitment'], limit=5
-        - "Any blockers on deploy?" → query='deploy', event_types=['blocker']
-        - Pre-meeting context → topic matched + recency
+    Steps:
+        1. FTS candidates: Postgres full-text search on `text` (top N)
+        2. Vector candidates: cosine similarity on `embedding` (top N)
+        3. Reciprocal Rank Fusion (RRF) merge → candidate pool (~2*limit)
+        4. LLM re-rank pool → final top `limit`
+        5. Falls back gracefully if embedding/LLM unavailable.
+
+    Rerank can be disabled via env `RERANK_ENABLED=false` (skip step 4).
     """
-    stmt = select(MemoryEventRow).where(MemoryEventRow.user_id == user_id)
-    if exclude_meeting_id:
-        stmt = stmt.where(MemoryEventRow.meeting_id != exclude_meeting_id)
-    if event_types:
-        stmt = stmt.where(MemoryEventRow.event_type.in_(event_types))
-    if topic:
-        # Keyword match topic
-        stmt = stmt.where(MemoryEventRow.topic.ilike(f"%{topic}%"))
-    if query:
-        # Postgres full-text search on text column
-        from sqlalchemy import func as sql_func, text as sql_text
-        stmt = stmt.where(
-            sql_func.to_tsvector("simple", MemoryEventRow.text).op("@@")(
-                sql_func.plainto_tsquery("simple", query)
-            )
+    import os
+    from sqlalchemy import func as sql_func
+    from meeting.services.embedding import embed_text
+    from meeting.services.reranker import rerank_with_llm
+
+    def _base_filter(stmt):
+        stmt = stmt.where(MemoryEventRow.user_id == user_id)
+        if exclude_meeting_id:
+            stmt = stmt.where(MemoryEventRow.meeting_id != exclude_meeting_id)
+        if event_types:
+            stmt = stmt.where(MemoryEventRow.event_type.in_(event_types))
+        if topic:
+            stmt = stmt.where(MemoryEventRow.topic.ilike(f"%{topic}%"))
+        return stmt
+
+    # No query → just recency-ordered (legacy behavior)
+    if not query:
+        stmt = _base_filter(select(MemoryEventRow))
+        stmt = stmt.order_by(MemoryEventRow.created_at.desc()).limit(limit)
+        return (await session.execute(stmt)).scalars().all()
+
+    cand_pool = limit * 4  # over-fetch per side; RRF + rerank pick best
+
+    # ── A. FTS candidates ─────────────────────────────────────
+    fts_stmt = _base_filter(select(MemoryEventRow))
+    fts_stmt = fts_stmt.where(
+        sql_func.to_tsvector("simple", MemoryEventRow.text).op("@@")(
+            sql_func.plainto_tsquery("simple", query)
         )
-    stmt = stmt.order_by(MemoryEventRow.created_at.desc()).limit(limit)
-    return (await session.execute(stmt)).scalars().all()
+    ).order_by(MemoryEventRow.created_at.desc()).limit(cand_pool)
+    fts_rows = list((await session.execute(fts_stmt)).scalars().all())
+
+    # ── B. Vector candidates ──────────────────────────────────
+    query_emb = embed_text(query)
+    vec_rows: list[MemoryEventRow] = []
+    if query_emb is not None:
+        vec_stmt = _base_filter(select(MemoryEventRow))
+        vec_stmt = vec_stmt.where(MemoryEventRow.embedding.is_not(None))
+        vec_stmt = vec_stmt.order_by(
+            MemoryEventRow.embedding.cosine_distance(query_emb)
+        ).limit(cand_pool)
+        vec_rows = list((await session.execute(vec_stmt)).scalars().all())
+
+    # ── C. Reciprocal Rank Fusion ─────────────────────────────
+    k = 60
+    scores: dict[uuid.UUID, float] = {}
+    row_map: dict[uuid.UUID, MemoryEventRow] = {}
+    for rank, r in enumerate(fts_rows):
+        scores[r.id] = scores.get(r.id, 0.0) + 1.0 / (k + rank)
+        row_map[r.id] = r
+    for rank, r in enumerate(vec_rows):
+        scores[r.id] = scores.get(r.id, 0.0) + 1.0 / (k + rank)
+        row_map[r.id] = r
+
+    rrf_ranked_ids = sorted(scores.keys(), key=lambda i: scores[i], reverse=True)
+
+    # ── D. LLM rerank (optional, default OFF to avoid Qwen3 rate limits) ──
+    # Set RERANK_ENABLED=true in .env to enable. RRF hybrid alone is usually
+    # good enough; rerank adds ~3-5s + 1 LLM call per retrieval which can
+    # trigger 429 when stacked behind the MoM-gen LLM calls.
+    rerank_enabled = os.getenv("RERANK_ENABLED", "false").lower() == "true"
+    rerank_pool = min(int(os.getenv("RERANK_POOL", "20")), len(rrf_ranked_ids))
+
+    if rerank_enabled and rerank_pool > limit:
+        # Build (id, text) tuples for top `rerank_pool` after RRF
+        candidates = [
+            (str(rid), row_map[rid].text) for rid in rrf_ranked_ids[:rerank_pool]
+        ]
+        ranked_str_ids = rerank_with_llm(query=query, candidates=candidates, top_k=limit)
+        # Convert back to UUID and resolve to rows
+        return [row_map[uuid.UUID(sid)] for sid in ranked_str_ids if uuid.UUID(sid) in row_map]
+
+    # No rerank → return RRF top-limit
+    return [row_map[i] for i in rrf_ranked_ids[:limit]]

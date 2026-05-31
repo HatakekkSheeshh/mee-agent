@@ -73,8 +73,13 @@ class Meeting(Base):
     chaired_by: Mapped[Optional[str]] = mapped_column(Text)
     noted_by: Mapped[Optional[str]] = mapped_column(Text)
     attendees: Mapped[Optional[list]] = mapped_column(JSONB)  # [{name, dept, title}]
-    mom_json: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Project-level summary aggregating decisions across all recordings (timeline).
+    # Per-recording MoMs live on recordings.mom_json.
+    project_summary_json: Mapped[Optional[dict]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(Text, default="active", server_default="active")
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -151,6 +156,11 @@ class Recording(Base):
         Text, default="recording", server_default="recording"
     )
     audio_path: Mapped[Optional[str]] = mapped_column(Text)
+    # Cached LLM clean output ({segments: [{speaker, text, tags}]}); null until first clean run.
+    clean_segments: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Per-recording MoM (biên bản phiên họp). Each recording has its own MoM.
+    # Project-level aggregate lives on meetings.project_summary_json.
+    mom_json: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     meeting: Mapped[Meeting] = relationship(back_populates="recordings")
     segments: Mapped[list["TranscriptSegment"]] = relationship(
@@ -353,6 +363,11 @@ class MemoryEventRow(Base):
     speaker: Mapped[Optional[str]] = mapped_column(Text)
     deadline: Mapped[Optional[str]] = mapped_column(Text)
     event_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Semantic embedding (bge-m3, 1024 dim). NULL if not yet computed.
+    embedding: Mapped[Optional[list[float]]] = mapped_column(
+        __import__("pgvector.sqlalchemy", fromlist=["Vector"]).Vector(1024),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
