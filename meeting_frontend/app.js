@@ -25,6 +25,21 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("meeting-date").value = today;
     initVocabHints();
     loadVocabPool();
+
+    // Enable Generate MoM button when user types/pastes into transcript textarea
+    const transcriptEl = document.getElementById("transcript");
+    const genBtn = document.getElementById("btn-generate-notes");
+    const saveBtn = document.getElementById("btn-save-transcript");
+    if (transcriptEl) {
+        const updateButtons = () => {
+            const hasText = transcriptEl.value.trim().length > 0;
+            if (genBtn) genBtn.disabled = !hasText;
+            if (saveBtn) saveBtn.disabled = !hasText;
+        };
+        transcriptEl.addEventListener("input", updateButtons);
+        transcriptEl.addEventListener("paste", () => setTimeout(updateButtons, 0));
+        updateButtons();  // Initial state
+    }
 });
 
 // ─── Recording Controls ─────────────────────────────────────────
@@ -32,12 +47,21 @@ document.addEventListener("DOMContentLoaded", () => {
 async function startRecording() {
     const title = document.getElementById("meeting-title").value.trim();
     if (!title) {
-        alert("Vui lòng nhập tiêu đề cuộc họp.");
+        alert("Vui lòng nhập tiêu đề project.");
         return;
     }
 
     const wsUrl = document.getElementById("ws-url").value.trim();
     const language = document.getElementById("language").value;
+
+    // Reset transcript state for a fresh recording (avoid stale segments from
+    // a previous session showing up alongside new ones with reset timestamps)
+    allCompletedSegments = [];
+    wsReconnectAttempts = 0;
+    const transcriptEl = document.getElementById("transcript");
+    if (transcriptEl) transcriptEl.value = "";
+    const countEl = document.getElementById("segment-count");
+    if (countEl) countEl.textContent = "0 đoạn";
 
     setStatus("Đang kết nối tới server transcription...", "connecting");
 
@@ -120,6 +144,11 @@ function stopRecording() {
         websocket.close();
     }
     stopAudioCapture();
+    // Capture actual recording duration so it can be passed to import-transcript
+    // when user later clicks Generate MoM (avoids 00:00 in meta bar).
+    if (startTime) {
+        window.lastRecordedDurationSec = Math.floor((Date.now() - startTime) / 1000);
+    }
     stopTimer();
     setStatus("Đã dừng ghi âm. Bạn có thể tạo biên bản họp.", "idle");
     document.getElementById("btn-start").disabled = false;
@@ -153,9 +182,18 @@ function reconnectWebSocket(wsUrl, language) {
 
 async function startAudioCapture() {
     try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
-        });
+        // Honor a saved mic preference (set via Audio Devices modal). Falls
+        // back to system default if the saved id is invalid/missing.
+        const savedMic = localStorage.getItem('mee.audioInputDeviceId') || '';
+        const audioConstraints = {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+        };
+        if (savedMic) audioConstraints.deviceId = { ideal: savedMic };
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
         audioContext = new AudioContext();
         const source = audioContext.createMediaStreamSource(mediaStream);
         await audioContext.audioWorklet.addModule("audioprocessor.js");
@@ -181,8 +219,8 @@ function stopAudioCapture() {
 // ─── Transcript Display ─────────────────────────────────────────
 
 function updateTranscript(segments) {
+    // UI v5: #transcript is a <textarea>, so we use .value not innerHTML
     const container = document.getElementById("transcript");
-    const prevCount = allCompletedSegments.length;
 
     for (const seg of segments) {
         if (seg.completed && !allCompletedSegments.some(s => s.start === seg.start && s.text === seg.text)) {
@@ -190,35 +228,31 @@ function updateTranscript(segments) {
         }
     }
 
-    const newSegs = allCompletedSegments.slice(prevCount);
-    if (prevCount === 0 && newSegs.length > 0) container.innerHTML = "";
-
-    const oldInProgress = container.querySelector(".segment.in-progress");
-    if (oldInProgress) oldInProgress.remove();
-
-    for (const seg of newSegs) {
-        const div = document.createElement("div");
-        div.className = "segment completed";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
-
     const inProgress = segments.filter(s => !s.completed);
-    if (inProgress.length > 0) {
-        const seg = inProgress[inProgress.length - 1];
-        const div = document.createElement("div");
-        div.className = "segment in-progress";
-        div.innerHTML = `<span class="timestamp">[${formatTime(parseFloat(seg.start))}]</span><span class="text">${escapeHtml(seg.text)}</span>`;
-        container.appendChild(div);
-    }
 
-    if (allCompletedSegments.length === 0 && inProgress.length === 0) {
-        container.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
-    }
+    // Render as plain text into textarea (no HTML tags)
+    const completedLines = allCompletedSegments.map(
+        s => `[${formatTime(parseFloat(s.start))}] ${s.text}`
+    );
+    const inProgressLine = inProgress.length > 0
+        ? `[${formatTime(parseFloat(inProgress[inProgress.length - 1].start))}] ${inProgress[inProgress.length - 1].text} ...`
+        : '';
+    const allLines = [...completedLines];
+    if (inProgressLine) allLines.push(inProgressLine);
 
+    container.value = allLines.join('\n');
     container.scrollTop = container.scrollHeight;
+
     const countEl = document.getElementById("segment-count");
     if (countEl) countEl.textContent = `${allCompletedSegments.length} đoạn`;
+
+    // Enable buttons when transcript has content
+    if (allCompletedSegments.length > 0) {
+        const genBtn = document.getElementById("btn-generate-notes");
+        const saveBtn = document.getElementById("btn-save-transcript");
+        if (genBtn) genBtn.disabled = false;
+        if (saveBtn) saveBtn.disabled = false;
+    }
 }
 
 function getFullTranscript() {
@@ -227,6 +261,12 @@ function getFullTranscript() {
     if (manual && manual.style.display !== "none" && manual.value.trim()) {
         return manual.value.trim();
     }
+    // Direct paste/type into main transcript textarea
+    const live = document.getElementById("transcript");
+    if (live && live.value.trim()) {
+        return live.value.trim();
+    }
+    // Fall back to live segments from recording
     return allCompletedSegments.map(s => s.text.trim()).filter(Boolean).join(" ");
 }
 
@@ -251,7 +291,7 @@ async function uploadAudioFile(input) {
 
     const language = document.getElementById("language").value;
     const vocabHints = document.getElementById("vocab-hints").value.trim();
-    setStatus(`Đang upload và transcribe "${file.name}"...`, "connecting");
+    setPaneStatus("transcript", `Đang upload "${file.name}"...`, "connecting");
 
     const formData = new FormData();
     formData.append("file", file);
@@ -264,17 +304,42 @@ async function uploadAudioFile(input) {
 
         const result = await resp.json();
         const text = result.text || "";
-        if (!text.trim()) { setStatus("Không phát hiện giọng nói trong file.", "error"); return; }
+        if (!text.trim()) { setPaneStatus("transcript", "Không phát hiện giọng nói trong file.", "error"); return; }
 
         allCompletedSegments = [{ start: "0.000", text, completed: true }];
         const container = document.getElementById("transcript");
-        container.innerHTML = `<div class="segment completed"><span class="timestamp">[upload]</span><span class="text">${escapeHtml(text)}</span></div>`;
+        // textarea — use .value, not innerHTML
+        container.value = `[upload] ${text}`;
 
-        setStatus(`Đã transcribe "${file.name}". Bạn có thể tạo biên bản họp.`, "idle");
+        // Persist transcript into DB so Clean/Generate MoM read fresh segments —
+        // otherwise Clean returns 400 "No segments" and MoM reads stale segments
+        // from a sibling recording in the same meeting.
+        console.log("[upload] before persist — meetingDbId=", window.meetingDbId,
+                    "currentRecordingId=", window.currentRecordingId,
+                    "pendingRecordingForMeetingId=", window.pendingRecordingForMeetingId);
+        try {
+            setPaneStatus("transcript", "Đang lưu transcript vào DB...", "assessing");
+            const imported = await window.importTranscriptToDb(text);
+            console.log("[upload] persist OK →", imported);
+            window.currentRecordingId = imported.recordingId;
+            setPaneStatus(
+                "transcript",
+                `Đã transcribe + lưu DB "${file.name}" ✓ (${imported.segmentCount} segments → rec ${imported.recordingId.slice(0,8)})`,
+                "success",
+            );
+        } catch (persistErr) {
+            console.error("[upload] persist failed:", persistErr);
+            setPaneStatus(
+                "transcript",
+                `Đã transcribe nhưng lưu DB lỗi: ${persistErr.message}`,
+                "error",
+            );
+        }
+        setTimeout(() => setPaneStatus("transcript", "", ""), 3000);
         document.getElementById("btn-generate-notes").disabled = false;
         document.getElementById("btn-save-transcript").disabled = false;
     } catch (err) {
-        setStatus(`Lỗi upload: ${err.message}`, "error");
+        setPaneStatus("transcript", `Lỗi upload: ${err.message}`, "error");
     }
     input.value = "";
 }
@@ -288,50 +353,168 @@ async function generateNotes() {
         return;
     }
 
-    setStatus("Đang tạo biên bản họp (30-60 giây)...", "assessing");
+    setPaneStatus("mom", "Đang chuẩn bị...", "assessing");
     document.getElementById("btn-generate-notes").disabled = true;
     document.getElementById("btn-new-session").style.display = "inline-block";
 
-    const meetingDate = formatDateVN(document.getElementById("meeting-date").value);
-
     try {
-        const resp = await fetch(`${API_BASE}/api/generate-notes`, {
+        // Per-recording MoM. Always re-import transcript so DB segments match
+        // what's in the textarea (live record path doesn't auto-sync to DB).
+        setPaneStatus("mom", "Đang lưu transcript vào DB...", "assessing");
+        const imported = await window.importTranscriptToDb(transcript);
+        const recordingId = imported.recordingId;
+        if (!recordingId) {
+            throw new Error("Không xác định được recording_id. Vui lòng chọn 1 phiên họp trước.");
+        }
+        setPaneStatus("mom", `Đang tạo biên bản phiên họp qua LangGraph (${imported.segmentCount} segments)...`, "assessing");
+
+        const resp = await fetch(`${API_BASE}/api/recordings/${recordingId}/generate-mom`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                session_id: sessionId || "manual",
-                title: document.getElementById("meeting-title").value.trim(),
-                purpose: document.getElementById("meeting-purpose").value.trim(),
-                venue: document.getElementById("meeting-venue").value.trim(),
-                date: meetingDate,
-                chaired_by: document.getElementById("chaired-by").value.trim(),
-                noted_by: document.getElementById("noted-by").value.trim(),
-                attendees: document.getElementById("attendees").value.trim(),
-                transcript,
-            }),
         });
 
         if (!resp.ok) {
-            const err = await resp.json();
+            const err = await resp.json().catch(() => ({}));
             throw new Error(err.detail || "Tạo biên bản thất bại");
         }
 
         const result = await resp.json();
         displayMoM(result.notes);
-        downloadUrl = API_BASE + result.download_url;
+        window.currentRecordingMom = result.notes;
+        window.currentMomLevel = "recording";
+
+        // Per-recording download URL
+        downloadUrl = `${API_BASE}/api/recordings/${recordingId}/download?fmt=md`;
 
         const downloadRow = document.getElementById("download-row");
-        downloadRow.style.display = "flex";
+        if (downloadRow) downloadRow.style.display = "flex";
         const dlBtn = document.getElementById("btn-download");
-        dlBtn.disabled = false;
-        document.getElementById("btn-pdf").disabled = false;
+        if (dlBtn) dlBtn.disabled = false;
+        const pdfBtn = document.getElementById("btn-pdf");
+        if (pdfBtn) pdfBtn.disabled = false;
 
-        setStatus("Biên bản họp đã tạo xong! Bạn có thể tải về.", "idle");
+        const memCount = result.memory_context_count || 0;
+        const memHint = memCount > 0 ? ` (dùng ${memCount} events từ memory)` : "";
+        setPaneStatus("mom", `Đã tạo biên bản phiên ✓${memHint}`, "success");
+        setTimeout(() => setPaneStatus("mom", "", ""), 4000);
+
+        if (typeof window.reloadSidebarMeetings === 'function') {
+            window.reloadSidebarMeetings();
+        }
     } catch (err) {
-        setStatus(`Lỗi tạo biên bản: ${err.message}`, "error");
+        setPaneStatus("mom", `Lỗi: ${err.message}`, "error");
         document.getElementById("btn-generate-notes").disabled = false;
     }
 }
+
+// ─── Project Summary (tổng kết project) ─────────────────────────
+
+async function generateProjectSummary() {
+    if (!window.meetingDbId) {
+        alert("Chưa chọn project nào.");
+        return;
+    }
+
+    setPaneStatus("mom", "Đang tạo tổng kết project...", "assessing");
+    const btn = document.getElementById("btn-project-summary");
+    if (btn) btn.disabled = true;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/api/meetings/${window.meetingDbId}/generate-project-summary`,
+            { method: "POST", headers: { "Content-Type": "application/json" } },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || "Tạo tổng kết thất bại");
+        }
+        const result = await resp.json();
+        displayProjectSummary(result.summary);
+        window.currentMomLevel = "project";
+        setPaneStatus(
+            "mom",
+            `Đã tổng kết project ✓ (${result.summary.session_count} phiên)`,
+            "success",
+        );
+        setTimeout(() => setPaneStatus("mom", "", ""), 4000);
+    } catch (err) {
+        setPaneStatus("mom", `Lỗi: ${err.message}`, "error");
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function displayProjectSummary(summary) {
+    const container = document.getElementById("mom-result");
+    if (!container) return;
+
+    let html = `<div class="mom-section">
+        <div class="mom-section-title">📊 Tổng kết project: ${escapeHtml(summary.project_title || "")}</div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;">
+            ${summary.session_count} phiên họp · Tạo lúc: ${(summary.generated_at || "").slice(0, 19).replace("T", " ")}
+        </div>`;
+
+    if (summary.narrative) {
+        html += `<div style="background:#f8f9fa;padding:12px;border-left:3px solid #4a90e2;border-radius:4px;margin-bottom:16px;font-style:italic;">
+            ${escapeHtml(summary.narrative)}
+        </div>`;
+    }
+
+    html += `<div class="mom-section-title" style="margin-top:16px;">⏱ Timeline decisions</div>`;
+    const timeline = summary.decisions_timeline || [];
+    if (timeline.length === 0) {
+        html += `<div style="color:#888;padding:8px;">Chưa có decisions nào trong project này.</div>`;
+    } else {
+        html += `<div class="timeline">`;
+        for (const entry of timeline) {
+            const dt = (entry.date || "").slice(0, 10);
+            html += `<div class="timeline-entry" style="border-left:2px solid #4a90e2;padding-left:14px;margin-bottom:14px;">
+                <div style="font-weight:600;font-size:13px;color:#333;">${dt} — ${escapeHtml(entry.session_label || "")}</div>
+                <ul style="margin:4px 0 0 18px;padding:0;">`;
+            for (const dec of entry.decisions || []) {
+                html += `<li style="margin:3px 0;font-size:13px;">${escapeHtml(dec)}</li>`;
+            }
+            html += `</ul></div>`;
+        }
+        html += `</div>`;
+    }
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+window.generateProjectSummary = generateProjectSummary;
+
+// ─── Button state sync ──────────────────────────────────────────
+// Called whenever currentRecordingId / meetingDbId / transcript state changes.
+// "Biên bản phiên này" enabled iff a recording is selected AND there's transcript.
+// "Tổng kết project" enabled iff a meeting (project) is selected.
+function updateMomButtonStates() {
+    const hasRecording = !!window.currentRecordingId;
+    const hasProject   = !!window.meetingDbId;
+    const hasTranscript = (getFullTranscript() || "").trim().length > 0;
+
+    const genBtn = document.getElementById("btn-generate-notes");
+    if (genBtn) {
+        genBtn.disabled = !(hasRecording && hasTranscript);
+        genBtn.title = !hasRecording
+            ? "Chọn 1 phiên họp trước khi tạo biên bản"
+            : (!hasTranscript ? "Chưa có transcript" : "Tạo biên bản cho phiên đang xem");
+    }
+    const sumBtn = document.getElementById("btn-project-summary");
+    if (sumBtn) {
+        sumBtn.disabled = !hasProject;
+        sumBtn.title = hasProject
+            ? "Tổng kết tất cả phiên họp trong project (timeline decisions)"
+            : "Chọn 1 project trước";
+    }
+}
+window.updateMomButtonStates = updateMomButtonStates;
+// Wire to transcript edits so button enables/disables live
+document.addEventListener("DOMContentLoaded", () => {
+    const t = document.getElementById("transcript");
+    if (t) t.addEventListener("input", updateMomButtonStates);
+    updateMomButtonStates();
+});
 
 function displayMoM(notes) {
     const container = document.getElementById("mom-result");
@@ -387,15 +570,25 @@ function displayMoM(notes) {
     // Action items
     const actionItems = notes.action_items || [];
     if (actionItems.length > 0) {
+        // Group consecutive items with the same PIC — only render the PIC name
+        // on the first row of each group; the rest get an empty PIC cell with
+        // a `.merged` class for visual continuity (faint left border).
+        let prevPic = null;
+        const itemsHtml = actionItems.map(a => {
+            const pic = (a.pic || "").trim();
+            const sameAsPrev = pic && pic === prevPic;
+            prevPic = pic;
+            return `
+                <div class="action-item${sameAsPrev ? " merged" : ""}">
+                    <span class="action-pic">${sameAsPrev ? "" : escapeHtml(pic)}</span>
+                    <span class="action-task">${escapeHtml(a.item || "")}</span>
+                    <span class="action-deadline">${escapeHtml(a.deadline || "")}</span>
+                </div>`;
+        }).join("");
         html += `<div class="mom-section">
             <div class="mom-section-title">Các công việc tiếp theo</div>
             <div style="border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;">
-                ${actionItems.map(a => `
-                    <div class="action-item">
-                        <span class="action-pic">${escapeHtml(a.pic || "")}</span>
-                        <span class="action-task">${escapeHtml(a.item || "")}</span>
-                        <span class="action-deadline">${escapeHtml(a.deadline || "")}</span>
-                    </div>`).join("")}
+                ${itemsHtml}
             </div>
         </div>`;
     }
@@ -410,14 +603,36 @@ function displayMoM(notes) {
 
     container.innerHTML = html;
     container.scrollTop = 0;
+
+    // Hide empty state
+    const momEmpty = document.getElementById("mom-empty");
+    if (momEmpty) momEmpty.style.display = "none";
+
+    // Enable download/PDF buttons now that MoM is on screen.
+    const dl = document.getElementById("btn-download");
+    const pdf = document.getElementById("btn-pdf");
+    if (dl)  dl.disabled = false;
+    if (pdf) pdf.disabled = false;
 }
+// Expose so sidebar load-meeting can render
+window.displayMoM = displayMoM;
 
 function downloadMoM() {
-    if (downloadUrl) window.open(downloadUrl, "_blank");
+    // Tải .md từ backend (re-generate trên server từ meetings.mom_json).
+    if (!window.meetingDbId) {
+        alert("Chưa có meeting để tải.");
+        return;
+    }
+    window.location.href = `${API_BASE}/api/meetings/${window.meetingDbId}/download?fmt=md`;
 }
 
 function downloadPDF() {
-    if (!downloadUrl) return;
+    // Mở print dialog — user "Save as PDF" hoặc print trực tiếp.
+    // CSS @media print sẽ ẩn sidebar/chat, chỉ giữ MoM panel.
+    if (!window.meetingDbId) {
+        alert("Chưa có meeting để in.");
+        return;
+    }
     window.print();
 }
 
@@ -474,41 +689,88 @@ function newSession() {
     downloadUrl = null;
     wsReconnectAttempts = 0;
 
-    // Clear transcript display
+    // Phase D: reset DB meeting + chat session state
+    window.meetingDbId = null;
+    // Clear any leftover "Phiên họp mới cho..." flag + banner
+    window.pendingRecordingForMeetingId = null;
+    document.getElementById('new-recording-banner')?.remove();
+    if (typeof window._restoreTitlePlaceholder === 'function') window._restoreTitlePlaceholder();
+    // Exit project overview mode (newSession = fresh start, not overview)
+    document.body.classList.remove('project-overview-mode');
+    if (typeof chatSessionId !== 'undefined') {
+        try { chatSessionId = null; } catch (e) {}
+    }
+    // Also clear via window if defined in IIFE
+    if ('chatSessionId' in window) window.chatSessionId = null;
+
+    // Clear transcript textarea (UI v5: textarea, not div)
     const transcript = document.getElementById("transcript");
-    transcript.innerHTML = '<p class="placeholder">Đang lắng nghe...</p>';
+    if (transcript) transcript.value = "";
     const manual = document.getElementById("manual-transcript");
-    if (manual) { manual.value = ""; manual.style.display = "none"; transcript.style.display = "block"; }
+    if (manual) { manual.value = ""; }
 
     // Clear MoM result
     const momResult = document.getElementById("mom-result");
     if (momResult) momResult.innerHTML = "";
+    const momEmpty = document.getElementById("mom-empty");
+    if (momEmpty) momEmpty.style.display = "";
+
+    // Clear chat thread (keep welcome + suggested prompts)
+    const chatThread = document.getElementById("chat-thread");
+    if (chatThread) {
+        // Remove everything except first welcome msg + suggested prompts
+        const keep = chatThread.querySelectorAll('.msg-agent:first-child, #suggested-prompts');
+        chatThread.innerHTML = '';
+        keep.forEach(el => chatThread.appendChild(el));
+        // Re-show suggested prompts
+        const prompts = document.getElementById('suggested-prompts');
+        if (prompts) prompts.style.display = '';
+    }
 
     // Reset buttons
-    document.getElementById("btn-start").disabled = false;
-    document.getElementById("btn-stop").disabled = true;
-    document.getElementById("btn-generate-notes").disabled = true;
-    document.getElementById("btn-save-transcript").disabled = true;
-    document.getElementById("download-row").style.display = "none";
-    document.getElementById("btn-download").disabled = true;
-    document.getElementById("btn-pdf").disabled = true;
-    document.getElementById("btn-new-session").style.display = "none";
+    const btnStart = document.getElementById("btn-start");
+    if (btnStart) btnStart.disabled = false;
+    const btnStop = document.getElementById("btn-stop");
+    if (btnStop) btnStop.disabled = true;
+    const btnGen = document.getElementById("btn-generate-notes");
+    if (btnGen) btnGen.disabled = true;
+    const btnSave = document.getElementById("btn-save-transcript");
+    if (btnSave) btnSave.disabled = true;
+    const dlRow = document.getElementById("download-row");
+    if (dlRow) dlRow.style.display = "none";
+    const dlBtn = document.getElementById("btn-download");
+    if (dlBtn) dlBtn.disabled = true;
+    const pdfBtn = document.getElementById("btn-pdf");
+    if (pdfBtn) pdfBtn.disabled = true;
 
     // Reset meeting fields
-    document.getElementById("meeting-title").value = "";
-    document.getElementById("meeting-purpose").value = "";
-    document.getElementById("meeting-venue").value = "";
-    document.getElementById("chaired-by").value = "";
-    document.getElementById("noted-by").value = "";
-    document.getElementById("attendees").value = "";
-    document.getElementById("meeting-date").value = new Date().toISOString().split("T")[0];
+    const titleEl = document.getElementById("meeting-title");
+    if (titleEl) titleEl.value = "";
+    const purposeEl = document.getElementById("meeting-purpose");
+    if (purposeEl) purposeEl.value = "";
+    const venueEl = document.getElementById("meeting-venue");
+    if (venueEl) venueEl.value = "";
+    const chairEl = document.getElementById("chaired-by");
+    if (chairEl) chairEl.value = "";
+    const notedEl = document.getElementById("noted-by");
+    if (notedEl) notedEl.value = "";
+    const attEl = document.getElementById("attendees");
+    if (attEl) attEl.value = "";
+    const dateEl = document.getElementById("meeting-date");
+    if (dateEl) dateEl.value = new Date().toISOString().split("T")[0];
 
     const countEl = document.getElementById("segment-count");
-    if (countEl) countEl.textContent = "";
+    if (countEl) countEl.textContent = "0";
     stopTimer();
-    document.getElementById("timer").style.display = "none";
+    const timerEl = document.getElementById("timer");
+    if (timerEl) timerEl.textContent = "00:00";
     setStatus("Sẵn sàng", "idle");
+
+    // Update meta info display
+    if (typeof window.updateMeta === 'function') window.updateMeta();
 }
+// Expose for IIFE buttons
+window.newSession = newSession;
 
 // ─── Utilities ──────────────────────────────────────────────────
 
@@ -517,6 +779,29 @@ function setStatus(text, state) {
     el.textContent = text;
     el.className = `status ${state}`;
 }
+
+/**
+ * Contextual status — shown as an inline banner INSIDE the relevant pane's
+ * content area (above the textarea / MoM area), not in the header bar.
+ *   target='transcript' → above "Biên bản gốc" textarea (upload / clean)
+ *   target='mom'        → above "Biên bản họp" content (generate MoM)
+ * `text` empty → hide the banner.
+ */
+function setPaneStatus(target, text, state) {
+    const id = target === 'mom' ? 'mom-inline-status' : 'transcript-inline-status';
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!text) {
+        el.classList.add('hidden');
+        el.textContent = '';
+        el.className = `pane-inline-status hidden`;
+        return;
+    }
+    el.classList.remove('hidden');
+    el.textContent = text;
+    el.className = `pane-inline-status ${state || ''}`.trim();
+}
+window.setPaneStatus = setPaneStatus;
 
 function formatTime(seconds) {
     return [Math.floor(seconds / 60), Math.floor(seconds % 60)].map(n => String(n).padStart(2, "0")).join(":");

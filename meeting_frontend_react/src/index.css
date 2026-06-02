@@ -1,0 +1,155 @@
+/* Legacy Mee design system — preserved verbatim from meeting_frontend/style.css.
+   Includes :root tokens, theme switching, layout grid, components, animations. */
+@import "./styles-legacy.css";
+
+/* React mount: original layout relies on body[display:grid] with sidebar + .app
+   as DIRECT children. React wraps everything in #root, which would collapse to
+   a single grid item. `display: contents` makes #root invisible to layout so
+   <aside.sidebar> + <div.app> behave as if they were body's children. */
+#root {
+  display: contents;
+}
+
+/* Project-overview mode overrides:
+   - Show MoMPane on the right (legacy hid it); it renders the project summary
+   - Remove the divider line between meeting-control and overview cards
+   - Keep resizers visible so user can adjust the split */
+body.project-overview-mode .meeting-control { border-bottom: none; }
+body.project-overview-mode .pane-mom { display: flex !important; }
+body.project-overview-mode .resizer { display: block !important; }
+
+/* Per-row delete buttons in sidebar — hidden until row is hovered. */
+.row-delete-btn {
+  opacity: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: var(--r-xs);
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.sidebar-meeting:hover .row-delete-btn,
+.sidebar-recording:hover .row-delete-btn { opacity: 1; }
+.row-delete-btn:hover { color: var(--danger); background: var(--surface-3); }
+
+/* Danger filled button (red) — for destructive confirm dialogs. */
+.btn-danger {
+  background: var(--danger);
+  color: white;
+  border: 1px solid var(--danger);
+}
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 88%, white); }
+
+/* Vertical 3-dot menu button (project row) — visible on hover. */
+.row-menu-btn {
+  opacity: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--r-xs);
+  display: inline-flex;
+  align-items: center;
+  transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.sidebar-meeting:hover .row-menu-btn,
+.sidebar-meeting.active .row-menu-btn,
+.row-menu-btn.open { opacity: 1; }
+.row-menu-btn:hover, .row-menu-btn.open { background: var(--surface-3); color: var(--text); }
+
+/* TipTap Clean editor */
+.clean-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.clean-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.clean-editor-toolbar .tt-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-2);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.clean-editor-toolbar .tt-btn:hover { background: var(--hover); color: var(--text); }
+.clean-editor-toolbar .tt-btn.active { background: var(--accent-soft); color: var(--accent); }
+.clean-editor-toolbar .tt-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-2);
+  margin: 0 4px;
+}
+.clean-editor-content {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 12px 16px;
+  background: var(--surface);
+}
+.tiptap-content { outline: none; min-height: 100%; }
+.tiptap-content p { margin: 0 0 10px 0; line-height: 1.6; font-size: 14px; }
+.tiptap-content p:last-child { margin-bottom: 0; }
+.tiptap-content h2 { font-size: 16px; font-weight: 600; margin: 16px 0 8px; }
+.tiptap-content ul, .tiptap-content ol { margin: 0 0 10px 18px; padding: 0; }
+.tiptap-content li { margin: 3px 0; line-height: 1.5; }
+.tiptap-content strong { font-weight: 600; color: var(--text); }
+.tiptap-content em { font-style: italic; }
+.tiptap-content s { text-decoration: line-through; color: var(--text-mute); }
+
+/* MeetingTag mark — colored inline highlight */
+.tiptap-content .meeting-tag {
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  font-size: inherit;
+  font-weight: 500;
+  border: 1px solid;
+}
+.tiptap-content .meeting-tag.tag-commitment {
+  background: rgba(0, 232, 155, 0.10);
+  color: var(--accent);
+  border-color: rgba(0, 232, 155, 0.35);
+}
+.tiptap-content .meeting-tag.tag-decision {
+  background: rgba(74, 144, 226, 0.12);
+  color: var(--info);
+  border-color: rgba(74, 144, 226, 0.40);
+}
+.tiptap-content .meeting-tag.tag-blocker {
+  background: rgba(255, 107, 133, 0.10);
+  color: var(--danger);
+  border-color: rgba(255, 107, 133, 0.40);
+}
+
+/* Toolbar tag buttons — narrower, color-coded */
+.clean-editor-toolbar .tt-tag {
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.clean-editor-toolbar .tt-tag-commitment.active { background: rgba(0,232,155,0.18); color: var(--accent); }
+.clean-editor-toolbar .tt-tag-decision.active { background: rgba(74,144,226,0.18); color: var(--info); }
+.clean-editor-toolbar .tt-tag-blocker.active { background: rgba(255,107,133,0.18); color: var(--danger); }

@@ -17,6 +17,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from contextlib import asynccontextmanager
+
+from meeting.api.chat import router as chat_router
+from meeting.api.meetings import router as meetings_router
+from meeting.graphs import close_checkpointer, init_checkpointer
 from meeting.memory_client import save_meeting_events
 from meeting.note_generator import generate_meeting_notes
 from meeting.report_generator import generate_mom_markdown
@@ -58,7 +63,133 @@ class CorrectionRequest(BaseModel):
     correct: str
 
 
-def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
+WHISPER_FILE_SIZE_LIMIT = 24 * 1024 * 1024  # 24MB safe under Whisper 25MB hard limit
+CHUNK_DURATION_SEC = 10 * 60  # 10-min chunks → ~19MB at 16kHz mono PCM16
+
+# Hallucination words list (Whisper sometimes outputs these from silence/noise)
+WHISPER_HALLUCINATIONS = [
+    "subscribe", "la la school", "ghiền mì gõ", "không bỏ lỡ",
+    "video hấp dẫn", "cảm ơn các bạn đã theo dõi", "nhớ like",
+    "nhấn chuông", "đăng ký kênh", "like share", "kênh youtube",
+]
+
+
+def _filter_hallucinations(text: str) -> str:
+    """Return empty string if text matches known Whisper hallucination patterns."""
+    text_lower = text.lower()
+    for hw in WHISPER_HALLUCINATIONS:
+        if hw in text_lower:
+            return ""
+    return text
+
+
+def _call_whisper_api(
+    audio_bytes: bytes,
+    filename: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    language: str,
+    timeout: int = 120,
+) -> str:
+    """Single Whisper API call. Returns transcribed text (filtered)."""
+    resp = requests.post(
+        f"{base_url}/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        files={"file": (filename, audio_bytes, "audio/wav")},
+        data={
+            "model": model,
+            "language": language,
+            "response_format": "json",
+            "prompt": prompt,
+        },
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    text = resp.json().get("text", "")
+    return _filter_hallucinations(text)
+
+
+def _chunk_and_transcribe(
+    audio_bytes: bytes,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    language: str,
+) -> tuple[str, int]:
+    """
+    Split large audio into 10-min chunks (mono 16kHz WAV), transcribe each,
+    concat results. Returns (joined_text, chunk_count).
+
+    Uses soundfile to read source (handles MP3/WAV/FLAC), then writes WAV chunks
+    in-memory before sending to Whisper. Resampling to 16kHz handled via numpy.
+    """
+    import numpy as np  # local import — only needed in chunking path
+
+    logging.info(f"[chunking] source size = {len(audio_bytes) / 1024 / 1024:.1f}MB")
+
+    # Read full audio → numpy (any format soundfile supports)
+    audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+
+    # Stereo → mono
+    if audio_data.ndim > 1:
+        audio_data = audio_data.mean(axis=1)
+
+    # Resample to 16kHz if needed (Whisper expects 16k anyway)
+    if sr != 16000:
+        ratio = 16000 / sr
+        new_length = int(len(audio_data) * ratio)
+        audio_data = np.interp(
+            np.linspace(0, len(audio_data), new_length, endpoint=False),
+            np.arange(len(audio_data)),
+            audio_data,
+        ).astype("float32")
+        sr = 16000
+
+    duration_sec = len(audio_data) / sr
+    logging.info(f"[chunking] duration = {duration_sec:.1f}s, sample_rate = {sr}")
+
+    chunk_size = CHUNK_DURATION_SEC * sr  # samples per chunk
+    n_chunks = (len(audio_data) + chunk_size - 1) // chunk_size
+    logging.info(f"[chunking] splitting into {n_chunks} chunks of {CHUNK_DURATION_SEC}s each")
+
+    transcripts = []
+    for idx in range(n_chunks):
+        start = idx * chunk_size
+        end = min(start + chunk_size, len(audio_data))
+        chunk = audio_data[start:end]
+
+        # Write chunk as in-memory WAV
+        wav_buf = io.BytesIO()
+        sf.write(wav_buf, chunk, sr, format="WAV", subtype="PCM_16")
+        wav_buf.seek(0)
+        chunk_bytes = wav_buf.read()
+
+        chunk_mb = len(chunk_bytes) / 1024 / 1024
+        logging.info(
+            f"[chunking] chunk {idx+1}/{n_chunks} ({chunk_mb:.1f}MB) → Whisper"
+        )
+
+        try:
+            text = _call_whisper_api(
+                chunk_bytes, f"chunk_{idx+1}.wav",
+                base_url, api_key, model, prompt, language,
+            )
+            transcripts.append(text)
+        except Exception as e:
+            logging.error(f"[chunking] chunk {idx+1} failed: {e}")
+            transcripts.append(f"[chunk {idx+1} failed: {e}]")
+
+    return "\n".join(t for t in transcripts if t), n_chunks
+
+
+def _build_whisper_prompt(
+    vocab_hints: str = "",
+    language: str = "vi",
+    attendees: str = "",
+) -> str:
     """
     Build an initial_prompt for Whisper to improve Vietnamese transcription quality.
 
@@ -69,9 +200,15 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
       hallucinations on silent/noisy segments.
     - Listing English tech terms tells Whisper to keep them verbatim instead of
       translating (e.g. "deploy" → "triển khai").
+    - Including attendee names helps Whisper preserve them correctly (Sprint B).
     """
     if language != "vi":
-        return vocab_hints.strip() if vocab_hints.strip() else ""
+        parts = []
+        if attendees.strip():
+            parts.append(f"Meeting attendees: {attendees.strip()}.")
+        if vocab_hints.strip():
+            parts.append(vocab_hints.strip())
+        return " ".join(parts)
 
     base = (
         "Đây là bản ghi cuộc họp nội bộ bằng tiếng Việt. "
@@ -81,6 +218,9 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
         "feature, bug, fix, release, merge, commit, dashboard, report. "
         "Giữ nguyên các từ tiếng Anh, không dịch sang tiếng Việt."
     )
+    if attendees.strip():
+        # Names hint helps Whisper preserve them (Sprint B)
+        base += f" Tham dự cuộc họp: {attendees.strip()}."
     if vocab_hints.strip():
         base += f" Chủ đề cuộc họp liên quan đến: {vocab_hints.strip()}."
     pool_fragment = build_pool_prompt_fragment()
@@ -89,11 +229,19 @@ def _build_whisper_prompt(vocab_hints: str = "", language: str = "vi") -> str:
     return base
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: init LangGraph PostgresSaver. Shutdown: close pool."""
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
 def create_app(output_dir: str = None) -> FastAPI:
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
 
-    app = FastAPI(title="Meeting Note Agent")
+    app = FastAPI(title="Meeting Note Agent", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -103,6 +251,11 @@ def create_app(output_dir: str = None) -> FastAPI:
     )
 
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "meeting_frontend")
+
+    # Phase A — DB-backed meetings router
+    app.include_router(meetings_router)
+    # Phase B2 — Chat + HITL router
+    app.include_router(chat_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):
@@ -215,8 +368,13 @@ def create_app(output_dir: str = None) -> FastAPI:
         file: UploadFile = File(...),
         language: str = Form(default="vi"),
         vocab_hints: str = Form(default=""),
+        attendees: str = Form(default=""),
     ):
-        """Upload an audio file and transcribe via VNGCloud MaaS Whisper API."""
+        """Upload an audio file and transcribe via VNGCloud MaaS Whisper API.
+
+        Auto-chunking: files > 24MB are split into 10-min chunks and processed
+        in sequence (avoids Whisper 25MB hard limit).
+        """
         base_url = os.getenv("WHISPER_BASE_URL", "").rstrip("/")
         api_key = os.getenv("WHISPER_API_KEY", "")
         model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3")
@@ -226,7 +384,34 @@ def create_app(output_dir: str = None) -> FastAPI:
 
         audio_bytes = await file.read()
         filename = file.filename or "audio.wav"
+        original_size_mb = len(audio_bytes) / 1024 / 1024
 
+        prompt = _build_whisper_prompt(vocab_hints, language, attendees)
+
+        # ─── Auto-chunking path for large files ───
+        if len(audio_bytes) > WHISPER_FILE_SIZE_LIMIT:
+            logging.info(
+                f"File {filename} is {original_size_mb:.1f}MB > 24MB threshold → auto-chunking"
+            )
+            try:
+                text, n_chunks = _chunk_and_transcribe(
+                    audio_bytes, base_url, api_key, model, prompt, language,
+                )
+                return {
+                    "text": text,
+                    "chunked": True,
+                    "chunks": n_chunks,
+                    "original_size_mb": round(original_size_mb, 1),
+                }
+            except Exception as e:
+                logging.exception("Auto-chunk transcribe failed")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Chunked transcribe failed: {e}",
+                )
+
+        # ─── Standard path: single Whisper call ───
+        # Convert non-WAV to WAV in-memory (Whisper preferred format)
         if not filename.lower().endswith(".wav"):
             try:
                 audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
@@ -238,37 +423,29 @@ def create_app(output_dir: str = None) -> FastAPI:
             except Exception:
                 pass
 
-        prompt = _build_whisper_prompt(vocab_hints, language)
-
         try:
-            resp = requests.post(
-                f"{base_url}/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": (filename, audio_bytes, "audio/wav")},
-                data={
-                    "model": model,
-                    "language": language,
-                    "response_format": "json",
-                    "prompt": prompt,
-                },
-                timeout=60,
+            text = _call_whisper_api(
+                audio_bytes, filename, base_url, api_key, model, prompt, language,
+                timeout=180,  # 3 min — file 20-24MB có thể cần 1-2 phút
             )
-            resp.raise_for_status()
-            result = resp.json()
-            text = result.get("text", "")
-            hallucination_words = [
-                "subscribe", "la la school", "ghiền mì gõ", "không bỏ lỡ",
-                "video hấp dẫn", "cảm ơn các bạn đã theo dõi", "nhớ like",
-                "nhấn chuông", "đăng ký kênh", "like share", "kênh youtube",
-            ]
-            text_lower = text.lower()
-            for hw in hallucination_words:
-                if hw in text_lower:
-                    text = ""
-                    break
-            return {"text": text}
+            return {"text": text, "chunked": False, "size_mb": round(original_size_mb, 1)}
+        except requests.exceptions.HTTPError as e:
+            # Whisper trả HTTP error status — include detail
+            detail = f"Whisper HTTP error: {e}"
+            if hasattr(e, "response") and e.response is not None:
+                body = (e.response.text or "")[:500]
+                detail += f" (status={e.response.status_code}, body={body!r})"
+            logging.error(detail)
+            raise HTTPException(status_code=502, detail=detail)
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Whisper timeout: {e}")
+            raise HTTPException(
+                status_code=504,
+                detail=f"Whisper timeout sau 60s. File có thể quá lớn → restart server (auto-chunk sẽ trigger ở > 24MB)",
+            )
         except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=502, detail=f"Whisper API error: {str(e)}")
+            logging.error(f"Whisper network error: {e}")
+            raise HTTPException(status_code=502, detail=f"Whisper network error: {e}")
 
     @app.get("/api/vocab-pool")
     async def get_vocab_pool():

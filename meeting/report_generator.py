@@ -10,19 +10,32 @@ from datetime import date as date_cls
 def generate_mom_markdown(
     notes: dict,
     output_dir: str = "output",
+    recording_label: str = None,
 ) -> str:
     """
     Generate a Markdown MoM file from structured notes dict.
 
-    Returns:
-        Path to the generated .md file.
+    Filename pattern:
+        MoM_<project>_<recording>_<date>.md   (when recording_label provided)
+        MoM_<project>_<date>.md               (legacy / no recording label)
+
+    Returns path to the generated .md file.
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    def _safe(s, maxlen=40):
+        return (s or "").replace(" ", "_").replace("/", "-").replace("\\", "-")[:maxlen]
+
     meeting_date = notes.get("date", date_cls.today().strftime("%d/%m/%Y"))
-    safe_title = (notes.get("title") or "meeting").replace(" ", "_").replace("/", "-")[:40]
+    safe_project = _safe(notes.get("title")) or "project"
+    safe_record = _safe(recording_label) if recording_label else ""
     safe_date = meeting_date.replace("/", "-").replace(" ", "_")
-    filename = f"MoM_{safe_title}_{safe_date}.md"
+
+    parts = ["MoM", safe_project]
+    if safe_record:
+        parts.append(safe_record)
+    parts.append(safe_date)
+    filename = "_".join(parts) + ".md"
     filepath = os.path.join(output_dir, filename)
 
     lines = []
@@ -52,9 +65,26 @@ def generate_mom_markdown(
     attendees = notes.get("attendees", [])
     if attendees:
         for i, att in enumerate(attendees, 1):
-            name = att.get("name", "")
-            dept = att.get("department", "")
-            title = att.get("title", "")
+            # LLM có thể trả về dict {name, department, title} hoặc plain string
+            if isinstance(att, dict):
+                name = att.get("name", "")
+                dept = att.get("department", "")
+                title = att.get("title", "")
+            elif isinstance(att, str):
+                # Parse "Name (Dept - Title)" or just "Name"
+                s = att.strip()
+                if "(" in s and ")" in s:
+                    name = s[:s.index("(")].strip()
+                    info = s[s.index("(") + 1:s.index(")")].strip()
+                    if "-" in info:
+                        dept, title = [x.strip() for x in info.split("-", 1)]
+                    else:
+                        dept, title = info, ""
+                else:
+                    name, dept, title = s, "", ""
+            else:
+                # Unknown type — skip safely
+                continue
             lines.append(f"| {i} | {name} | {dept} | {title} |")
     else:
         lines.append("| 1 | | | |")
@@ -100,6 +130,54 @@ def generate_mom_markdown(
         lines.append("| | | |")
 
     lines.append("")
+
+    # Decisions
+    decisions = notes.get("decisions", [])
+    if decisions:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Quyết định / Decisions")
+        lines.append("")
+        for d in decisions:
+            if isinstance(d, dict):
+                text = d.get("text", "")
+                by = d.get("by", "")
+                lines.append(f"- **{text}**" + (f" _({by})_" if by else ""))
+            elif isinstance(d, str):
+                lines.append(f"- **{d}**")
+        lines.append("")
+
+    # Commitments
+    commitments = notes.get("commitments", [])
+    if commitments:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Cam kết / Commitments")
+        lines.append("")
+        for c in commitments:
+            if isinstance(c, dict):
+                text = c.get("text", "")
+                by = c.get("by", "")
+                lines.append(f"- {text}" + (f" — _{by}_" if by else ""))
+            elif isinstance(c, str):
+                lines.append(f"- {c}")
+        lines.append("")
+
+    # Blockers
+    blockers = notes.get("blockers", [])
+    if blockers:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Vấn đề / Blockers")
+        lines.append("")
+        for b in blockers:
+            if isinstance(b, dict):
+                text = b.get("text", "")
+                by = b.get("by", "")
+                lines.append(f"- ⚠ {text}" + (f" _(raised by {by})_" if by else ""))
+            elif isinstance(b, str):
+                lines.append(f"- ⚠ {b}")
+        lines.append("")
 
     # Summary
     summary = notes.get("summary", "")

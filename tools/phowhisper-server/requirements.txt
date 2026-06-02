@@ -1,0 +1,16 @@
+# PhoWhisper + pyannote server deps. Install AFTER torch (CUDA-aware).
+#
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r requirements.txt
+
+# Core ASR + diarize
+transformers>=4.40
+pyannote.audio>=3.1
+# Audio I/O — torchaudio installed with torch above; libraries below for fallback
+soundfile
+librosa
+
+# Server
+fastapi
+uvicorn[standard]
+python-multipart

@@ -16,6 +16,8 @@ import argparse
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -27,7 +29,7 @@ from websockets.exceptions import ConnectionClosed
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    load_dotenv(override=True, interpolate=False)
 except ImportError:
     pass
 
@@ -162,12 +164,122 @@ def start_whisper_server(args):
         ws_server.serve_forever()
 
 
+def _parse_db_url(url: str) -> dict:
+    """Extract host/port/db/user from SQLAlchemy URL for display."""
+    m = re.match(r"postgresql(?:\+\w+)?://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(\w+)", url or "")
+    if not m:
+        return {}
+    return {
+        "user": m.group(1),
+        "password": m.group(2),
+        "host": m.group(3),
+        "port": m.group(4) or "5432",
+        "db": m.group(5),
+    }
+
+
+def _docker_running(container_name: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--filter", f"name={container_name}",
+             "--filter", "status=running", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return container_name in out.stdout
+    except Exception:
+        return False
+
+
+class _C:
+    """ANSI colors. Auto-disabled if stdout is not a tty (eg. piped to file)."""
+    _enabled = sys.stdout.isatty()
+    RESET   = "\033[0m"     if _enabled else ""
+    BOLD    = "\033[1m"     if _enabled else ""
+    DIM     = "\033[2m"     if _enabled else ""
+    RED     = "\033[31m"    if _enabled else ""
+    GREEN   = "\033[32m"    if _enabled else ""
+    YELLOW  = "\033[33m"    if _enabled else ""
+    BLUE    = "\033[34m"    if _enabled else ""
+    MAGENTA = "\033[35m"    if _enabled else ""
+    CYAN    = "\033[36m"    if _enabled else ""
+    GRAY    = "\033[90m"    if _enabled else ""
+    BRIGHT_GREEN = "\033[92m" if _enabled else ""
+
+
+def _print_startup_banner(http_port: int, ws_port: int) -> None:
+    c = _C
+    db = _parse_db_url(os.getenv("DATABASE_URL", ""))
+    pg_up = _docker_running("mee-postgres")
+    adminer_up = _docker_running("mee-adminer")
+
+    def status(running: bool) -> str:
+        if running:
+            return f"{c.GREEN}● running{c.RESET}"
+        return f"{c.RED}● stopped{c.RESET} {c.DIM}— run: docker compose up -d{c.RESET}"
+
+    def url(text: str) -> str:
+        return f"{c.BLUE}{text}{c.RESET}"
+
+    def hint(text: str) -> str:
+        return f"{c.DIM}{text}{c.RESET}"
+
+    def method(verb: str) -> str:
+        color = c.YELLOW if verb == "POST" else c.GREEN if verb == "GET" else c.MAGENTA
+        return f"{color}{verb:<6}{c.RESET}"
+
+    line = f"{c.GRAY}─────────────────────────────────────────────────────────────────────────{c.RESET}"
+
+    banner = f"""
+{line}
+  {c.BOLD}{c.BRIGHT_GREEN}🎙  Mee Meeting Agent{c.RESET}
+{line}
+
+  {c.BOLD}{c.CYAN}HTTP API + Frontend{c.RESET}
+    {url(f'http://localhost:{http_port}/')}
+    {url(f'http://localhost:{http_port}/docs')}        {hint('(Swagger — test API)')}
+    {url(f'http://localhost:{http_port}/redoc')}       {hint('(ReDoc — read API)')}
+
+  {c.BOLD}{c.CYAN}WebSocket{c.RESET} {hint('(Whisper realtime STT)')}
+    {url(f'ws://localhost:{ws_port}')}
+
+  {c.BOLD}{c.CYAN}Postgres{c.RESET}    {status(pg_up)}
+    {hint('host=')}{db.get('host', '?')}:{db.get('port', '?')}   {hint('db=')}{db.get('db', '?')}   {hint('user=')}{db.get('user', '?')}
+    {c.DIM}docker exec -it mee-postgres psql -U {db.get('user', 'mee')} -d {db.get('db', 'mee')}{c.RESET}
+
+  {c.BOLD}{c.CYAN}Adminer GUI{c.RESET} {status(adminer_up)}
+    {url('http://localhost:8080/')}
+    {hint(f"Login: System=PostgreSQL  Server=postgres  User={db.get('user', 'mee')}")}
+
+  {c.BOLD}{c.CYAN}Key endpoints{c.RESET} {hint('(DB-backed, Phase A+B)')}
+    {method('POST')} /api/meetings                       {hint('create meeting')}
+    {method('GET')} /api/meetings                       {hint('list meetings')}
+    {method('POST')} /api/meetings/{{id}}/recordings       {hint('start recording')}
+    {method('POST')} /api/recordings/{{id}}/segments       {hint('add segment')}
+    {method('POST')} /api/meetings/{{id}}/generate-mom     {hint('LangGraph MoM gen')}
+    {method('POST')} /api/transcribe                     {hint('Whisper file upload')}
+
+  {c.BOLD}{c.CYAN}Docs{c.RESET} {hint('(Obsidian vault)')}
+    {c.DIM}/home/lap15466/greennode/GreenNode/Meeting Agent/{c.RESET}
+    {hint('README.md  ·  Progress Log  ·  Phase A/B Setup')}
+
+{line}
+"""
+    print(banner, flush=True)
+    if not pg_up:
+        print(
+            f"{c.YELLOW}⚠ WARNING:{c.RESET} Postgres không chạy — endpoints DB sẽ lỗi. "
+            f"Chạy: {c.BOLD}docker compose up -d postgres{c.RESET}\n",
+            flush=True,
+        )
+
+
 def start_http_server(args):
     from meeting.app import create_app
 
     output_dir = os.path.join(os.path.dirname(__file__), "output")
     app = create_app(output_dir=output_dir)
 
+    _print_startup_banner(args.http_port, args.ws_port)
     logger.info(f"Starting Meeting Note HTTP server on http://0.0.0.0:{args.http_port}")
     uvicorn.run(app, host="0.0.0.0", port=args.http_port, log_level="info")
 
