@@ -47,12 +47,21 @@ document.addEventListener("DOMContentLoaded", () => {
 async function startRecording() {
     const title = document.getElementById("meeting-title").value.trim();
     if (!title) {
-        alert("Vui lòng nhập tiêu đề cuộc họp.");
+        alert("Vui lòng nhập tiêu đề project.");
         return;
     }
 
     const wsUrl = document.getElementById("ws-url").value.trim();
     const language = document.getElementById("language").value;
+
+    // Reset transcript state for a fresh recording (avoid stale segments from
+    // a previous session showing up alongside new ones with reset timestamps)
+    allCompletedSegments = [];
+    wsReconnectAttempts = 0;
+    const transcriptEl = document.getElementById("transcript");
+    if (transcriptEl) transcriptEl.value = "";
+    const countEl = document.getElementById("segment-count");
+    if (countEl) countEl.textContent = "0 đoạn";
 
     setStatus("Đang kết nối tới server transcription...", "connecting");
 
@@ -135,6 +144,11 @@ function stopRecording() {
         websocket.close();
     }
     stopAudioCapture();
+    // Capture actual recording duration so it can be passed to import-transcript
+    // when user later clicks Generate MoM (avoids 00:00 in meta bar).
+    if (startTime) {
+        window.lastRecordedDurationSec = Math.floor((Date.now() - startTime) / 1000);
+    }
     stopTimer();
     setStatus("Đã dừng ghi âm. Bạn có thể tạo biên bản họp.", "idle");
     document.getElementById("btn-start").disabled = false;
@@ -168,9 +182,18 @@ function reconnectWebSocket(wsUrl, language) {
 
 async function startAudioCapture() {
     try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
-        });
+        // Honor a saved mic preference (set via Audio Devices modal). Falls
+        // back to system default if the saved id is invalid/missing.
+        const savedMic = localStorage.getItem('mee.audioInputDeviceId') || '';
+        const audioConstraints = {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+        };
+        if (savedMic) audioConstraints.deviceId = { ideal: savedMic };
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
         audioContext = new AudioContext();
         const source = audioContext.createMediaStreamSource(mediaStream);
         await audioContext.audioWorklet.addModule("audioprocessor.js");
@@ -268,7 +291,7 @@ async function uploadAudioFile(input) {
 
     const language = document.getElementById("language").value;
     const vocabHints = document.getElementById("vocab-hints").value.trim();
-    setStatus(`Đang upload và transcribe "${file.name}"...`, "connecting");
+    setPaneStatus("transcript", `Đang upload "${file.name}"...`, "connecting");
 
     const formData = new FormData();
     formData.append("file", file);
@@ -281,18 +304,42 @@ async function uploadAudioFile(input) {
 
         const result = await resp.json();
         const text = result.text || "";
-        if (!text.trim()) { setStatus("Không phát hiện giọng nói trong file.", "error"); return; }
+        if (!text.trim()) { setPaneStatus("transcript", "Không phát hiện giọng nói trong file.", "error"); return; }
 
         allCompletedSegments = [{ start: "0.000", text, completed: true }];
         const container = document.getElementById("transcript");
         // textarea — use .value, not innerHTML
         container.value = `[upload] ${text}`;
 
-        setStatus(`Đã transcribe "${file.name}". Bạn có thể tạo biên bản họp.`, "idle");
+        // Persist transcript into DB so Clean/Generate MoM read fresh segments —
+        // otherwise Clean returns 400 "No segments" and MoM reads stale segments
+        // from a sibling recording in the same meeting.
+        console.log("[upload] before persist — meetingDbId=", window.meetingDbId,
+                    "currentRecordingId=", window.currentRecordingId,
+                    "pendingRecordingForMeetingId=", window.pendingRecordingForMeetingId);
+        try {
+            setPaneStatus("transcript", "Đang lưu transcript vào DB...", "assessing");
+            const imported = await window.importTranscriptToDb(text);
+            console.log("[upload] persist OK →", imported);
+            window.currentRecordingId = imported.recordingId;
+            setPaneStatus(
+                "transcript",
+                `Đã transcribe + lưu DB "${file.name}" ✓ (${imported.segmentCount} segments → rec ${imported.recordingId.slice(0,8)})`,
+                "success",
+            );
+        } catch (persistErr) {
+            console.error("[upload] persist failed:", persistErr);
+            setPaneStatus(
+                "transcript",
+                `Đã transcribe nhưng lưu DB lỗi: ${persistErr.message}`,
+                "error",
+            );
+        }
+        setTimeout(() => setPaneStatus("transcript", "", ""), 3000);
         document.getElementById("btn-generate-notes").disabled = false;
         document.getElementById("btn-save-transcript").disabled = false;
     } catch (err) {
-        setStatus(`Lỗi upload: ${err.message}`, "error");
+        setPaneStatus("transcript", `Lỗi upload: ${err.message}`, "error");
     }
     input.value = "";
 }
@@ -306,21 +353,22 @@ async function generateNotes() {
         return;
     }
 
-    setStatus("Đang chuẩn bị cuộc họp...", "assessing");
+    setPaneStatus("mom", "Đang chuẩn bị...", "assessing");
     document.getElementById("btn-generate-notes").disabled = true;
     document.getElementById("btn-new-session").style.display = "inline-block";
 
     try {
-        // Phase D.3+D.4: use DB-backed endpoint via LangGraph
-        // 1. Ensure DB meeting exists (creates if needed)
-        // 2. Import transcript → recording + segments in DB
-        // 3. Call /api/meetings/{id}/generate-mom (LangGraph, uses memory)
-        setStatus("Đang import transcript vào DB...", "assessing");
+        // Per-recording MoM. Always re-import transcript so DB segments match
+        // what's in the textarea (live record path doesn't auto-sync to DB).
+        setPaneStatus("mom", "Đang lưu transcript vào DB...", "assessing");
         const imported = await window.importTranscriptToDb(transcript);
-        const meetingId = imported.meetingId;
+        const recordingId = imported.recordingId;
+        if (!recordingId) {
+            throw new Error("Không xác định được recording_id. Vui lòng chọn 1 phiên họp trước.");
+        }
+        setPaneStatus("mom", `Đang tạo biên bản phiên họp qua LangGraph (${imported.segmentCount} segments)...`, "assessing");
 
-        setStatus(`Đang tạo biên bản qua LangGraph (${imported.segmentCount} segments)...`, "assessing");
-        const resp = await fetch(`${API_BASE}/api/meetings/${meetingId}/generate-mom`, {
+        const resp = await fetch(`${API_BASE}/api/recordings/${recordingId}/generate-mom`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
         });
@@ -332,37 +380,141 @@ async function generateNotes() {
 
         const result = await resp.json();
         displayMoM(result.notes);
+        window.currentRecordingMom = result.notes;
+        window.currentMomLevel = "recording";
 
-        // download_url not returned by new endpoint — construct from meeting_id
-        // (Phase D follow-up: add /api/meetings/{id}/download endpoint)
-        const savedMd = result.saved_paths?.md;
-        if (savedMd) {
-            // Path on server — for now, fallback to old download endpoint nếu có session_id
-            downloadUrl = null;  // disable download until D follow-up
-        }
+        // Per-recording download URL
+        downloadUrl = `${API_BASE}/api/recordings/${recordingId}/download?fmt=md`;
 
         const downloadRow = document.getElementById("download-row");
         if (downloadRow) downloadRow.style.display = "flex";
         const dlBtn = document.getElementById("btn-download");
-        if (dlBtn) dlBtn.disabled = !savedMd;
+        if (dlBtn) dlBtn.disabled = false;
         const pdfBtn = document.getElementById("btn-pdf");
-        if (pdfBtn) pdfBtn.disabled = !savedMd;
+        if (pdfBtn) pdfBtn.disabled = false;
 
         const memCount = result.memory_context_count || 0;
-        const memHint = memCount > 0
-            ? ` (đã dùng ${memCount} events từ memory)`
-            : "";
-        setStatus(`Biên bản đã tạo xong${memHint}.`, "idle");
+        const memHint = memCount > 0 ? ` (dùng ${memCount} events từ memory)` : "";
+        setPaneStatus("mom", `Đã tạo biên bản phiên ✓${memHint}`, "success");
+        setTimeout(() => setPaneStatus("mom", "", ""), 4000);
 
-        // Refresh sidebar to show new meeting in list
         if (typeof window.reloadSidebarMeetings === 'function') {
             window.reloadSidebarMeetings();
         }
     } catch (err) {
-        setStatus(`Lỗi tạo biên bản: ${err.message}`, "error");
+        setPaneStatus("mom", `Lỗi: ${err.message}`, "error");
         document.getElementById("btn-generate-notes").disabled = false;
     }
 }
+
+// ─── Project Summary (tổng kết project) ─────────────────────────
+
+async function generateProjectSummary() {
+    if (!window.meetingDbId) {
+        alert("Chưa chọn project nào.");
+        return;
+    }
+
+    setPaneStatus("mom", "Đang tạo tổng kết project...", "assessing");
+    const btn = document.getElementById("btn-project-summary");
+    if (btn) btn.disabled = true;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/api/meetings/${window.meetingDbId}/generate-project-summary`,
+            { method: "POST", headers: { "Content-Type": "application/json" } },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || "Tạo tổng kết thất bại");
+        }
+        const result = await resp.json();
+        displayProjectSummary(result.summary);
+        window.currentMomLevel = "project";
+        setPaneStatus(
+            "mom",
+            `Đã tổng kết project ✓ (${result.summary.session_count} phiên)`,
+            "success",
+        );
+        setTimeout(() => setPaneStatus("mom", "", ""), 4000);
+    } catch (err) {
+        setPaneStatus("mom", `Lỗi: ${err.message}`, "error");
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function displayProjectSummary(summary) {
+    const container = document.getElementById("mom-result");
+    if (!container) return;
+
+    let html = `<div class="mom-section">
+        <div class="mom-section-title">📊 Tổng kết project: ${escapeHtml(summary.project_title || "")}</div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;">
+            ${summary.session_count} phiên họp · Tạo lúc: ${(summary.generated_at || "").slice(0, 19).replace("T", " ")}
+        </div>`;
+
+    if (summary.narrative) {
+        html += `<div style="background:#f8f9fa;padding:12px;border-left:3px solid #4a90e2;border-radius:4px;margin-bottom:16px;font-style:italic;">
+            ${escapeHtml(summary.narrative)}
+        </div>`;
+    }
+
+    html += `<div class="mom-section-title" style="margin-top:16px;">⏱ Timeline decisions</div>`;
+    const timeline = summary.decisions_timeline || [];
+    if (timeline.length === 0) {
+        html += `<div style="color:#888;padding:8px;">Chưa có decisions nào trong project này.</div>`;
+    } else {
+        html += `<div class="timeline">`;
+        for (const entry of timeline) {
+            const dt = (entry.date || "").slice(0, 10);
+            html += `<div class="timeline-entry" style="border-left:2px solid #4a90e2;padding-left:14px;margin-bottom:14px;">
+                <div style="font-weight:600;font-size:13px;color:#333;">${dt} — ${escapeHtml(entry.session_label || "")}</div>
+                <ul style="margin:4px 0 0 18px;padding:0;">`;
+            for (const dec of entry.decisions || []) {
+                html += `<li style="margin:3px 0;font-size:13px;">${escapeHtml(dec)}</li>`;
+            }
+            html += `</ul></div>`;
+        }
+        html += `</div>`;
+    }
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+window.generateProjectSummary = generateProjectSummary;
+
+// ─── Button state sync ──────────────────────────────────────────
+// Called whenever currentRecordingId / meetingDbId / transcript state changes.
+// "Biên bản phiên này" enabled iff a recording is selected AND there's transcript.
+// "Tổng kết project" enabled iff a meeting (project) is selected.
+function updateMomButtonStates() {
+    const hasRecording = !!window.currentRecordingId;
+    const hasProject   = !!window.meetingDbId;
+    const hasTranscript = (getFullTranscript() || "").trim().length > 0;
+
+    const genBtn = document.getElementById("btn-generate-notes");
+    if (genBtn) {
+        genBtn.disabled = !(hasRecording && hasTranscript);
+        genBtn.title = !hasRecording
+            ? "Chọn 1 phiên họp trước khi tạo biên bản"
+            : (!hasTranscript ? "Chưa có transcript" : "Tạo biên bản cho phiên đang xem");
+    }
+    const sumBtn = document.getElementById("btn-project-summary");
+    if (sumBtn) {
+        sumBtn.disabled = !hasProject;
+        sumBtn.title = hasProject
+            ? "Tổng kết tất cả phiên họp trong project (timeline decisions)"
+            : "Chọn 1 project trước";
+    }
+}
+window.updateMomButtonStates = updateMomButtonStates;
+// Wire to transcript edits so button enables/disables live
+document.addEventListener("DOMContentLoaded", () => {
+    const t = document.getElementById("transcript");
+    if (t) t.addEventListener("input", updateMomButtonStates);
+    updateMomButtonStates();
+});
 
 function displayMoM(notes) {
     const container = document.getElementById("mom-result");
@@ -418,15 +570,25 @@ function displayMoM(notes) {
     // Action items
     const actionItems = notes.action_items || [];
     if (actionItems.length > 0) {
+        // Group consecutive items with the same PIC — only render the PIC name
+        // on the first row of each group; the rest get an empty PIC cell with
+        // a `.merged` class for visual continuity (faint left border).
+        let prevPic = null;
+        const itemsHtml = actionItems.map(a => {
+            const pic = (a.pic || "").trim();
+            const sameAsPrev = pic && pic === prevPic;
+            prevPic = pic;
+            return `
+                <div class="action-item${sameAsPrev ? " merged" : ""}">
+                    <span class="action-pic">${sameAsPrev ? "" : escapeHtml(pic)}</span>
+                    <span class="action-task">${escapeHtml(a.item || "")}</span>
+                    <span class="action-deadline">${escapeHtml(a.deadline || "")}</span>
+                </div>`;
+        }).join("");
         html += `<div class="mom-section">
             <div class="mom-section-title">Các công việc tiếp theo</div>
             <div style="border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;">
-                ${actionItems.map(a => `
-                    <div class="action-item">
-                        <span class="action-pic">${escapeHtml(a.pic || "")}</span>
-                        <span class="action-task">${escapeHtml(a.item || "")}</span>
-                        <span class="action-deadline">${escapeHtml(a.deadline || "")}</span>
-                    </div>`).join("")}
+                ${itemsHtml}
             </div>
         </div>`;
     }
@@ -445,16 +607,32 @@ function displayMoM(notes) {
     // Hide empty state
     const momEmpty = document.getElementById("mom-empty");
     if (momEmpty) momEmpty.style.display = "none";
+
+    // Enable download/PDF buttons now that MoM is on screen.
+    const dl = document.getElementById("btn-download");
+    const pdf = document.getElementById("btn-pdf");
+    if (dl)  dl.disabled = false;
+    if (pdf) pdf.disabled = false;
 }
 // Expose so sidebar load-meeting can render
 window.displayMoM = displayMoM;
 
 function downloadMoM() {
-    if (downloadUrl) window.open(downloadUrl, "_blank");
+    // Tải .md từ backend (re-generate trên server từ meetings.mom_json).
+    if (!window.meetingDbId) {
+        alert("Chưa có meeting để tải.");
+        return;
+    }
+    window.location.href = `${API_BASE}/api/meetings/${window.meetingDbId}/download?fmt=md`;
 }
 
 function downloadPDF() {
-    if (!downloadUrl) return;
+    // Mở print dialog — user "Save as PDF" hoặc print trực tiếp.
+    // CSS @media print sẽ ẩn sidebar/chat, chỉ giữ MoM panel.
+    if (!window.meetingDbId) {
+        alert("Chưa có meeting để in.");
+        return;
+    }
     window.print();
 }
 
@@ -513,6 +691,12 @@ function newSession() {
 
     // Phase D: reset DB meeting + chat session state
     window.meetingDbId = null;
+    // Clear any leftover "Phiên họp mới cho..." flag + banner
+    window.pendingRecordingForMeetingId = null;
+    document.getElementById('new-recording-banner')?.remove();
+    if (typeof window._restoreTitlePlaceholder === 'function') window._restoreTitlePlaceholder();
+    // Exit project overview mode (newSession = fresh start, not overview)
+    document.body.classList.remove('project-overview-mode');
     if (typeof chatSessionId !== 'undefined') {
         try { chatSessionId = null; } catch (e) {}
     }
@@ -595,6 +779,29 @@ function setStatus(text, state) {
     el.textContent = text;
     el.className = `status ${state}`;
 }
+
+/**
+ * Contextual status — shown as an inline banner INSIDE the relevant pane's
+ * content area (above the textarea / MoM area), not in the header bar.
+ *   target='transcript' → above "Biên bản gốc" textarea (upload / clean)
+ *   target='mom'        → above "Biên bản họp" content (generate MoM)
+ * `text` empty → hide the banner.
+ */
+function setPaneStatus(target, text, state) {
+    const id = target === 'mom' ? 'mom-inline-status' : 'transcript-inline-status';
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!text) {
+        el.classList.add('hidden');
+        el.textContent = '';
+        el.className = `pane-inline-status hidden`;
+        return;
+    }
+    el.classList.remove('hidden');
+    el.textContent = text;
+    el.className = `pane-inline-status ${state || ''}`.trim();
+}
+window.setPaneStatus = setPaneStatus;
 
 function formatTime(seconds) {
     return [Math.floor(seconds / 60), Math.floor(seconds % 60)].map(n => String(n).padStart(2, "0")).join(":");

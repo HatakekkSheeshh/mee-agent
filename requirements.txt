@@ -17,3 +17,4 @@ alembic>=1.13.0
 # === LangGraph (Phase B) ===
 langgraph>=0.2.50
 langgraph-checkpoint-postgres>=2.0.0
+pgvector

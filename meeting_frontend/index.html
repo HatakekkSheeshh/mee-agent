@@ -12,6 +12,41 @@
 <body>
 
 <!-- ══ LEFT SIDEBAR (collapsible) ═══════════════════════════════════ -->
+<!-- Audio Devices modal — pick mic / speaker. Hidden by default. -->
+<div id="mee-devices-modal" class="mee-modal hidden" aria-hidden="true">
+    <div class="mee-modal-backdrop"></div>
+    <div class="mee-modal-card" role="dialog" aria-modal="true">
+        <div class="mee-modal-title">Thiết bị âm thanh</div>
+        <div class="mee-modal-body">
+            <label class="mee-modal-label" for="dev-mic">Microphone (input)</label>
+            <select id="dev-mic" class="mee-modal-input"></select>
+            <label class="mee-modal-label" for="dev-spk" style="margin-top:14px">Loa / tai nghe (output)</label>
+            <select id="dev-spk" class="mee-modal-input"></select>
+            <div class="mee-modal-hint muted" style="margin-top:8px;font-size:11px;">Browser cần permission mic mới hiển thị tên thiết bị thật.</div>
+        </div>
+        <div class="mee-modal-actions">
+            <button class="btn btn-ghost btn-sm" data-act="cancel" type="button">Hủy</button>
+            <button class="btn btn-primary btn-sm" data-act="ok" type="button">Lưu</button>
+        </div>
+    </div>
+</div>
+
+<!-- Reusable prompt modal (overlay + card). Hidden by default. -->
+<div id="mee-modal" class="mee-modal hidden" aria-hidden="true">
+    <div class="mee-modal-backdrop"></div>
+    <div class="mee-modal-card" role="dialog" aria-modal="true">
+        <div class="mee-modal-title" id="mee-modal-title">Tạo project mới</div>
+        <div class="mee-modal-body">
+            <input type="text" class="mee-modal-input" id="mee-modal-input"
+                   placeholder="Tên project (vd: Sprint Planning Q2)" autocomplete="off">
+        </div>
+        <div class="mee-modal-actions">
+            <button class="btn btn-ghost btn-sm" data-act="cancel" type="button">Hủy</button>
+            <button class="btn btn-primary btn-sm" data-act="ok" type="button">Tạo</button>
+        </div>
+    </div>
+</div>
+
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <button class="btn btn-primary btn-sm sidebar-new-btn" id="sidebar-new-meeting" type="button">
@@ -19,12 +54,12 @@
                 <line x1="12" y1="5" x2="12" y2="19"/>
                 <line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
-            Cuộc họp mới
+            Project mới
         </button>
     </div>
 
     <div class="sidebar-body">
-        <div class="sidebar-section-label">Cuộc họp gần đây</div>
+        <div class="sidebar-section-label">Project gần đây</div>
         <div class="sidebar-meetings" id="sidebar-meetings-list">
             <div class="sidebar-empty muted">Đang tải...</div>
         </div>
@@ -210,12 +245,10 @@
                         <span data-i18n="btn.upload">Upload</span>
                     </label>
                     <input type="file" id="file-upload" accept="audio/*" onchange="uploadAudioFile(this)" hidden>
-                    <button class="icon-btn icon-btn-sm" id="transcript-search-btn" data-tip="Search (Cmd+F)" data-i18n-tip="tip.search" type="button">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    </button>
                 </div>
             </div>
             <div class="pane-content">
+                <div id="transcript-inline-status" class="pane-inline-status hidden" aria-live="polite"></div>
                 <textarea id="transcript" class="transcript-box"
                           placeholder="Start recording, upload audio, or paste your transcript here." data-i18n-ph="transcriptPlaceholder"></textarea>
                 <textarea id="manual-transcript" class="transcript-box hidden" placeholder="Paste or type your transcript here..." data-i18n-ph="transcriptPlaceholder"></textarea>
@@ -227,12 +260,20 @@
                     </div>
                 </div>
 
+                <!-- Phase E6 — Project overview view (shown when project has > 1 recording) -->
+                <div id="project-overview" class="project-overview hidden">
+                    <div class="project-overview-empty muted">Chưa có phiên họp nào.</div>
+                </div>
+
                 <div class="pane-footer">
                     <button id="btn-save-transcript" class="btn btn-ghost btn-sm" type="button" onclick="saveTranscript()" disabled data-i18n="btn.saveTxt">Save .txt</button>
                     <div class="spacer"></div>
                     <button id="btn-new-session" class="btn btn-ghost btn-sm" type="button" onclick="newSession()" style="display:none" data-i18n="btn.newMeeting">New meeting</button>
-                    <button id="btn-generate-notes" class="btn btn-primary btn-sm" type="button" onclick="generateNotes()" disabled>
-                        <span data-i18n="btn.generateMom">Generate MoM</span>
+                    <button id="btn-project-summary" class="btn btn-ghost btn-sm" type="button" onclick="generateProjectSummary()" disabled title="Tổng kết tất cả phiên họp trong project (timeline decisions)">
+                        Tổng kết project
+                    </button>
+                    <button id="btn-generate-notes" class="btn btn-primary btn-sm" type="button" onclick="generateNotes()" disabled title="Chọn 1 phiên họp trước khi tạo biên bản">
+                        <span data-i18n="btn.generateMom">Biên bản phiên này</span>
                         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                     </button>
                 </div>
@@ -247,15 +288,16 @@
                 <span class="pane-title" data-i18n="pane.minutes">Minutes</span>
                 <div class="pane-meta">
                     <span id="mom-status-text" class="mono small" data-i18n="mom.empty">empty</span>
-                    <button id="btn-download" class="icon-btn icon-btn-sm" data-tip="Download .md" data-i18n-tip="tip.downloadMd" type="button" onclick="downloadMoM()" disabled>
+                    <button id="btn-download" class="icon-btn icon-btn-sm" data-tip="Tải .md" type="button" onclick="downloadMoM()" disabled title="Tải file .md">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     </button>
-                    <button id="btn-pdf" class="icon-btn icon-btn-sm" data-tip="Download PDF" data-i18n-tip="tip.downloadPdf" type="button" onclick="downloadPDF()" disabled>
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <button id="btn-pdf" class="icon-btn icon-btn-sm" data-tip="In / Lưu PDF" type="button" onclick="downloadPDF()" disabled title="In hoặc lưu PDF">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                     </button>
                 </div>
             </div>
             <div class="pane-content">
+                <div id="mom-inline-status" class="pane-inline-status hidden" aria-live="polite"></div>
                 <div class="mom-empty" id="mom-empty">
                     <div class="mom-empty-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -338,20 +380,11 @@
                 <button class="seg-opt" data-value="en" type="button" aria-label="English">EN</button>
             </div>
         </div>
-        <button class="dd-item" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
-            <span data-i18n="menu.shortcuts">Keyboard shortcuts</span>
-            <span class="dd-value mono">⌘?</span>
-        </button>
         <div class="dd-divider"></div>
-        <div class="dd-label" data-i18n="menu.meeting">Meeting</div>
-        <button class="dd-item" type="button">
+        <div class="dd-label" data-i18n="menu.meeting">Project</div>
+        <button class="dd-item" type="button" onclick="document.getElementById('settings-menu').classList.remove('open'); showDevicesModal();">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             <span data-i18n="menu.audioPrefs">Audio preferences</span>
-        </button>
-        <button class="dd-item" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            <span data-i18n="menu.transcriptPrefs">Transcript preferences</span>
         </button>
     </div>
 
@@ -398,7 +431,7 @@
 </div>
 
 <script src="vocab_hints.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=mom-two-level"></script>
 <script>
 'use strict';
 
@@ -413,7 +446,7 @@ const STRINGS = {
         'tip.settings':              'Cài đặt',
         'tip.toggleAgent':           'Mở/đóng Agent',
         // meeting control
-        'meeting.titlePlaceholder':  'Cuộc họp chưa đặt tên',
+        'meeting.titlePlaceholder':  'Phiên họp chưa đặt tên',
         'meta.noDate':               'Chưa có ngày',
         'meta.noPeople':             'Chưa có người tham dự',
         'meta.person':               'người',
@@ -428,13 +461,13 @@ const STRINGS = {
         'details.venue':             'Địa điểm',
         'details.venuePlaceholder':  'Online / Văn phòng',
         'details.purpose':           'Mục đích',
-        'details.purposePlaceholder':'Cuộc họp về gì?',
+        'details.purposePlaceholder':'Project về gì?',
         'details.chairedBy':         'Chủ trì',
         'details.notedBy':           'Người ghi',
         'details.attendees':         'Người tham dự',
         'details.attendeesPlaceholder':'Linh (PM), Tuấn (Eng)',
         'details.language':          'Ngôn ngữ',
-        'details.meetingLang':       'Ngôn ngữ cuộc họp',
+        'details.meetingLang':       'Ngôn ngữ project',
         'details.meetingLangHint':   'Giúp Whisper nhận dạng chính xác hơn',
         'details.ws':                'WebSocket',
         'details.namePlaceholder':   'Tên',
@@ -449,7 +482,7 @@ const STRINGS = {
         'transcriptPlaceholder':     'Bắt đầu ghi âm, tải audio lên, hoặc paste nội dung vào đây.',
         'tip.search':                'Tìm kiếm (Cmd+F)',
         'btn.saveTxt':               'Lưu .txt',
-        'btn.newMeeting':            'Cuộc họp mới',
+        'btn.newMeeting':            'Project mới',
         'btn.generateMom':           'Tạo Biên bản',
         // MoM pane
         'pane.minutes':              'Biên bản họp',
@@ -461,7 +494,7 @@ const STRINGS = {
         'tip.downloadPdf':           'Tải PDF',
         // Agent pane
         'pane.agent':                'Trợ lý Mee',
-        'agent.noMeeting':           'chưa có cuộc họp',
+        'agent.noMeeting':           'chưa có project',
         'agent.welcome':             'Xin chào! Hỏi tôi tóm tắt, gửi email, hoặc tạo task. Action có side-effect sẽ xin phép trước.',
         'agent.justNow':             'vừa xong',
         'agent.prompt1':             'Có những action items nào?',
@@ -476,17 +509,17 @@ const STRINGS = {
         'menu.themeLight':           'Sáng',
         'menu.language':             'Ngôn ngữ',
         'menu.shortcuts':            'Phím tắt',
-        'menu.meeting':              'Cuộc họp',
+        'menu.meeting':              'Project',
         'menu.audioPrefs':           'Cài đặt âm thanh',
         'menu.transcriptPrefs':      'Cài đặt phiên dịch',
         // Invite menu
-        'invite.share':              'Chia sẻ cuộc họp',
+        'invite.share':              'Chia sẻ project',
         'invite.copyLink':           'Sao chép link mời',
         'invite.invite':             'Mời cộng tác viên',
         'invite.permissions':        'Quyền truy cập',
         // Avatar menu
         'avatar.profile':            'Hồ sơ',
-        'avatar.myMeetings':         'Cuộc họp của tôi',
+        'avatar.myMeetings':         'Project của tôi',
         'avatar.billing':            'Thanh toán',
         'avatar.signOut':            'Đăng xuất',
     },
@@ -497,7 +530,7 @@ const STRINGS = {
         'tip.settings':              'Settings',
         'tip.toggleAgent':           'Toggle Agent',
         // meeting control
-        'meeting.titlePlaceholder':  'Untitled meeting',
+        'meeting.titlePlaceholder':  'Untitled project',
         'meta.noDate':               'No date',
         'meta.noPeople':             'No participants',
         'meta.person':               'person',
@@ -518,7 +551,7 @@ const STRINGS = {
         'details.attendees':         'Attendees',
         'details.attendeesPlaceholder':'Linh (PM), Tuấn (Eng)',
         'details.language':          'Language',
-        'details.meetingLang':       'Meeting language',
+        'details.meetingLang':       'Project language',
         'details.meetingLangHint':   'Helps Whisper transcribe more accurately',
         'details.ws':                'WebSocket',
         'details.namePlaceholder':   'Name',
@@ -533,7 +566,7 @@ const STRINGS = {
         'transcriptPlaceholder':     'Start recording, upload audio, or paste your transcript here.',
         'tip.search':                'Search (Cmd+F)',
         'btn.saveTxt':               'Save .txt',
-        'btn.newMeeting':            'New meeting',
+        'btn.newMeeting':            'New project',
         'btn.generateMom':           'Generate MoM',
         // MoM pane
         'pane.minutes':              'Minutes',
@@ -545,7 +578,7 @@ const STRINGS = {
         'tip.downloadPdf':           'Download PDF',
         // Agent pane
         'pane.agent':                'Agent',
-        'agent.noMeeting':           'no meeting',
+        'agent.noMeeting':           'no project',
         'agent.welcome':             "Hi! Ask me to summarize, send emails, or create tasks. Actions with side-effects will ask for approval first.",
         'agent.justNow':             'just now',
         'agent.prompt1':             'What are the action items?',
@@ -560,7 +593,7 @@ const STRINGS = {
         'menu.themeLight':           'Light',
         'menu.language':             'Language',
         'menu.shortcuts':            'Keyboard shortcuts',
-        'menu.meeting':              'Meeting',
+        'menu.meeting':              'Project',
         'menu.audioPrefs':           'Audio preferences',
         'menu.transcriptPrefs':      'Transcript preferences',
         // Invite menu
@@ -793,7 +826,9 @@ sidebarToggle?.addEventListener('click', () => {
 sidebarCollapse?.addEventListener('click', () => setSidebarOpen(false));
 
 sidebarNewBtn?.addEventListener('click', () => {
-    if (typeof window.newSession === 'function') {
+    if (typeof window.newProject === 'function') {
+        window.newProject();
+    } else if (typeof window.newSession === 'function') {
         window.newSession();
     } else {
         location.reload();
@@ -815,7 +850,7 @@ async function reloadSidebarMeetings() {
         const resp = await fetch('/api/meetings');
         const items = await resp.json();
         if (!items.length) {
-            sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Chưa có cuộc họp nào</div>';
+            sidebarListEl.innerHTML = '<div class="sidebar-empty muted">Chưa có project nào</div>';
             return;
         }
 
@@ -830,12 +865,16 @@ async function reloadSidebarMeetings() {
                     <div class="sidebar-meeting ${isActiveMeeting ? 'active' : ''}" data-id="${m.id}">
                         <svg class="sidebar-caret" viewBox="0 0 12 12" width="9" height="9"><path fill="currentColor" d="M4 2l5 4-5 4z"/></svg>
                         <div class="sidebar-meeting-content">
-                            <div class="sidebar-meeting-title">${escapeHtml(m.title)}</div>
+                            <div class="sidebar-meeting-title">
+                                ${m.is_pinned ? '<span class="pin-icon" title="Đã ghim">📌</span>' : ''}
+                                ${escapeHtml(m.title)}
+                            </div>
                             <div class="sidebar-meeting-meta">
                                 ${shortDate(m.date)}
-                                ${m.has_mom ? '<span class="sidebar-meeting-badge">MoM</span>' : ''}
+                                ${m.has_summary ? '<span class="sidebar-meeting-badge" title="Đã có tổng kết project">Σ</span>' : ''}
                             </div>
                         </div>
+                        <button class="sidebar-meeting-menu-btn" data-id="${m.id}" data-title="${escapeHtml(m.title)}" data-pinned="${m.is_pinned ? '1':'0'}" title="Tùy chọn" aria-label="Menu">⋯</button>
                     </div>
                     <div class="sidebar-recordings" data-meeting="${m.id}">
                         ${expanded ? '<div class="sidebar-rec-loading muted">Đang load...</div>' : ''}
@@ -843,6 +882,14 @@ async function reloadSidebarMeetings() {
                 </div>
             `;
         }).join('');
+
+        // Wire ⋯ menu button — show context menu, stop propagation so meeting click doesn't fire
+        sidebarListEl.querySelectorAll('.sidebar-meeting-menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showMeetingContextMenu(btn);
+            });
+        });
 
         // Click meeting row: expand/collapse + load
         sidebarListEl.querySelectorAll('.sidebar-meeting').forEach(el => {
@@ -894,7 +941,7 @@ async function renderRecordingsForMeeting(meetingId, containerEl) {
         if (!recordings.length) {
             containerEl.innerHTML = `
                 <div class="sidebar-add-rec" data-meeting="${meetingId}">
-                    ⊕ Thêm phiên ghi âm
+                    ⊕ Thêm phiên họp
                 </div>`;
         } else {
             containerEl.innerHTML = recordings.map((r, idx) => `
@@ -905,7 +952,7 @@ async function renderRecordingsForMeeting(meetingId, containerEl) {
                 </div>
             `).join('') + `
                 <div class="sidebar-add-rec" data-meeting="${meetingId}">
-                    ⊕ Thêm phiên ghi âm
+                    ⊕ Thêm phiên họp
                 </div>`;
         }
 
@@ -929,18 +976,30 @@ async function renderRecordingsForMeeting(meetingId, containerEl) {
 }
 
 async function loadRecording(meetingId, recordingId) {
-    // If switching meeting context, also load meeting fields/MoM
+    // If switching meeting context, also load meeting fields/MoM.
+    // Use loadMeetingMetaOnly to avoid re-triggering project-overview routing
+    // (which would call loadRecording again → infinite loop).
     if (window.meetingDbId !== meetingId) {
-        await loadMeeting(meetingId);
+        await loadMeetingMetaOnly(meetingId);
     }
     window.currentRecordingId = recordingId;
+    if (typeof window.updateMomButtonStates === 'function') window.updateMomButtonStates();
 
-    // Update sidebar active highlight
+    // Hide project overview + reshow raw/clean toggle (recording-level view)
+    document.body.classList.remove('project-overview-mode');
+    document.getElementById('project-overview')?.classList.add('hidden');
+    viewToggle?.classList.remove('hidden');
+    rawTextarea?.classList.remove('hidden');
+
+    // Sync sidebar highlights: only the clicked recording is active, parent
+    // project is NOT highlighted (user is "inside" the recording, not at
+    // project level).
+    sidebarListEl.querySelectorAll('.sidebar-meeting.active').forEach(el => el.classList.remove('active'));
     sidebarListEl.querySelectorAll('.sidebar-recording').forEach(el => {
         el.classList.toggle('active', el.dataset.rec === recordingId);
     });
 
-    // Fetch recording transcript
+    // Fetch recording transcript + meta (label, segment_count, duration_sec)
     const transcriptEl = document.getElementById('transcript');
     if (transcriptEl) {
         transcriptEl.value = '(đang load recording...)';
@@ -948,6 +1007,19 @@ async function loadRecording(meetingId, recordingId) {
             const resp = await fetch(`/api/recordings/${recordingId}/transcript`);
             const data = await resp.json();
             transcriptEl.value = data.transcript || '(recording không có segments)';
+            // Title field now reflects the recording's own label (per-recording rename)
+            const titleEl = document.getElementById('meeting-title');
+            if (titleEl) titleEl.value = data.session_label || '';
+            // Meta bar: show this recording's segment count + duration
+            const segEl = document.getElementById('segment-count');
+            if (segEl) segEl.textContent = String(data.segment_count || 0);
+            const timerEl = document.getElementById('timer');
+            if (timerEl) {
+                const sec = data.duration_sec || 0;
+                const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+                const ss = String(sec % 60).padStart(2, '0');
+                timerEl.textContent = `${mm}:${ss}`;
+            }
         } catch (err) {
             transcriptEl.value = `(lỗi: ${err.message})`;
         }
@@ -965,99 +1037,455 @@ async function loadRecording(meetingId, recordingId) {
     if (typeof setTranscriptView === 'function') setTranscriptView('raw');
 }
 
-function promptAddRecording(meetingId) {
-    const text = prompt('Paste transcript text cho phiên ghi âm mới:');
-    if (!text || !text.trim()) return;
-    addRecordingToMeeting(meetingId, text.trim());
+/**
+ * Open a fresh "new recording" view (same UX as Cuộc họp mới) but stamped
+ * with the parent meeting context — when user saves transcript / generates MoM,
+ * recording is appended to this meeting instead of creating a new one.
+ */
+async function newRecordingForMeeting(meetingId) {
+    // Look up meeting title for banner
+    let meetingTitle = '';
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`);
+        if (resp.ok) {
+            const m = await resp.json();
+            meetingTitle = m.title || '';
+        }
+    } catch (e) {}
+
+    // Reuse newSession() to clear everything (transcript, segments, chat, fields)
+    if (typeof newSession === 'function') {
+        newSession();
+    }
+
+    // Mark this as a "pending recording for existing meeting" so generate flow
+    // appends to it instead of creating a new meeting. Keep meetingDbId set
+    // (= the project id) so the sidebar highlights the active project; the
+    // pending flag overrides the save path to append-mode anyway.
+    window.meetingDbId = meetingId;
+    window.pendingRecordingForMeetingId = meetingId;
+    window.currentRecordingId = null;
+    if (typeof window.updateMomButtonStates === 'function') window.updateMomButtonStates();
+
+    // Exit overview mode (we're now "inside" a draft recording)
+    document.body.classList.remove('project-overview-mode');
+
+    // Sync sidebar highlight: clear stale recording-active states, mark the
+    // current project as the active row in the sidebar.
+    sidebarListEl?.querySelectorAll('.sidebar-recording.active').forEach(el => el.classList.remove('active'));
+    sidebarListEl?.querySelectorAll('.sidebar-meeting').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === meetingId);
+    });
+
+    // Swap title placeholder to "Phiên họp chưa đặt tên" (restored on dismiss/save)
+    const titleInput = document.getElementById('meeting-title');
+    if (titleInput) {
+        if (!titleInput.dataset.originalPh) {
+            titleInput.dataset.originalPh = titleInput.placeholder || '';
+        }
+        titleInput.placeholder = 'Phiên họp chưa đặt tên';
+    }
+
+    showNewRecordingBanner(meetingTitle);
 }
 
-async function addRecordingToMeeting(meetingId, rawText) {
+function _restoreTitlePlaceholder() {
+    const titleInput = document.getElementById('meeting-title');
+    if (titleInput && titleInput.dataset.originalPh) {
+        titleInput.placeholder = titleInput.dataset.originalPh;
+        delete titleInput.dataset.originalPh;
+    }
+}
+
+function showNewRecordingBanner(meetingTitle) {
+    // Idempotent: remove any old banner first.
+    document.getElementById('new-recording-banner')?.remove();
+    // Anchor banner to the meeting-control section (right panel header area)
+    // so it always renders in-flow above the title, never as a stray top-left
+    // element via document.body fallback.
+    const anchor = document.querySelector('.meeting-control');
+    if (!anchor) return;
+    const banner = document.createElement('div');
+    banner.id = 'new-recording-banner';
+    banner.className = 'new-recording-banner';
+    banner.innerHTML = `
+        <span class="nrb-icon">⊕</span>
+        <span class="nrb-text">Phiên họp mới · gắn vào: <strong>${escapeHtml(meetingTitle || 'project')}</strong></span>
+        <button class="nrb-close" onclick="dismissNewRecordingBanner()" aria-label="Hủy">×</button>
+    `;
+    anchor.parentNode?.insertBefore(banner, anchor);
+}
+
+function dismissNewRecordingBanner() {
+    document.getElementById('new-recording-banner')?.remove();
+    window.pendingRecordingForMeetingId = null;
+    _restoreTitlePlaceholder();
+}
+
+// ─── Context menu (Share / Rename / Pin / Delete) ───────────────
+
+function showMeetingContextMenu(btn) {
+    document.getElementById('meeting-ctx-menu')?.remove();   // close any existing
+    const meetingId = btn.dataset.id;
+    const title = btn.dataset.title || '';
+    const isPinned = btn.dataset.pinned === '1';
+    const rect = btn.getBoundingClientRect();
+
+    const menu = document.createElement('div');
+    menu.id = 'meeting-ctx-menu';
+    menu.className = 'ctx-menu';
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.left = `${rect.right - 180}px`;
+    menu.innerHTML = `
+        <div class="ctx-item" data-act="share">Share project</div>
+        <div class="ctx-item" data-act="rename">Rename project</div>
+        <div class="ctx-item" data-act="pin">${isPinned ? 'Unpin project' : 'Pin project'}</div>
+        <div class="ctx-item ctx-danger" data-act="delete">Delete project</div>
+    `;
+    document.body.appendChild(menu);
+
+    menu.querySelectorAll('.ctx-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const act = item.dataset.act;
+            menu.remove();
+            if (act === 'share')   return shareMeeting(meetingId);
+            if (act === 'rename')  return renameMeeting(meetingId, title);
+            if (act === 'pin')     return togglePinMeeting(meetingId, !isPinned);
+            if (act === 'delete')  return deleteMeeting(meetingId, title);
+        });
+    });
+
+    // Close on outside click / escape
+    setTimeout(() => {
+        const off = (e) => {
+            if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', off); }
+        };
+        document.addEventListener('click', off);
+        document.addEventListener('keydown', function esc(e) {
+            if (e.key === 'Escape') { menu.remove(); document.removeEventListener('keydown', esc); }
+        });
+    }, 0);
+}
+
+function showToast(text, type) {
+    const toast = document.createElement('div');
+    toast.className = `mee-toast ${type || 'info'}`;
+    toast.textContent = text;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2400);
+}
+
+async function shareMeeting(meetingId) {
+    const url = `${window.location.origin}${window.location.pathname.replace(/\/$/, '')}?meeting=${meetingId}`;
     try {
-        const resp = await fetch(`/api/meetings/${meetingId}/import-transcript`, {
+        await navigator.clipboard.writeText(url);
+        showToast('Đã copy link project ✓', 'success');
+    } catch (e) {
+        showToast(`Link: ${url}`, 'info');
+    }
+}
+
+async function renameMeeting(meetingId, currentTitle) {
+    const newTitle = prompt('Tên mới cho project:', currentTitle);
+    if (!newTitle || !newTitle.trim() || newTitle.trim() === currentTitle) return;
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({title: newTitle.trim()}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast('Đã đổi tên ✓', 'success');
+        await reloadSidebarMeetings();
+        if (window.meetingDbId === meetingId) {
+            const el = document.getElementById('meeting-title');
+            if (el) el.value = newTitle.trim();
+        }
+    } catch (err) {
+        showToast(`Lỗi: ${err.message}`, 'error');
+    }
+}
+
+async function togglePinMeeting(meetingId, pin) {
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({is_pinned: pin}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast(pin ? 'Đã ghim 📌' : 'Đã bỏ ghim', 'success');
+        await reloadSidebarMeetings();
+    } catch (err) {
+        showToast(`Lỗi: ${err.message}`, 'error');
+    }
+}
+
+async function deleteMeeting(meetingId, title) {
+    if (!confirm(`Xóa project "${title}"? Hành động này không thể hoàn tác.`)) return;
+    try {
+        const resp = await fetch(`/api/meetings/${meetingId}`, {method: 'DELETE'});
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast('Đã xóa project', 'success');
+        if (window.meetingDbId === meetingId) {
+            window.meetingDbId = null;
+            window.currentRecordingId = null;
+            if (typeof window.updateMomButtonStates === 'function') window.updateMomButtonStates();
+            if (typeof newSession === 'function') newSession();
+        }
+        await reloadSidebarMeetings();
+    } catch (err) {
+        showToast(`Lỗi: ${err.message}`, 'error');
+    }
+}
+
+// Keep old name as alias so existing handlers still work
+async function promptAddRecording(meetingId) {
+    return newRecordingForMeeting(meetingId);
+}
+
+/**
+ * Themed prompt modal. Returns Promise<string|null> — string on submit,
+ * null on cancel (backdrop click, Esc, Hủy button, or empty input).
+ */
+function promptModal({title, placeholder, defaultValue, okText, cancelText} = {}) {
+    return new Promise((resolve) => {
+        const modal  = document.getElementById('mee-modal');
+        const titleEl = document.getElementById('mee-modal-title');
+        const input  = document.getElementById('mee-modal-input');
+        const btnOk     = modal.querySelector('button[data-act="ok"]');
+        const btnCancel = modal.querySelector('button[data-act="cancel"]');
+        const backdrop  = modal.querySelector('.mee-modal-backdrop');
+
+        if (title) titleEl.textContent = title;
+        input.placeholder = placeholder || '';
+        input.value = defaultValue || '';
+        if (okText) btnOk.textContent = okText;
+        if (cancelText) btnCancel.textContent = cancelText;
+
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        setTimeout(() => input.focus(), 50);
+
+        function cleanup() {
+            modal.classList.add('hidden');
+            modal.setAttribute('aria-hidden', 'true');
+            btnOk.removeEventListener('click', onOk);
+            btnCancel.removeEventListener('click', onCancel);
+            backdrop.removeEventListener('click', onCancel);
+            input.removeEventListener('keydown', onKey);
+        }
+        function onOk()     { const v = input.value.trim(); cleanup(); resolve(v || null); }
+        function onCancel() { cleanup(); resolve(null); }
+        function onKey(e) {
+            if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+            else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }
+        btnOk.addEventListener('click', onOk);
+        btnCancel.addEventListener('click', onCancel);
+        backdrop.addEventListener('click', onCancel);
+        input.addEventListener('keydown', onKey);
+    });
+}
+
+/**
+ * Audio Devices modal — list mic + speaker devices, persist selection to
+ * localStorage. `startAudioCapture` reads localStorage to pick the mic
+ * deviceId on the next recording.
+ */
+async function showDevicesModal() {
+    const modal = document.getElementById('mee-devices-modal');
+    const micSel = document.getElementById('dev-mic');
+    const spkSel = document.getElementById('dev-spk');
+    const btnOk = modal.querySelector('button[data-act="ok"]');
+    const btnCancel = modal.querySelector('button[data-act="cancel"]');
+    const backdrop = modal.querySelector('.mee-modal-backdrop');
+
+    // Browser only exposes device labels after permission is granted. Try a
+    // quick getUserMedia to ensure labels are populated, then stop the stream.
+    try {
+        const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tmp.getTracks().forEach(t => t.stop());
+    } catch (e) {
+        // Permission denied — devices will still list but with empty labels.
+    }
+
+    let devices;
+    try {
+        devices = await navigator.mediaDevices.enumerateDevices();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(`Lỗi: ${e.message}`, 'error');
+        return;
+    }
+
+    const savedMic = localStorage.getItem('mee.audioInputDeviceId') || '';
+    const savedSpk = localStorage.getItem('mee.audioOutputDeviceId') || '';
+    const fill = (sel, kind, saved) => {
+        sel.innerHTML = '<option value="">Default (mặc định hệ thống)</option>';
+        devices.filter(d => d.kind === kind).forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.textContent = d.label || `(unknown ${kind})`;
+            if (d.deviceId === saved) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    };
+    fill(micSel, 'audioinput', savedMic);
+    fill(spkSel, 'audiooutput', savedSpk);
+
+    modal.classList.remove('hidden');
+
+    const cleanup = () => {
+        modal.classList.add('hidden');
+        btnOk.removeEventListener('click', onSave);
+        btnCancel.removeEventListener('click', onCancel);
+        backdrop.removeEventListener('click', onCancel);
+    };
+    const onSave = () => {
+        localStorage.setItem('mee.audioInputDeviceId', micSel.value);
+        localStorage.setItem('mee.audioOutputDeviceId', spkSel.value);
+        cleanup();
+        if (typeof showToast === 'function') showToast('Đã lưu thiết bị ✓', 'success');
+    };
+    const onCancel = () => cleanup();
+    btnOk.addEventListener('click', onSave);
+    btnCancel.addEventListener('click', onCancel);
+    backdrop.addEventListener('click', onCancel);
+}
+window.showDevicesModal = showDevicesModal;
+
+/**
+ * "Project mới" — ask for project name first, then create empty project in
+ * DB and switch to a fresh new-recording UI bound to it. Clicking later
+ * "+ Thêm phiên" inside the project will reuse it for subsequent recordings.
+ */
+async function newProject() {
+    const name = await promptModal({
+        title: 'Tạo project mới',
+        placeholder: 'Tên project (vd: Sprint Planning Q2)',
+        okText: 'Tạo',
+        cancelText: 'Hủy',
+    });
+    if (!name) return;   // cancelled or blank
+
+    try {
+        // Auto-set date to today so sidebar shows the date pill (Postgres `date`
+        // column is nullable; FE displays "·" when null).
+        const todayIso = new Date().toISOString().split('T')[0];
+        const resp = await fetch('/api/meetings', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                text: rawText,
-                session_label: `Recording ${new Date().toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'})}`,
-                replace: false,   // ← append, không xóa cũ
-            }),
+            body: JSON.stringify({title: name, date: todayIso}),
         });
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.detail || 'Add recording failed');
-        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-        // Refresh sidebar recordings list
-        expandedMeetings.add(meetingId);
+
+        // Refresh sidebar so the new project shows in the list
         await reloadSidebarMeetings();
-        // Auto-switch to new recording
-        await loadRecording(meetingId, data.recording_id);
+
+        // Project = folder. Drop the user inside an empty "Phiên họp chưa
+        // đặt tên" bound to this new project — same UX as "+ Thêm phiên họp"
+        // inside an existing project. When they save, the recording gets
+        // attached to this project.
+        await newRecordingForMeeting(data.id);
+
+        if (typeof showToast === 'function') showToast(`Đã tạo project "${name}" ✓`, 'success');
     } catch (err) {
-        alert(`Lỗi: ${err.message}`);
+        if (typeof showToast === 'function') {
+            showToast(`Lỗi tạo project: ${err.message}`, 'error');
+        } else {
+            alert(`Lỗi tạo project: ${err.message}`);
+        }
     }
 }
 
 // Expose
 window.loadRecording = loadRecording;
 window.promptAddRecording = promptAddRecording;
+window.newRecordingForMeeting = newRecordingForMeeting;
+window.newProject = newProject;
+window.dismissNewRecordingBanner = dismissNewRecordingBanner;
+window._restoreTitlePlaceholder = _restoreTitlePlaceholder;
+
+/**
+ * Fetch meeting + populate fields/meta/MoM. No routing — used both by
+ * loadMeeting (which then routes to overview or first-recording) and by
+ * loadRecording (when switching meeting context, to keep header in sync).
+ */
+async function loadMeetingMetaOnly(meetingId) {
+    const resp = await fetch(`/api/meetings/${meetingId}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const m = await resp.json();
+
+    // Reset chat session (different meeting = different chat)
+    if ('chatSessionId' in window) window.chatSessionId = null;
+    try { chatSessionId = null; } catch (e) {}
+    window.meetingDbId = m.id;
+    window.pendingRecordingForMeetingId = null;
+    document.getElementById('new-recording-banner')?.remove();
+    if (typeof _restoreTitlePlaceholder === 'function') _restoreTitlePlaceholder();
+
+    // Populate form fields
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    setVal('meeting-title', m.title);
+    setVal('meeting-purpose', m.purpose);
+    setVal('meeting-venue', m.venue);
+    setVal('meeting-date', m.date);
+    setVal('chaired-by', m.chaired_by);
+    setVal('noted-by', m.noted_by);
+    if (m.attendees && Array.isArray(m.attendees)) {
+        const attStr = m.attendees.map(a =>
+            a.department ? `${a.name} (${a.department})` : a.name
+        ).join(', ');
+        setVal('attendees', attStr);
+    }
+
+    // Meta bar: project-level totals (overridden per-recording in loadRecording)
+    const recordings = m.recordings || [];
+    const totalSegs = recordings.reduce((sum, r) => sum + (r.segment_count || 0), 0);
+    const segEl = document.getElementById('segment-count');
+    if (segEl) segEl.textContent = String(totalSegs);
+    const timerEl = document.getElementById('timer');
+    if (timerEl) timerEl.textContent = '00:00';
+
+    return m;
+}
 
 async function loadMeeting(meetingId) {
     try {
-        const resp = await fetch(`/api/meetings/${meetingId}`);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const m = await resp.json();
+        const m = await loadMeetingMetaOnly(meetingId);
+        const recordings = m.recordings || [];
 
-        // Reset chat session (different meeting = different chat)
-        if ('chatSessionId' in window) window.chatSessionId = null;
-        try { chatSessionId = null; } catch (e) {}
-        window.meetingDbId = m.id;
-
-        // Populate fields
-        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-        setVal('meeting-title', m.title);
-        setVal('meeting-purpose', m.purpose);
-        setVal('meeting-venue', m.venue);
-        setVal('meeting-date', m.date);
-        setVal('chaired-by', m.chaired_by);
-        setVal('noted-by', m.noted_by);
-        if (m.attendees && Array.isArray(m.attendees)) {
-            const attStr = m.attendees.map(a =>
-                a.department ? `${a.name} (${a.department})` : a.name
-            ).join(', ');
-            setVal('attendees', attStr);
+        // Phase E6 routing:
+        //   0 recordings → enter "Phiên họp chưa đặt tên" inside the project
+        //                  (title field = recording label, not project name)
+        //   1 recording  → auto-load that recording's screen
+        //   >1 recordings → project overview list (cards)
+        if (recordings.length === 1) {
+            return loadRecording(m.id, recordings[0].id);
         }
-
-        // Load raw transcript text from DB
-        const transcriptEl = document.getElementById('transcript');
-        if (transcriptEl) {
-            transcriptEl.value = '(đang load transcript...)';
-            try {
-                const tResp = await fetch(`/api/meetings/${m.id}/transcript`);
-                if (tResp.ok) {
-                    const tData = await tResp.json();
-                    transcriptEl.value = tData.transcript || '(meeting chưa có transcript)';
-                } else {
-                    transcriptEl.value = '(không load được transcript)';
-                }
-            } catch (e) {
-                transcriptEl.value = `(lỗi load: ${e.message})`;
-            }
+        if (recordings.length === 0) {
+            // Empty project — treat as if user just clicked "+ Thêm phiên họp"
+            // so title field reads "Phiên họp chưa đặt tên" instead of the
+            // project name. Also shows the green banner with project context.
+            document.getElementById('project-overview')?.classList.add('hidden');
+            viewToggle?.classList.remove('hidden');
+            rawTextarea?.classList.remove('hidden');
+            cleanContainer?.classList.add('hidden');
+            return newRecordingForMeeting(m.id);
         }
+        // Multi → overview list of recordings
+        showProjectOverview(m, recordings);
 
-        // Reset clean view — user phải click toggle Clean để fetch lại
-        if (typeof cleanFetched !== 'undefined') {
-            cleanFetched = false;
-        }
-        const cleanContainer = document.getElementById('transcript-clean');
-        if (cleanContainer) {
-            cleanContainer.innerHTML = `
+        if (typeof cleanFetched !== 'undefined') cleanFetched = false;
+        const cleanContainerEl = document.getElementById('transcript-clean');
+        if (cleanContainerEl) {
+            cleanContainerEl.innerHTML = `
                 <div class="transcript-clean-empty muted">
-                    Click "Clean" để LLM format lại transcript của meeting này.
+                    Chọn 1 phiên họp để xem clean view.
                 </div>`;
-        }
-        // Switch về Raw view khi load meeting
-        if (typeof setTranscriptView === 'function') {
-            setTranscriptView('raw');
         }
 
         // Show MoM if exists
@@ -1120,15 +1548,99 @@ function setTranscriptView(view) {
     viewToggle.querySelectorAll('.view-toggle-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.view === view);
     });
+    // Project overview is always hidden when toggling raw/clean (those are
+    // recording-level views, overview is project-level).
+    const overview = document.getElementById('project-overview');
+    if (overview) overview.classList.add('hidden');
+    const regenBtn = document.getElementById('btn-regen-clean');
     if (view === 'raw') {
         rawTextarea.classList.remove('hidden');
         cleanContainer.classList.add('hidden');
+        regenBtn?.classList.add('hidden');
     } else {
         rawTextarea.classList.add('hidden');
         cleanContainer.classList.remove('hidden');
+        regenBtn?.classList.remove('hidden');
         if (!cleanFetched) fetchCleanTranscript();
     }
 }
+
+// Wire regenerate button — call clean endpoint with regenerate=true
+document.getElementById('btn-regen-clean')?.addEventListener('click', async () => {
+    if (window.currentRecordingId) {
+        cleanFetched = false;
+        await fetchCleanForRecording(window.currentRecordingId, /* regenerate */ true);
+    } else if (window.meetingDbId) {
+        // Meeting-level clean (legacy path) — no cache, always reruns LLM
+        cleanFetched = false;
+        await fetchCleanTranscript();
+    }
+});
+
+/**
+ * Project overview: shown when user clicks a project with > 1 recordings.
+ * Renders a list of recording cards. Click a card → load that recording.
+ */
+function showProjectOverview(meeting, recordings) {
+    const overview = document.getElementById('project-overview');
+    if (!overview) return;
+
+    // Activate "project overview mode" → CSS hides meta-row, MoM pane,
+    // transcript header/footer (only title + cards visible).
+    document.body.classList.add('project-overview-mode');
+
+    // Sidebar: only project highlighted, no recording active.
+    sidebarListEl?.querySelectorAll('.sidebar-recording.active').forEach(el => el.classList.remove('active'));
+    sidebarListEl?.querySelectorAll('.sidebar-meeting').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === meeting.id);
+    });
+
+    // Hide raw + clean views
+    rawTextarea?.classList.add('hidden');
+    cleanContainer?.classList.add('hidden');
+
+    // Hide raw/clean toggle (no specific recording in focus)
+    viewToggle?.classList.add('hidden');
+
+    overview.classList.remove('hidden');
+
+    if (!recordings.length) {
+        overview.innerHTML = `
+            <div class="project-overview-empty muted">
+                Project này chưa có phiên họp nào.<br>
+                Paste text, upload audio, hoặc bấm "Ghi âm" để tạo phiên đầu tiên.
+            </div>`;
+        return;
+    }
+
+    const fmtDate = (iso) => {
+        if (!iso) return '·';
+        try { return new Date(iso).toLocaleDateString('vi-VN', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); }
+        catch { return '·'; }
+    };
+
+    overview.innerHTML = `
+        <div class="po-header">
+            <div class="po-title">${escapeHtml(meeting.title || 'Phiên họp chưa đặt tên')}</div>
+            <div class="po-subtitle muted">${recordings.length} phiên họp</div>
+        </div>
+        <div class="po-list">
+            ${recordings.map((r, idx) => `
+                <div class="po-card" data-rec="${r.id}">
+                    <div class="po-card-num">${idx + 1}</div>
+                    <div class="po-card-main">
+                        <div class="po-card-title">${escapeHtml(r.session_label || `Recording ${idx + 1}`)}</div>
+                        <div class="po-card-meta muted">${fmtDate(r.started_at)} · ${r.segment_count || 0} đoạn</div>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    overview.querySelectorAll('.po-card').forEach(card => {
+        card.addEventListener('click', () => loadRecording(meeting.id, card.dataset.rec));
+    });
+}
+window.showProjectOverview = showProjectOverview;
 
 async function fetchCleanTranscript() {
     // Per-recording clean view (if recording selected), else meeting-level (joined)
@@ -1156,10 +1668,15 @@ async function fetchCleanTranscript() {
     }
 }
 
-async function fetchCleanForRecording(recordingId) {
-    cleanContainer.innerHTML = '<div class="transcript-clean-empty muted">Đang xử lý LLM cho recording này...</div>';
+async function fetchCleanForRecording(recordingId, regenerate = false) {
+    const msg = regenerate
+        ? 'Đang tạo lại clean (call LLM)...'
+        : 'Đang xử lý LLM clean...';
+    cleanContainer.innerHTML = `<div class="transcript-clean-empty muted">${msg}</div>`;
+    if (typeof window.setPaneStatus === 'function') window.setPaneStatus('transcript', msg, 'assessing');
     try {
-        const resp = await fetch(`/api/recordings/${recordingId}/clean`, { method: 'POST' });
+        const url = `/api/recordings/${recordingId}/clean${regenerate ? '?regenerate=true' : ''}`;
+        const resp = await fetch(url, { method: 'POST' });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
             throw new Error(err.detail || `HTTP ${resp.status}`);
@@ -1167,8 +1684,16 @@ async function fetchCleanForRecording(recordingId) {
         const data = await resp.json();
         renderCleanSegments(data.clean_segments || []);
         cleanFetched = true;
+        if (typeof window.setPaneStatus === 'function') {
+            const tag = data.cached ? 'cache hit' : 'LLM done';
+            window.setPaneStatus('transcript', `Clean ${tag} ✓`, 'success');
+            setTimeout(() => window.setPaneStatus('transcript', '', ''), 2500);
+        }
     } catch (err) {
         cleanContainer.innerHTML = `<div class="transcript-clean-empty muted">Lỗi: ${escapeHtml(err.message)}</div>`;
+        if (typeof window.setPaneStatus === 'function') {
+            window.setPaneStatus('transcript', `Lỗi clean: ${err.message}`, 'error');
+        }
     }
 }
 
@@ -1313,6 +1838,11 @@ function parseAttendees(str) {
 }
 
 async function ensureMeetingDbId() {
+    // "+ Thêm phiên họp" mode: stick to the parent meeting, never create a new one
+    if (window.pendingRecordingForMeetingId) {
+        window.meetingDbId = window.pendingRecordingForMeetingId;
+        return window.meetingDbId;
+    }
     if (window.meetingDbId) return window.meetingDbId;
     const title = document.getElementById('meeting-title').value.trim() || 'Untitled meeting';
     const dateVal = document.getElementById('meeting-date')?.value || null;
@@ -1342,24 +1872,52 @@ async function ensureMeetingDbId() {
  * Splits text into segments by newline / sentence boundary.
  */
 async function importTranscriptToDb(rawText) {
+    const isAppendMode = !!window.pendingRecordingForMeetingId;
     const meetingId = await ensureMeetingDbId();
 
-    // Single endpoint — atomic: delete old recordings + create new + split segments
-    // replace=true (default) → tránh bug accumulate khi paste nhiều lần
+    // Recording label = whatever user typed in the title field — so sidebar shows
+    // the same name they entered (e.g. "Alo"). Falls back to auto-label if blank.
+    const titleVal = (document.getElementById('meeting-title')?.value || '').trim();
+    const session_label = titleVal
+        || (isAppendMode
+            ? `Recording ${new Date().toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'})}`
+            : 'Imported transcript');
+
+    // Append mode (new recording for existing meeting) → replace=false, keep old recordings.
+    // Otherwise → replace=true so re-saving doesn't accumulate stale recordings.
+    // If FE has measured live-record duration recently, pass it through so the
+    // recording row stores the actual duration (not just text-word estimate).
+    const measuredDur = window.lastRecordedDurationSec || null;
+    // If a recording was already materialized (title-blur created it), TARGET it
+    // — backend will wipe its segments + insert fresh ones, no new recording.
+    const existingRecId = window.currentRecordingId || null;
     const resp = await fetch(`/api/meetings/${meetingId}/import-transcript`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             text: rawText,
-            session_label: 'Imported transcript',
-            replace: true,
+            session_label,
+            replace: !isAppendMode && !existingRecId,
+            duration_sec: measuredDur,
+            recording_id: existingRecId,
         }),
     });
+    window.lastRecordedDurationSec = null;   // one-shot, don't reuse next save
     if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.detail || 'Import transcript failed');
     }
     const data = await resp.json();
+    // After successful append, clear pending flag + banner so subsequent saves don't re-append
+    if (isAppendMode) {
+        window.pendingRecordingForMeetingId = null;
+        document.getElementById('new-recording-banner')?.remove();
+        _restoreTitlePlaceholder();
+    }
+    // CRITICAL: bind the freshly-created recording so a subsequent "Tạo biên bản"
+    // click takes the skip-import path and doesn't wipe existing recordings.
+    window.currentRecordingId = data.recording_id;
+    if (typeof window.updateMomButtonStates === 'function') window.updateMomButtonStates();
     return {
         meetingId,
         recordingId: data.recording_id,
@@ -1621,6 +2179,65 @@ if (typeof VOCAB_HINTS !== 'undefined') {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updateMeta);
 });
+
+// Auto-save title field on blur — 3 modes:
+//   (a) Pending recording (just clicked "+ Thêm phiên họp" or new project) →
+//       CREATE empty recording with that label, bind currentRecordingId,
+//       show it in sidebar immediately.
+//   (b) Existing recording in focus → PATCH /api/recordings/{id}
+//   (c) Project-level (no recording context) → PATCH /api/meetings/{id}
+const titleEl = document.getElementById('meeting-title');
+if (titleEl) {
+    titleEl.addEventListener('blur', async () => {
+        const val = titleEl.value.trim();
+        if (!val) return;
+        try {
+            // (a) Pending mode → materialize the recording NOW so user sees it in sidebar
+            if (window.pendingRecordingForMeetingId) {
+                const mid = window.pendingRecordingForMeetingId;
+                const r = await fetch(`/api/meetings/${mid}/recordings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({session_label: val}),
+                });
+                if (!r.ok) return;
+                const data = await r.json();
+                window.currentRecordingId = data.id;
+                window.meetingDbId = mid;
+                window.pendingRecordingForMeetingId = null;
+                if (typeof window.updateMomButtonStates === 'function') window.updateMomButtonStates();
+                document.getElementById('new-recording-banner')?.remove();
+                if (typeof window._restoreTitlePlaceholder === 'function') window._restoreTitlePlaceholder();
+                if (typeof reloadSidebarMeetings === 'function') await reloadSidebarMeetings();
+                if (typeof showToast === 'function') showToast(`Đã tạo phiên họp "${val}" ✓`, 'success');
+                return;
+            }
+            // (b) Existing recording → rename
+            if (window.currentRecordingId) {
+                const r = await fetch(`/api/recordings/${window.currentRecordingId}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({session_label: val}),
+                });
+                if (!r.ok) return;
+                if (typeof reloadSidebarMeetings === 'function') await reloadSidebarMeetings();
+                if (typeof showToast === 'function') showToast('Đã đổi tên phiên họp ✓', 'success');
+                return;
+            }
+            // (c) Project-level rename
+            if (window.meetingDbId) {
+                const r = await fetch(`/api/meetings/${window.meetingDbId}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({title: val}),
+                });
+                if (!r.ok) return;
+                if (typeof reloadSidebarMeetings === 'function') await reloadSidebarMeetings();
+                if (typeof showToast === 'function') showToast('Đã đổi tên project ✓', 'success');
+            }
+        } catch (e) { /* silent */ }
+    });
+}
 const vt = document.getElementById('vocab-hints');
 if (vt) vt.addEventListener('input', updateVocabCount);
 

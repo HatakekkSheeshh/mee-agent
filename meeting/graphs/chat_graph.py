@@ -47,7 +47,7 @@ class ChatState(TypedDict, total=False):
     meeting_id: Optional[str]  # if chat is bound to a meeting
 
     # Loaded by load_context
-    meeting_context: dict      # title, mom_json (if any)
+    meeting_context: dict      # title, project_summary_json, recording_moms[]
     recent_messages: list[dict]  # last N messages from chat_messages
 
     # Filled by classify_intent
@@ -99,7 +99,16 @@ def make_load_context(session: AsyncSession):
                     "id": str(meeting.id),
                     "title": meeting.title,
                     "purpose": meeting.purpose,
-                    "mom_json": meeting.mom_json,
+                    # MoMs are now per-recording. For chat context, pass the
+                    # project summary if available — falls back to listing
+                    # recording MoMs when chat needs deeper context.
+                    "project_summary_json": meeting.project_summary_json,
+                    "recording_moms": [
+                        {"recording_id": str(r.id), "session_label": r.session_label,
+                         "mom_json": r.mom_json}
+                        for r in (meeting.recordings or [])
+                        if r.mom_json
+                    ],
                 }
 
         logger.info(
@@ -125,7 +134,8 @@ Bạn có các tools sau:
 Meeting context hiện tại:
 - Title: {meeting.get('title', 'no meeting')}
 - Purpose: {meeting.get('purpose', '')}
-- MoM available: {meeting.get('mom_json') is not None}
+- Project summary available: {meeting.get('project_summary_json') is not None}
+- Recordings with MoM: {len(meeting.get('recording_moms', []))}
 
 PHÂN LOẠI:
 1. "question" — user hỏi về nội dung họp / MoM / tóm tắt → trả lời trực tiếp, KHÔNG cần tool
@@ -196,13 +206,26 @@ async def answer_node(state: ChatState) -> dict:
     recent = state.get("recent_messages", [])
 
     mom_summary = ""
-    if meeting.get("mom_json"):
-        mom = meeting["mom_json"]
+    # Prefer project summary (cross-recording context). Fall back to listing
+    # individual recording MoMs if no project summary yet.
+    project_summary = meeting.get("project_summary_json")
+    recording_moms = meeting.get("recording_moms") or []
+    if project_summary:
+        narrative = project_summary.get("narrative", "")
+        timeline = project_summary.get("decisions_timeline", [])
         mom_summary = (
-            f"Title: {mom.get('title', '')}\n"
-            f"Summary: {mom.get('summary', '')}\n"
-            f"Action items: {json.dumps(mom.get('action_items', []), ensure_ascii=False)[:1000]}"
+            f"Project narrative: {narrative}\n"
+            f"Decisions count: {sum(len(e.get('decisions', [])) for e in timeline)}\n"
         )
+    elif recording_moms:
+        # Show titles + summaries of each recording's MoM, truncated
+        bits = []
+        for rm in recording_moms[:5]:
+            m = rm.get("mom_json") or {}
+            bits.append(
+                f"- {rm.get('session_label', 'phiên')}: {m.get('summary', '')[:200]}"
+            )
+        mom_summary = "Per-recording MoMs:\n" + "\n".join(bits)
 
     system_prompt = f"""Bạn là Mee — trợ lý cuộc họp thông minh. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.
 

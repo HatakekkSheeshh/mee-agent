@@ -31,7 +31,9 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-MAX_TRANSCRIPT_CHARS = 30_000
+# Tuned for 8K-context LLMs (Qwen3-8B). Input + prompt ~5k tokens, output ~4k.
+MAX_TRANSCRIPT_CHARS = 9_000
+LLM_MAX_TOKENS = 4_000
 
 
 CLEAN_PROMPT = """Bạn là editor chuyên format lại transcript cuộc họp tiếng Việt cho dễ đọc.
@@ -95,7 +97,7 @@ def clean_transcript(
     Args:
         raw_text: full raw transcript text (joined segments)
         attendees: comma-separated names of attendees, vd "Linh, Tuấn, Mai"
-        timeout: LLM timeout in seconds
+        timeout: LLM timeout in seconds1
 
     Returns:
         {"segments": [{speaker, text, tags}, ...]}
@@ -127,13 +129,19 @@ def clean_transcript(
     model = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 
     try:
+        # Qwen3 reasoning mode burns tokens + leaves content empty for JSON tasks
+        # → disable explicitly (no-op for non-Qwen models).
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=8192,
+            max_tokens=LLM_MAX_TOKENS,
             timeout=timeout,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
-        output = resp.choices[0].message.content.strip()
+        output = (resp.choices[0].message.content or "").strip()
+        # Strip Qwen3 <think>...</think> tags if model emits them as raw text
+        output = re.sub(r"<think>.*?</think>", "", output, flags=re.DOTALL | re.IGNORECASE).strip()
+        output = re.sub(r"<think>.*$", "", output, flags=re.DOTALL | re.IGNORECASE).strip()
 
         # Strip code fences if any
         if "```json" in output:
