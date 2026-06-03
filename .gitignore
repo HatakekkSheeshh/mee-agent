@@ -5,4 +5,4 @@ __pycache__/
 .greennode.json
 .agentbase/
 .dockerignore
-venv/
+venv
