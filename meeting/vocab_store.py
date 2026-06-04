@@ -67,6 +67,68 @@ def delete_correction(wrong: str):
     save_pool(pool)
 
 
+def bulk_add_corrections(mappings: list[dict]) -> int:
+    """Batch-add phonetic mappings into the pool with a single save_pool().
+
+    Each item: {"wrong": "<VN phonetic>", "correct": "<EN term>"}. Returns
+    the count of NEW entries actually added (existing entries skipped).
+    Use this for phonetic_generator output — saves N file writes vs N calls
+    to add_correction.
+    """
+    if not mappings:
+        return 0
+    pool = load_pool()
+    existing_terms_lower = {t.lower() for t in pool["terms"]}
+    added = 0
+    for m in mappings:
+        if not isinstance(m, dict):
+            continue
+        w = str(m.get("wrong", "")).strip()
+        c = str(m.get("correct", "")).strip()
+        if not w or not c:
+            continue
+        if w in pool["corrections"]:
+            continue  # already known
+        pool["corrections"][w] = c
+        added += 1
+        if c.lower() not in existing_terms_lower:
+            pool["terms"].append(c)
+            existing_terms_lower.add(c.lower())
+    if added:
+        save_pool(pool)
+    return added
+
+
+def get_corrections_for_vocab(vocab: str) -> list[dict]:
+    """Return phonetic mappings from the pool whose `correct` value appears
+    in the current meeting's vocab list. Lets the cleaner LLM see only
+    relevant phonetic hints instead of the full pool (which may grow large).
+
+    Format matches phonetic_generator output: [{"wrong":..., "correct":...}].
+    """
+    if not vocab or not vocab.strip():
+        return []
+    wanted = {t.strip().lower() for t in vocab.split(",") if t.strip()}
+    pool = load_pool()
+    out = []
+    for wrong, correct in pool["corrections"].items():
+        if correct.strip().lower() in wanted:
+            out.append({"wrong": wrong, "correct": correct})
+    return out
+
+
+def terms_without_pool_corrections(vocab: str) -> list[str]:
+    """Return the subset of vocab terms that the pool has NO phonetic mapping
+    for yet. If empty → caller can skip the phonetic LLM call entirely
+    because the pool already covers every term."""
+    if not vocab or not vocab.strip():
+        return []
+    pool = load_pool()
+    covered = {c.strip().lower() for c in pool["corrections"].values()}
+    terms = [t.strip() for t in vocab.split(",") if t.strip()]
+    return [t for t in terms if t.lower() not in covered]
+
+
 def extract_and_save_terms(notes: dict, timeout: int = 60):
     """
     Call Claude to extract tech terms from a MoM dict, merge into vocab pool.

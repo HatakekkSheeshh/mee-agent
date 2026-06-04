@@ -65,14 +65,22 @@ class Meeting(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
+    # Project (grouping) name shown in sidebar. Per-meeting event metadata
+    # (date, attendees, chair, purpose...) now lives on `recordings` — a
+    # Meeting is purely a grouping mechanism + project-wide defaults.
     title: Mapped[str] = mapped_column(Text, nullable=False)
     topic: Mapped[Optional[str]] = mapped_column(Text)
-    purpose: Mapped[Optional[str]] = mapped_column(Text)
-    venue: Mapped[Optional[str]] = mapped_column(Text)
-    date: Mapped[Optional[date]] = mapped_column(Date)
-    chaired_by: Mapped[Optional[str]] = mapped_column(Text)
-    noted_by: Mapped[Optional[str]] = mapped_column(Text)
-    attendees: Mapped[Optional[list]] = mapped_column(JSONB)  # [{name, dept, title}]
+    # Project default vocab (e.g. "segmentation, CNN, deploy, API"). At
+    # runtime, cleaner LLM + Whisper prompt APPEND this with the recording's
+    # own vocab_hints (per-session additions).
+    vocab_hints: Mapped[Optional[str]] = mapped_column(Text)
+    # Project default STT + LLM model choices. Logical IDs from model_registry
+    # ("whisper" / "phowhisper" / "gemma" / "qwen" / "gpt-oss"). NULL falls
+    # back to DEFAULT_STT/DEFAULT_LLM. Recording-level fields override these.
+    stt_model: Mapped[Optional[str]] = mapped_column(Text)
+    llm_model: Mapped[Optional[str]] = mapped_column(Text)
+    # MoM generation language ("vi" / "en"). NULL → request body (UI lang) → "vi".
+    mom_language: Mapped[Optional[str]] = mapped_column(Text)
     # Project-level summary aggregating decisions across all recordings (timeline).
     # Per-recording MoMs live on recordings.mom_json.
     project_summary_json: Mapped[Optional[dict]] = mapped_column(JSONB)
@@ -94,7 +102,7 @@ class Meeting(Base):
     )
 
     __table_args__ = (
-        Index("idx_meetings_user_date", "user_id", "date"),
+        Index("idx_meetings_user_created", "user_id", "created_at"),
     )
 
 
@@ -146,7 +154,20 @@ class Recording(Base):
         ForeignKey("meetings.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Short label shown in sidebar — fallback when `title` not set.
     session_label: Mapped[Optional[str]] = mapped_column(Text)
+    # Per-meeting event metadata (moved from meetings table in migration 0012).
+    # Each recording is an actual meeting event with its own context.
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    purpose: Mapped[Optional[str]] = mapped_column(Text)
+    date: Mapped[Optional[date]] = mapped_column(Date)
+    venue: Mapped[Optional[str]] = mapped_column(Text)
+    chaired_by: Mapped[Optional[str]] = mapped_column(Text)
+    noted_by: Mapped[Optional[str]] = mapped_column(Text)
+    attendees: Mapped[Optional[list]] = mapped_column(JSONB)  # [{name, dept, title}]
+    # Per-recording vocab additions. At runtime APPENDED to meeting.vocab_hints
+    # (project default), giving 2-tier vocab. NULL = use project default only.
+    vocab_hints: Mapped[Optional[str]] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -161,6 +182,28 @@ class Recording(Base):
     # Per-recording MoM (biên bản phiên họp). Each recording has its own MoM.
     # Project-level aggregate lives on meetings.project_summary_json.
     mom_json: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # 256-dim voice embeddings keyed by pyannote cluster id (SPEAKER_00, ...).
+    # Populated when audio is uploaded → phowhisper-server runs pyannote
+    # embedding inference. Used by speaker_matcher in the Clean step.
+    speaker_embeddings: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # PhoWhisper-diarized transcript with SPEAKER_NN prefixes, concatenated as
+    # "SPEAKER_00: text\nSPEAKER_01: text\n…". For live-record path this is
+    # populated by post_record_diarize and is the AUTHORITATIVE input for
+    # the cleaner LLM (preferred over join_recording_transcript which lacks
+    # speaker tags). NULL = no diarization run yet for this recording.
+    diarized_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Per-recording STT + LLM model overrides (migration 0014). NULL = inherit
+    # from meeting (project default), which itself falls back to registry default.
+    stt_model: Mapped[Optional[str]] = mapped_column(Text)
+    llm_model: Mapped[Optional[str]] = mapped_column(Text)
+    # MoM language override (migration 0015). NULL = inherit from meeting.
+    mom_language: Mapped[Optional[str]] = mapped_column(Text)
+    # LLM-generated phonetic mappings derived from vocab_hints (migration 0013).
+    # Shape: {"mappings": [{"wrong": "...", "correct": "..."}], "vocab_hash": "sha256",
+    #         "generated_at_ms": int}. Cleaner injects mappings as few-shot
+    # examples — replaces the static hardcoded list. Regenerated when
+    # vocab_hints changes (vocab_hash mismatch).
+    phonetic_examples_json: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     meeting: Mapped[Meeting] = relationship(back_populates="recordings")
     segments: Mapped[list["TranscriptSegment"]] = relationship(
@@ -377,4 +420,46 @@ class MemoryEventRow(Base):
             "event_type IN ('action_item', 'decision', 'commitment', 'blocker', 'update', 'summary')",
             name="ck_memory_events_type",
         ),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase Speaker-ID — Cross-meeting voiceprints
+# ═══════════════════════════════════════════════════════════════════════
+
+class SpeakerVoiceprint(Base):
+    """Per-user voiceprint dictionary for zero-shot speaker identification.
+
+    Each row binds a person's name to their pyannote voice embedding (256-dim).
+    When transcribing a new meeting, the matcher service computes cluster
+    embeddings via pyannote/embedding inference and cosine-searches this table
+    to pre-map SPEAKER_NN → real names. Updated when the user manually labels
+    a speaker in CleanEditor.
+    """
+    __tablename__ = "speaker_voiceprints"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    # 256-dim embedding (pyannote/embedding output). pgvector handles cosine.
+    embedding: Mapped[list[float]] = mapped_column(
+        __import__("pgvector.sqlalchemy", fromlist=["Vector"]).Vector(256),
+        nullable=False,
+    )
+    sample_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_voiceprints_user_name", "user_id", "name", unique=True),
     )

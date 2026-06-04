@@ -98,13 +98,13 @@ def make_load_context(session: AsyncSession):
                 meeting_ctx = {
                     "id": str(meeting.id),
                     "title": meeting.title,
-                    "purpose": meeting.purpose,
-                    # MoMs are now per-recording. For chat context, pass the
-                    # project summary if available — falls back to listing
-                    # recording MoMs when chat needs deeper context.
+                    # `purpose` moved to recording in migration 0012 — chat
+                    # context could aggregate per-recording purposes if needed.
                     "project_summary_json": meeting.project_summary_json,
                     "recording_moms": [
-                        {"recording_id": str(r.id), "session_label": r.session_label,
+                        {"recording_id": str(r.id),
+                         "session_label": r.title or r.session_label,
+                         "purpose": r.purpose,
                          "mom_json": r.mom_json}
                         for r in (meeting.recordings or [])
                         if r.mom_json
