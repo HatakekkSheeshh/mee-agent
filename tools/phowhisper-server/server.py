@@ -31,6 +31,8 @@ import torch
 import torchaudio
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from pyannote.audio import Inference as PyannoteInference
+from pyannote.audio import Model as PyannoteModel
 from pyannote.audio import Pipeline as DiarizePipeline
 from transformers import pipeline as hf_pipeline
 
@@ -42,9 +44,17 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 ASR_MODEL = os.getenv("ASR_MODEL", "vinai/PhoWhisper-large")  # or PhoWhisper-medium for live
 DIARIZE_MODEL = os.getenv("DIARIZE_MODEL", "pyannote/speaker-diarization-3.1")
+# Embedding model — must match what pyannote-3.1 uses internally (256-dim).
+# Used to compute per-cluster centroids for cross-meeting voice matching.
+EMBEDDING_MODEL = os.getenv(
+    "EMBEDDING_MODEL", "pyannote/wespeaker-voxceleb-resnet34-LM",
+)
 HF_TOKEN = os.getenv("HF_TOKEN")
 PORT = int(os.getenv("PORT", "9100"))
 SAMPLE_RATE = 16000
+# Maximum seconds of audio per speaker to feed the embedding model. Voices
+# converge quickly so 8-10s is plenty; saves GPU time when a speaker dominates.
+MAX_EMBED_SECONDS = 10.0
 
 if not HF_TOKEN:
     raise RuntimeError("HF_TOKEN env var required for pyannote diarization")
@@ -70,6 +80,15 @@ if DEVICE == "cuda":
     DIARIZE.to(torch.device("cuda"))
 logger.info("Diarize loaded.")
 
+# Load speaker embedding model — same one pyannote-3.1 uses internally.
+# Wrap in Inference(window="whole") so we can pass a {waveform, sample_rate}
+# dict and get back a single 256-dim vector per call.
+EMB_MODEL = PyannoteModel.from_pretrained(EMBEDDING_MODEL, token=HF_TOKEN)
+if DEVICE == "cuda":
+    EMB_MODEL.to(torch.device("cuda"))
+EMB_INFER = PyannoteInference(EMB_MODEL, window="whole", device=torch.device(DEVICE))
+logger.info(f"Embedding loaded: {EMBEDDING_MODEL}")
+
 app = FastAPI(title="PhoWhisper + pyannote server")
 
 
@@ -80,6 +99,8 @@ async def health():
         "device": DEVICE,
         "asr_model": ASR_MODEL,
         "diarize_model": DIARIZE_MODEL,
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dim": 256,
         "port": PORT,
     }
 
@@ -95,6 +116,61 @@ def _load_audio(path: str) -> tuple[torch.Tensor, int]:
         resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)
         waveform = resampler(waveform)
     return waveform, SAMPLE_RATE
+
+
+def _compute_cluster_embeddings(
+    waveform: torch.Tensor,
+    sr: int,
+    diarize_segs: list[dict],
+) -> dict[str, list[float]]:
+    """For each unique speaker cluster, concatenate up to MAX_EMBED_SECONDS of
+    that speaker's audio and run pyannote embedding inference → 256-dim vector.
+
+    Returns:
+        {"SPEAKER_00": [...256 floats...], "SPEAKER_01": [...], ...}
+
+    Caller can match these against `speaker_voiceprints` DB rows to recognise
+    returning speakers across meetings.
+    """
+    # Group segments per speaker, biggest-first (most data → cleanest embedding)
+    by_spk: dict[str, list[dict]] = {}
+    for seg in diarize_segs:
+        by_spk.setdefault(seg["speaker"], []).append(seg)
+
+    out: dict[str, list[float]] = {}
+    for spk, segs in by_spk.items():
+        # Sort by duration desc + take up to MAX_EMBED_SECONDS total
+        segs_sorted = sorted(segs, key=lambda d: d["end"] - d["start"], reverse=True)
+        chunks: list[torch.Tensor] = []
+        total = 0.0
+        for s in segs_sorted:
+            dur = s["end"] - s["start"]
+            if dur < 0.2:  # skip noise blips
+                continue
+            take = min(dur, MAX_EMBED_SECONDS - total)
+            if take <= 0:
+                break
+            start_sample = int(s["start"] * sr)
+            end_sample = int((s["start"] + take) * sr)
+            chunks.append(waveform[:, start_sample:end_sample])
+            total += take
+            if total >= MAX_EMBED_SECONDS:
+                break
+        if not chunks:
+            continue
+        clip = torch.cat(chunks, dim=1)
+        if clip.shape[1] < int(0.5 * sr):  # need ≥ 0.5s for stable embedding
+            continue
+        try:
+            emb = EMB_INFER({"waveform": clip, "sample_rate": sr})
+            # Inference returns a numpy array (or torch tensor depending on version)
+            emb_np = emb.numpy() if hasattr(emb, "numpy") else emb
+            # Some versions return shape (1, 256); flatten
+            emb_list = emb_np.flatten().tolist()
+            out[spk] = emb_list
+        except Exception as e:
+            logger.warning(f"Embedding failed for {spk}: {e}")
+    return out
 
 
 def _merge_diarize_turns(
@@ -344,6 +420,15 @@ async def transcribe(
             f"Diarize: {len(diarize_segs)} turns, {len(unique_spks)} unique speakers={unique_spks}"
         )
 
+        # 2.5. Compute per-cluster voice embeddings (256-dim). Used by the
+        # backend speaker_matcher to recognise returning speakers across
+        # meetings via cosine search vs the user's voiceprints DB.
+        cluster_embeddings = _compute_cluster_embeddings(waveform, sr, diarize_segs)
+        logger.info(
+            f"Embeddings: {len(cluster_embeddings)}/{len(unique_spks)} clusters "
+            f"(dims={len(next(iter(cluster_embeddings.values()), []))})"
+        )
+
         # 3. Merge consecutive same-speaker turns (gap < 0.5s) + drop overlapping
         # short turns (< 0.4s — usually cross-talk noise). This gives stable chunks
         # to run ASR on per-speaker.
@@ -378,6 +463,9 @@ async def transcribe(
             "text": "\n".join(text_lines),
             "language": language or "vi",
             "segments": segments_out,
+            # Per-cluster 256-dim voice embeddings — backend matches these
+            # against voiceprints DB to recognise returning speakers.
+            "cluster_embeddings": cluster_embeddings,
         })
 
     except Exception as e:

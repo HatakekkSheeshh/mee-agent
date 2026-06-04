@@ -10,12 +10,16 @@ export interface Attendee {
 export interface Meeting {
   id: string;
   title: string;
-  purpose?: string | null;
-  venue?: string | null;
-  date?: string | null;
-  chaired_by?: string | null;
-  noted_by?: string | null;
-  attendees?: Attendee[] | null;
+  /** Project-level default vocab. Appended with recording.vocab_hints at runtime
+   * to feed Whisper prompt + cleaner LLM (fix Vietnamese phonetic
+   * mistranscriptions like "chất manh tây sành" → "segmentation"). */
+  vocab_hints?: string | null;
+  /** Project default STT/LLM model logical IDs ("whisper"/"phowhisper" and
+   * "gemma"/"qwen"/"gpt-oss"). Recording-level fields override these. */
+  stt_model?: string | null;
+  llm_model?: string | null;
+  /** MoM output language ("vi" / "en"). NULL = inherit UI lang at gen time. */
+  mom_language?: string | null;
   status: string;
   has_summary: boolean;
   is_pinned?: boolean;
@@ -24,6 +28,21 @@ export interface Meeting {
 export interface Recording {
   id: string;
   session_label?: string | null;
+  /** Per-meeting-event metadata (moved from project in migration 0012). */
+  title?: string | null;
+  purpose?: string | null;
+  date?: string | null;
+  venue?: string | null;
+  chaired_by?: string | null;
+  noted_by?: string | null;
+  attendees?: Attendee[] | null;
+  /** Session-specific vocab additions (appended to project default at runtime). */
+  vocab_hints?: string | null;
+  /** Per-recording override of STT/LLM model. NULL = inherit from meeting. */
+  stt_model?: string | null;
+  llm_model?: string | null;
+  /** Per-recording MoM language override. NULL = inherit meeting. */
+  mom_language?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
   duration_sec?: number | null;
@@ -52,7 +71,10 @@ export interface MoMJson {
   venue?: string;
   chaired_by?: string;
   noted_by?: string;
-  attendees?: string;
+  /** MoM-LLM output is inconsistent across runs: sometimes a comma-separated
+   * string, sometimes a list of {name,title,department} (copied from
+   * meeting.attendees JSONB). MoMPane normalizes to a display string. */
+  attendees?: string | { name?: string; title?: string; department?: string }[] | null;
   summary?: string;
   agenda_items?: { topic_no?: number; agenda: string; description?: string }[];
   decisions?: (string | { text: string; by?: string })[];
@@ -78,11 +100,22 @@ export interface ProjectSummary {
 }
 
 // ─── Transcript ────────────────────────────────────────────────────
+export interface RawSegment {
+  seq: number;
+  text: string;
+  speaker?: string | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+}
+
 export interface RecordingTranscript {
   recording_id: string;
   meeting_id: string;
   session_label?: string | null;
   transcript: string;
+  /** Structured per-segment data with speaker + timestamps when available
+   * (PhoWhisper diarized upload). Empty array for legacy / live-record data. */
+  segments: RawSegment[];
   segment_count: number;
   duration_sec?: number | null;
   started_at?: string | null;
@@ -93,9 +126,26 @@ export interface CleanResponse {
   recording_id: string;
   cached: boolean;
   clean_segments: { speaker?: string; text: string; tags?: string[] }[];
+  /** LLM-inferred cluster → name mapping. Verified entries (voice-matched)
+   * are listed in `pre_mapped_clusters`. */
+  cluster_mapping?: Record<string, string>;
+  /** Cluster ids that were resolved via voiceprint DB cosine match (✓ trusted). */
+  pre_mapped_clusters?: string[];
+  /** Cluster ids that have stored embeddings — can be saved as voiceprints.
+   * Missing clusters = audio uploaded before Phase 2 OR audio too short. */
+  available_clusters?: string[];
   /** User-edited HTML (TipTap output) if the user has touched this transcript. */
   edited_html?: string | null;
   edited_text?: string | null;
+}
+
+// ─── Voiceprints (zero-shot speaker ID) ───────────────────────────
+export interface Voiceprint {
+  id: string;
+  name: string;
+  sample_count: number;
+  last_seen_at?: string | null;
+  created_at?: string | null;
 }
 
 // ─── Chat ──────────────────────────────────────────────────────────

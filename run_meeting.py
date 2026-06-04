@@ -146,6 +146,19 @@ def start_whisper_server(args):
         except Exception as e:
             logger.error(f"Error in recv_audio: {e}", exc_info=True)
         finally:
+            # Post-record diarization: send the full buffered audio to
+            # PhoWhisper to extract per-cluster embeddings, then POST them to
+            # the backend. This is the live-record path's parity with file
+            # upload — it's what lets voiceprint enrollment + cross-meeting
+            # speaker recognition work after live recording. Runs in a
+            # dedicated thread so the WebSocket close path isn't blocked
+            # (PhoWhisper diarization on a 1-hour audio can take minutes).
+            if client and hasattr(client, "post_record_diarize"):
+                threading.Thread(
+                    target=client.post_record_diarize,
+                    daemon=False,  # let it finish even after WS closes
+                    name=f"post-diarize-{getattr(client, 'client_uid', '?')}",
+                ).start()
             if client_manager.get_client(websocket):
                 client_manager.remove_client(websocket)
             try:
@@ -274,14 +287,20 @@ def _print_startup_banner(http_port: int, ws_port: int) -> None:
 
 
 def start_http_server(args):
-    from meeting.app import create_app
-
-    output_dir = os.path.join(os.path.dirname(__file__), "output")
-    app = create_app(output_dir=output_dir)
-
     _print_startup_banner(args.http_port, args.ws_port)
     logger.info(f"Starting Meeting Note HTTP server on http://0.0.0.0:{args.http_port}")
-    uvicorn.run(app, host="0.0.0.0", port=args.http_port, log_level="info")
+    # Use factory + import string so uvicorn's reloader can re-import on
+    # file changes. create_app() defaults output_dir to <repo>/output when
+    # None is passed, which matches the previous behavior.
+    uvicorn.run(
+        "meeting.app:create_app",
+        host="0.0.0.0",
+        port=args.http_port,
+        log_level="info",
+        reload=True,
+        factory=True,
+        reload_dirs=[os.path.join(os.path.dirname(__file__), "meeting")],
+    )
 
 
 def main():

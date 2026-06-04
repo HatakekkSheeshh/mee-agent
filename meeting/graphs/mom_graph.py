@@ -56,6 +56,9 @@ class MomState(TypedDict, total=False):
     # ── Input ──
     recording_id: str
     output_dir: str
+    # MoM output language ("vi" / "en"). Resolved by run_mom_graph from
+    # recording.mom_language → meeting.mom_language → request body → "vi".
+    mom_language: str
 
     # ── Filled by load_transcript ──
     meeting_id: str
@@ -93,42 +96,65 @@ def make_load_transcript(session: AsyncSession):
         if not meeting:
             return {"error": f"Parent meeting {recording.meeting_id} not found"}
 
-        # Prefer user-edited clean transcript (TipTap WYSIWYG output) if it
-        # exists — that's the curated source. Fall back to raw joined segments.
+        # Transcript source priority (best → worst):
+        #   1. User-edited clean (TipTap output) — curated by the user
+        #   2. LLM-cleaned segments with speaker labels — already attributed,
+        #      filler-stripped, and structured. Big quality bump over raw.
+        #   3. Raw joined segments from DB — Whisper output with no cleanup.
         clean = recording.clean_segments or {}
         edited = (clean.get("edited_text") or "").strip()
+        clean_segs = clean.get("segments") or []
         if edited:
             transcript = edited
-            logger.info(f"[Node load_transcript] using user-edited clean ({len(edited)} chars)")
+            logger.info(
+                f"[Node load_transcript] using user-edited clean ({len(edited)} chars)"
+            )
+        elif clean_segs:
+            # Assemble "Speaker: text" lines from the LLM-cleaned segments.
+            # MoM-gen LLM finds attribution + decisions + action items much
+            # easier from this than from raw.
+            transcript = "\n".join(
+                f"{(seg.get('speaker') or 'Unknown')}: {seg.get('text', '').strip()}"
+                for seg in clean_segs
+                if seg.get("text", "").strip()
+            )
+            logger.info(
+                f"[Node load_transcript] using LLM-cleaned segments "
+                f"({len(clean_segs)} blocks, {len(transcript)} chars)"
+            )
         else:
             transcript = await repo.join_recording_transcript(
                 session, uuid.UUID(recording_id)
             )
+            logger.info(f"[Node load_transcript] using raw segments ({len(transcript)} chars)")
         if not transcript.strip():
             return {"error": "No transcript segments for this recording"}
 
         logger.info(f"[Node load_transcript] loaded {len(transcript)} chars")
 
-        # Pack meta for downstream nodes — title is project + session label
+        # Pack meta for downstream nodes. Per-meeting-event fields live on
+        # recording now (migration 0012). Project (meeting) keeps only title +
+        # vocab. recording.title overrides session_label if set.
         attendees_str = ""
-        if meeting.attendees:
+        if recording.attendees:
             attendees_str = ", ".join(
                 f"{a.get('name', '')} ({a.get('department', '')})".strip()
-                for a in meeting.attendees if isinstance(a, dict)
+                for a in recording.attendees if isinstance(a, dict)
             )
-        rec_label = recording.session_label or "Phiên họp"
+        rec_label = recording.title or recording.session_label or "Phiên họp"
         title = f"{meeting.title} — {rec_label}" if meeting.title else rec_label
         meta = {
             "title": title,
             "project_title": meeting.title,
             "session_label": rec_label,
-            "purpose": meeting.purpose or "",
-            "date": recording.started_at.isoformat() if recording.started_at else (
-                meeting.date.isoformat() if meeting.date else ""
+            "purpose": recording.purpose or "",
+            "date": (
+                recording.date.isoformat() if recording.date
+                else (recording.started_at.isoformat() if recording.started_at else "")
             ),
-            "chaired_by": meeting.chaired_by or "",
-            "noted_by": meeting.noted_by or "Mee Agent",
-            "venue": meeting.venue or "",
+            "chaired_by": recording.chaired_by or "",
+            "noted_by": recording.noted_by or "Mee Agent",
+            "venue": recording.venue or "",
             "attendees": attendees_str,
             "topic": meeting.topic or "",
         }
@@ -179,6 +205,9 @@ async def generate_mom(state: MomState) -> dict:
         f"memory_events={len(state.get('memory_context', []))}"
     )
 
+    # MoM language resolver: recording → meeting → request body → "vi"
+    # (the state's "mom_language" is set by run_mom_graph caller).
+    lang = state.get("mom_language") or "vi"
     notes = generate_meeting_notes(
         transcript=state["transcript"],
         title=meta.get("title", ""),
@@ -188,6 +217,7 @@ async def generate_mom(state: MomState) -> dict:
         noted_by=meta.get("noted_by", "Mee Agent"),
         venue=meta.get("venue", ""),
         attendees=meta.get("attendees", ""),
+        lang=lang,
     )
 
     if "error" in notes:
@@ -342,12 +372,35 @@ async def run_mom_graph(
     output_dir: str = "output",
     checkpointer=None,
     memory_service: Optional[MemoryService] = None,
+    mom_language: Optional[str] = None,
 ) -> MomState:
     """
     Invoke the graph for 1 recording. thread_id = recording_id → per-recording resume.
+
+    `mom_language`: ui_lang fallback when neither recording nor meeting has
+    a value set. Resolved here so generate_mom node just reads state.
     """
     if memory_service is None:
         memory_service = get_memory_service()
+
+    # Resolver: recording.mom_language → meeting.mom_language → caller hint → "vi".
+    # We need the DB to know recording/meeting values — fetch quickly here.
+    import uuid as _uuid
+    from meeting.db import repositories as repo
+    try:
+        rid = _uuid.UUID(recording_id)
+        rec = await repo.get_recording(session, rid)
+        if rec:
+            mt = await repo.get_meeting(session, rec.meeting_id)
+            resolved_lang = (
+                (rec.mom_language or "").strip()
+                or (mt.mom_language if mt else None and mt.mom_language.strip())
+                or (mom_language or "vi")
+            )
+        else:
+            resolved_lang = mom_language or "vi"
+    except Exception:
+        resolved_lang = mom_language or "vi"
 
     graph = build_mom_graph(session, memory_service, checkpointer)
 
@@ -355,6 +408,7 @@ async def run_mom_graph(
     initial_state: MomState = {
         "recording_id": recording_id,
         "output_dir": output_dir,
+        "mom_language": resolved_lang,
     }
 
     logger.info(f"=== Running MomGraph for recording {recording_id} ===")

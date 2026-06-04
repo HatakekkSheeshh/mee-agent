@@ -1,9 +1,11 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { Dropdown, useDropdown } from "./Dropdown";
+import { VoiceprintsModal } from "./VoiceprintsModal";
 
 export function Topbar() {
   const { theme, setTheme, toggleChat, chatOpen, toggleSidebar, lang, setLang, t } = useApp();
+  const [voiceprintsOpen, setVoiceprintsOpen] = useState(false);
 
   const settingsRef = useRef<HTMLButtonElement>(null);
   const inviteRef = useRef<HTMLButtonElement>(null);
@@ -154,7 +156,20 @@ export function Topbar() {
           </svg>
           <span>{t("menu.audioPrefs")}</span>
         </button>
+        <button
+          className="dd-item"
+          type="button"
+          onClick={() => { settings.close(); setVoiceprintsOpen(true); }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          </svg>
+          <span>Voiceprints</span>
+        </button>
       </Dropdown>
+
+      <VoiceprintsModal open={voiceprintsOpen} onClose={() => setVoiceprintsOpen(false)} />
 
       {/* ─── Invite dropdown ─── */}
       <Dropdown open={invite.open} pos={invite.pos}>

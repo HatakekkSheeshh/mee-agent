@@ -195,33 +195,34 @@ function EmptyState({ t }: { t: (k: import("../i18n").StringKey) => string }) {
 
 // ─── Per-recording MoM ─────────────────────────────────────────────
 function MoMView({ mom }: { mom: MoMJson }) {
+  const { t } = useApp();
   return (
     <div id="mom-result">
       {/* Meta */}
       <div className="mom-section">
-        <div className="mom-section-title">Thông tin cuộc họp</div>
+        <div className="mom-section-title">{t("mom.section.info")}</div>
         <table className="mom-meta-table">
           <tbody>
-            <Row label="Mục đích / Purpose" value={mom.purpose} />
-            <Row label="Ngày" value={mom.date} />
-            <Row label="Địa điểm" value={mom.venue} />
-            <Row label="Chủ trì" value={mom.chaired_by} />
-            <Row label="Người ghi" value={mom.noted_by} />
-            <Row label="Người tham dự" value={mom.attendees} />
+            <Row label={t("mom.section.purpose")} value={mom.purpose} />
+            <Row label={t("mom.section.date")} value={mom.date} />
+            <Row label={t("mom.section.venue")} value={mom.venue} />
+            <Row label={t("mom.section.chairedBy")} value={mom.chaired_by} />
+            <Row label={t("mom.section.notedBy")} value={mom.noted_by} />
+            <Row label={t("mom.section.attendees")} value={formatAttendees(mom.attendees)} />
           </tbody>
         </table>
       </div>
 
       {mom.summary && (
         <div className="mom-section">
-          <div className="mom-section-title">Tóm tắt</div>
+          <div className="mom-section-title">{t("mom.section.summary")}</div>
           <div className="mom-summary">{mom.summary}</div>
         </div>
       )}
 
       {mom.agenda_items && mom.agenda_items.length > 0 && (
         <div className="mom-section">
-          <div className="mom-section-title">Nội dung cuộc họp</div>
+          <div className="mom-section-title">{t("mom.section.agenda")}</div>
           {mom.agenda_items.map((a, i) => (
             <div key={i} className="agenda-item">
               <div className="agenda-item-header">
@@ -236,22 +237,45 @@ function MoMView({ mom }: { mom: MoMJson }) {
 
       {mom.action_items && mom.action_items.length > 0 && (
         <div className="mom-section">
-          <div className="mom-section-title">Action items</div>
+          <div className="mom-section-title">{t("mom.section.actionItems")}</div>
           <ActionItemsTable items={mom.action_items} />
         </div>
       )}
 
       {mom.decisions && mom.decisions.length > 0 && (
-        <BulletSection title="Quyết định" items={mom.decisions} />
+        <BulletSection title={t("mom.section.decisions")} items={mom.decisions} />
       )}
       {mom.commitments && mom.commitments.length > 0 && (
-        <BulletSection title="Cam kết" items={mom.commitments} />
+        <BulletSection title={t("mom.section.commitments")} items={mom.commitments} />
       )}
       {mom.blockers && mom.blockers.length > 0 && (
-        <BulletSection title="Blockers" items={mom.blockers} />
+        <BulletSection title={t("mom.section.blockers")} items={mom.blockers} />
       )}
     </div>
   );
+}
+
+/** Coerce mom.attendees (string OR array of attendee objects OR null) into
+ * a display string. Without this, rendering an object array as a React child
+ * throws "Objects are not valid as a React child" and unmounts the pane. */
+function formatAttendees(
+  v: string | { name?: string; title?: string; department?: string }[] | null | undefined,
+): string {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) {
+    return v
+      .map((a) =>
+        typeof a === "string"
+          ? a
+          : a && typeof a === "object"
+          ? String(a.name || "").trim()
+          : "",
+      )
+      .filter(Boolean)
+      .join(", ");
+  }
+  return "";
 }
 
 function Row({ label, value }: { label: string; value?: string | null }) {
@@ -264,21 +288,52 @@ function Row({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
+// Recognise the VN placeholder LLM emits when no deadline is mentioned so we
+// can render it in whatever language the UI is currently in. The prompt's
+// schema example still has "Chưa xác định" hardcoded, so even when output
+// language is English the LLM may copy that string verbatim.
+const VN_DEADLINE_TBD = /^chưa\s*xác\s*định$/i;
+
 function ActionItemsTable({ items }: { items: ActionItem[] }) {
-  // Merge consecutive items with same PIC (per user pref from past memory).
+  const { t } = useApp();
+  // Group ALL items by PIC (not just consecutive), preserving:
+  //   - the order PICs first appear in the LLM output
+  //   - the order of items within each PIC
+  // Tasks without `item` text are dropped (LLM occasionally emits {pic, deadline}
+  // with no task description — see Meeting 3's old mom_json).
+  const groups = (() => {
+    const order: string[] = [];
+    const byPic = new Map<string, ActionItem[]>();
+    for (const ai of items) {
+      if (!ai.item || !ai.item.trim()) continue;
+      const pic = (ai.pic || "—").trim() || "—";
+      if (!byPic.has(pic)) {
+        byPic.set(pic, []);
+        order.push(pic);
+      }
+      byPic.get(pic)!.push(ai);
+    }
+    return order.map((pic) => ({ pic, tasks: byPic.get(pic)! }));
+  })();
+
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r)", overflow: "hidden" }}>
-      {items.map((ai, i) => {
-        const prev = i > 0 ? items[i - 1] : null;
-        const sameAsPrev = prev && prev.pic && prev.pic === ai.pic;
-        return (
-          <div key={i} className={`action-item${sameAsPrev ? " merged" : ""}`}>
-            <span className="action-pic">{sameAsPrev ? "" : ai.pic || "—"}</span>
+      {groups.flatMap((g) =>
+        g.tasks.map((ai, j) => (
+          <div
+            key={`${g.pic}-${j}`}
+            className={`action-item${j > 0 ? " merged" : ""}`}
+          >
+            <span className="action-pic">{j === 0 ? g.pic : ""}</span>
             <span className="action-task">{ai.item}</span>
-            <span className="action-deadline">{ai.deadline || ""}</span>
+            <span className="action-deadline">
+              {ai.deadline && VN_DEADLINE_TBD.test(ai.deadline.trim())
+                ? t("mom.deadlineTbd")
+                : ai.deadline || ""}
+            </span>
           </div>
-        );
-      })}
+        )),
+      )}
     </div>
   );
 }

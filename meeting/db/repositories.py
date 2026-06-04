@@ -23,6 +23,7 @@ from meeting.db.models import (
     MemoryEventRow,
     PendingAction,
     Recording,
+    SpeakerVoiceprint,
     TranscriptSegment,
     User,
 )
@@ -54,22 +55,14 @@ async def create_meeting(
     *,
     user_id: uuid.UUID,
     title: str,
-    purpose: str = "",
-    venue: str = "",
-    meeting_date: Optional[date] = None,
-    chaired_by: str = "",
-    noted_by: str = "",
-    attendees: Optional[list] = None,
+    vocab_hints: Optional[str] = None,
 ) -> Meeting:
+    """Create a project. Per-meeting-event metadata is added later on the
+    first recording (via update_recording_metadata)."""
     meeting = Meeting(
         user_id=user_id,
         title=title or "Untitled meeting",
-        purpose=purpose or None,
-        venue=venue or None,
-        date=meeting_date,
-        chaired_by=chaired_by or None,
-        noted_by=noted_by or None,
-        attendees=attendees,
+        vocab_hints=(vocab_hints or "").strip() or None,
     )
     session.add(meeting)
     await session.flush()
@@ -121,8 +114,14 @@ async def update_meeting(
     *,
     title: Optional[str] = None,
     is_pinned: Optional[bool] = None,
+    vocab_hints: Optional[str] = None,
+    stt_model: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    mom_language: Optional[str] = None,
 ) -> Optional[Meeting]:
-    """Patch selected fields on a meeting. Returns updated row or None if not found."""
+    """Patch project-level fields. Per-meeting-event fields (date, attendees,
+    chair...) live on recordings now — use update_recording_metadata for those.
+    """
     meeting = await session.get(Meeting, meeting_id)
     if not meeting or meeting.deleted_at is not None:
         return None
@@ -130,8 +129,86 @@ async def update_meeting(
         meeting.title = title.strip()
     if is_pinned is not None:
         meeting.is_pinned = is_pinned
+    if vocab_hints is not None:
+        meeting.vocab_hints = vocab_hints.strip() or None
+    if stt_model is not None:
+        meeting.stt_model = stt_model.strip() or None
+    if llm_model is not None:
+        meeting.llm_model = llm_model.strip() or None
+    if mom_language is not None:
+        meeting.mom_language = mom_language.strip() or None
     await session.flush()
     return meeting
+
+
+async def update_recording_metadata(
+    session: AsyncSession,
+    recording_id: uuid.UUID,
+    *,
+    title: Optional[str] = None,
+    purpose: Optional[str] = None,
+    date=None,                          # datetime.date | None
+    venue: Optional[str] = None,
+    chaired_by: Optional[str] = None,
+    noted_by: Optional[str] = None,
+    attendees: Optional[list] = None,
+    vocab_hints: Optional[str] = None,
+    session_label: Optional[str] = None,
+    stt_model: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    mom_language: Optional[str] = None,
+) -> Optional["Recording"]:  # type: ignore[name-defined]
+    """Patch per-recording metadata. All fields optional."""
+    from meeting.db.models import Recording
+    rec = await session.get(Recording, recording_id)
+    if not rec:
+        return None
+    if title is not None:
+        rec.title = title.strip() or None
+    if purpose is not None:
+        rec.purpose = purpose.strip() or None
+    if date is not None:
+        rec.date = date
+    if venue is not None:
+        rec.venue = venue.strip() or None
+    if chaired_by is not None:
+        rec.chaired_by = chaired_by.strip() or None
+    if noted_by is not None:
+        rec.noted_by = noted_by.strip() or None
+    if attendees is not None:
+        rec.attendees = attendees
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(rec, "attendees")
+    if vocab_hints is not None:
+        rec.vocab_hints = vocab_hints.strip() or None
+    if session_label is not None and session_label.strip():
+        rec.session_label = session_label.strip()
+    # Model fields — accept the sentinel "" to clear back to inherit-from-meeting,
+    # otherwise must be one of the registered IDs (caller validates).
+    if stt_model is not None:
+        rec.stt_model = stt_model.strip() or None
+    if llm_model is not None:
+        rec.llm_model = llm_model.strip() or None
+    if mom_language is not None:
+        rec.mom_language = mom_language.strip() or None
+    await session.flush()
+    return rec
+
+
+async def save_recording_phonetic(
+    session: AsyncSession,
+    recording_id: uuid.UUID,
+    phonetic_json: dict,
+) -> None:
+    """Persist LLM-generated phonetic mappings for the cleaner few-shot slot.
+    Called by the phonetic_generator after a successful regeneration."""
+    rec = await session.get(Recording, recording_id)
+    if not rec:
+        return
+    rec.phonetic_examples_json = phonetic_json
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(rec, "phonetic_examples_json")
+    await session.flush()
 
 
 async def soft_delete_meeting(
@@ -175,10 +252,31 @@ async def start_recording(
     meeting_id: uuid.UUID,
     session_label: Optional[str] = None,
 ) -> Recording:
+    """Create a new recording. Auto-inherits venue/chaired_by/noted_by/
+    attendees from the latest recording in the same project so user doesn't
+    have to retype context each session (per-meeting-event fields like
+    title/purpose/date stay empty — user fills per session)."""
+    from sqlalchemy import select as _select, desc as _desc
+    prev_stmt = (
+        _select(Recording)
+        .where(Recording.meeting_id == meeting_id)
+        .order_by(_desc(Recording.started_at))
+        .limit(1)
+    )
+    prev = (await session.execute(prev_stmt)).scalars().first()
     recording = Recording(
         meeting_id=meeting_id,
         session_label=session_label,
         status="recording",
+        # Inherit "context" fields from previous recording (if any).
+        # These are usually stable across sessions of the same project.
+        venue=prev.venue if prev else None,
+        chaired_by=prev.chaired_by if prev else None,
+        noted_by=prev.noted_by if prev else None,
+        attendees=prev.attendees if prev else None,
+        # Auto-inherit model picks too — user only retypes when switching.
+        stt_model=prev.stt_model if prev else None,
+        llm_model=prev.llm_model if prev else None,
     )
     session.add(recording)
     await session.flush()
@@ -207,7 +305,12 @@ async def update_recording_label(
 async def join_recording_transcript(
     session: AsyncSession, recording_id: uuid.UUID
 ) -> str:
-    """Return joined text of all segments in 1 recording (COALESCE edited/original)."""
+    """Return joined text of all segments in 1 recording (COALESCE edited/original).
+
+    Prefixes lines with `SPEAKER_NN:` when the segment has a stored speaker —
+    gives the cleaner LLM ground-truth anchors instead of having to infer
+    speakers purely from context.
+    """
     stmt = (
         select(TranscriptSegment)
         .where(
@@ -217,7 +320,23 @@ async def join_recording_transcript(
         .order_by(TranscriptSegment.seq)
     )
     segments = (await session.execute(stmt)).scalars().all()
-    return "\n".join(s.text for s in segments)
+    out: list[str] = []
+    last_speaker: Optional[str] = None
+    for s in segments:
+        spk = (s.speaker or "").strip() or None
+        # Format timestamp prefix [mm:ss] when start_time_ms available
+        ts_prefix = ""
+        if s.start_time_ms is not None:
+            sec = s.start_time_ms // 1000
+            ts_prefix = f"[{sec // 60:02d}:{sec % 60:02d}] "
+        if spk and spk != last_speaker:
+            out.append(f"{ts_prefix}{spk}: {s.text}")
+            last_speaker = spk
+        else:
+            out.append(f"{ts_prefix}{s.text}" if ts_prefix else s.text)
+            if not spk:
+                last_speaker = None
+    return "\n".join(out)
 
 
 async def end_recording(
@@ -681,3 +800,4 @@ async def retrieve_memory_events(
 
     # No rerank → return RRF top-limit
     return [row_map[i] for i in rrf_ranked_ids[:limit]]
+

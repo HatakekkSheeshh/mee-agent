@@ -38,7 +38,7 @@ interface AppState {
   toggleSidebar: () => void;
   lang: Lang;
   setLang: (l: Lang) => void;
-  t: (key: StringKey) => string;
+  t: (key: StringKey, vars?: Record<string, string | number>) => string;
 
   // Per-pane status banners — split so MoM-related ops show in MoMPane
   // (not the pane the button lives in).
@@ -165,7 +165,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
   const t = useCallback(
-    (key: StringKey) => (STRINGS[lang] as Record<string, string>)[key] || key,
+    (key: StringKey, vars?: Record<string, string | number>) => {
+      const raw = (STRINGS[lang] as Record<string, string>)[key] || key;
+      if (!vars) return raw;
+      // {name} → vars.name. Unmatched placeholders are left as-is so missing
+      // keys are visible during development.
+      return raw.replace(/\{(\w+)\}/g, (m, k) =>
+        vars[k] !== undefined ? String(vars[k]) : m,
+      );
+    },
     [lang],
   );
 

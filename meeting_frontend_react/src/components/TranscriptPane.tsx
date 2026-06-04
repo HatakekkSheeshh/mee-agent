@@ -14,6 +14,7 @@ import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { CleanResponse } from "../types/api";
 import { CleanEditor } from "./CleanEditor";
+import { SpeakerMapper } from "./SpeakerMapper";
 import { useLiveRecording, type LiveSegment } from "../hooks/useLiveRecording";
 
 type ViewMode = "raw" | "clean";
@@ -35,20 +36,82 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     transcriptStatus: status,
     setTranscriptStatus: setStatus,
     t,
+    lang,
   } = useApp();
   const [view, setView] = useState<ViewMode>("raw");
+  // Background clean status: poll backend every 3s while running.
+  // Lets the user see a progress bar instead of guessing why Clean tab
+  // is slow when they click it right after upload.
+  const [cleanStatus, setCleanStatusState] =
+    useState<"idle" | "running" | "done">("idle");
+  const [cleanProgress, setCleanProgress] = useState<{
+    phase: "cleaning" | "saving";
+    current_chunk: number;
+    total_chunks: number;
+    started_at_ms: number;
+    raw_chars: number;
+  } | null>(null);
+  // Ping clean-status NOW (used right after upload / stop-record so the UI
+  // flips from idle→running without waiting for the next 3s poll tick).
+  const pingCleanStatus = useCallback(async () => {
+    if (!currentRecordingId) return;
+    try {
+      const r = await api.recordings.cleanStatus(currentRecordingId);
+      setCleanStatusState(r.status);
+      setCleanProgress(r.progress);
+    } catch { /* ignore */ }
+  }, [currentRecordingId]);
   const [rawText, setRawText] = useState<string>("");
   const [cleanSegs, setCleanSegs] = useState<CleanResponse["clean_segments"] | null>(null);
   const [editedHtml, setEditedHtml] = useState<string | null>(null);
+  const [clusterMapping, setClusterMapping] = useState<Record<string, string>>({});
+  const [preMappedClusters, setPreMappedClusters] = useState<string[]>([]);
+  const [availableClusters, setAvailableClusters] = useState<string[]>([]);
+  // Bumped after every voiceprint save → CleanEditor key changes → remount
+  // with fresh content (so renamed speaker labels show up immediately).
+  const [editorRev, setEditorRev] = useState(0);
+
+  async function reloadClean() {
+    if (!currentRecordingId) return;
+    try {
+      const r = await api.recordings.clean(currentRecordingId, false);
+      setCleanSegs(r.clean_segments);
+      setEditedHtml(r.edited_html || null);
+      setClusterMapping(r.cluster_mapping || {});
+      setPreMappedClusters(r.pre_mapped_clusters || []);
+      setAvailableClusters(r.available_clusters || []);
+      setEditorRev((v) => v + 1);
+    } catch {
+      /* ignore — banner already set elsewhere */
+    }
+  }
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Live record (WebSocket Whisper) ───
   // Each Record session APPENDS to whatever the textarea already holds —
   // doesn't wipe. completedRef = segments captured in THIS session only.
+  // dbTextRef = snapshot of rawText as last seen from DB (after fetch). Used
+  // by switchView to detect "user typed/pasted into textarea" vs "text is
+  // just what came from DB" — only the former needs to be imported before
+  // /clean runs. Without this check, every Clean-tab switch would re-import
+  // identical text → backend wipes clean_segments → /clean re-runs LLM.
+  const dbTextRef = useRef<string>("");
   // baseTextRef = textarea content frozen at the moment Record was clicked.
   const completedRef = useRef<LiveSegment[]>([]);
   const baseTextRef = useRef<string>("");
+
+  // [mm:ss] from segment start time (string or number, seconds).
+  // Returns "" when start is missing/invalid so the line still renders cleanly.
+  function fmtLiveTime(start: string | number | undefined): string {
+    if (start === undefined || start === null) return "";
+    const s = typeof start === "string" ? parseFloat(start) : start;
+    if (!isFinite(s) || s < 0) return "";
+    const m = Math.floor(s / 60);
+    const ss = Math.floor(s % 60);
+    return `[${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}] `;
+  }
+
   const onLiveSegments = useCallback((segs: LiveSegment[]) => {
     for (const s of segs) {
       if (s.completed && !completedRef.current.some((c) => c.start === s.start && c.text === s.text)) {
@@ -56,10 +119,19 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       }
     }
     const inProgress = segs.filter((s) => !s.completed);
-    const sessionLines = completedRef.current.map((s) => s.text.trim()).filter(Boolean);
+    // Live text shows [mm:ss] prefix per line so user sees absolute time
+    // of each utterance during recording. Speaker tags come AFTER stop
+    // (post_record_diarize); not available real-time with batch pyannote.
+    const sessionLines = completedRef.current
+      .map((s) => {
+        const txt = s.text.trim();
+        if (!txt) return "";
+        return `${fmtLiveTime(s.start)}${txt}`;
+      })
+      .filter(Boolean);
     if (inProgress.length > 0) {
       const last = inProgress[inProgress.length - 1];
-      sessionLines.push(`${last.text.trim()} …`);
+      sessionLines.push(`${fmtLiveTime(last.start)}${last.text.trim()} …`);
     }
     const sessionText = sessionLines.join("\n");
     // Merge: base + (blank line separator if base had content) + this session
@@ -76,7 +148,14 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         error: "error",
         idle: "info",
       };
-      setStatus({ kind: map[kind], msg });
+      // While recording, append a hint that speaker tags are post-record.
+      // Pyannote 3.1 is batch-only — can't stream cluster IDs consistently
+      // (see post_record_diarize for the post-stop run).
+      const finalMsg =
+        kind === "recording"
+          ? t("live.recordingSuffix", { msg })
+          : msg;
+      setStatus({ kind: map[kind], msg: finalMsg });
     },
     [setStatus],
   );
@@ -103,19 +182,86 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     live.stop();
     // After stop, persist accumulated text to DB so Clean + Generate MoM can read it.
     if (currentMeetingId && currentRecordingId && rawText.trim()) {
+      // Immediate feedback — diarize runs in the WS server (post_record_diarize)
+      // and clean runs in the API server (clean_orchestrator). Both kick off
+      // here. The cleanStatus poller below picks up the LLM phase; user sees
+      // the speaker tags appear when /clean refresh fires.
+      setStatus({
+        kind: "assessing",
+        msg: t("live.analyzing"),
+      });
       try {
         await api.meetings.importTranscript(currentMeetingId, {
           text: rawText,
           recording_id: currentRecordingId,
           replace: false,
         });
+        dbTextRef.current = rawText;
         await reloadCurrentMeeting();
+        pingCleanStatus();  // import_transcript triggered background clean
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        setStatus({ kind: "error", msg: `Lưu transcript lỗi: ${msg}` });
+        setStatus({ kind: "error", msg: t("live.saveError", { msg }) });
       }
     }
   }
+
+  // ─── Poll background clean status ONLY while running ───
+  // Initial state seeded from a single tick on recording switch (via the
+  // existing pingCleanStatus call elsewhere). Active polling kicks in only
+  // when status is "running" — stops as soon as backend reports done/idle.
+  // Avoids wasting 1 req/1.5s when nothing's happening.
+  useEffect(() => {
+    if (!currentRecordingId || cleanStatus !== "running") return;
+    let cancelled = false;
+    const rid = currentRecordingId;
+    async function tick() {
+      if (cancelled) return;
+      try {
+        const r = await api.recordings.cleanStatus(rid);
+        if (cancelled) return;
+        setCleanStatusState(r.status);
+        setCleanProgress(r.progress);
+      } catch {
+        /* swallow — next tick retries */
+      }
+    }
+    const interval = window.setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [currentRecordingId, cleanStatus]);
+
+  // Watch cleanStatus running → done transition. When clean finishes after a
+  // live-record stop, the user sees their banner flip from "Đang phân tích…"
+  // to "✓ Hoàn tất — speaker tags + clean transcript đã sẵn sàng". Refetch
+  // the meeting so the editor picks up speaker-tagged segments.
+  const prevCleanStatusRef = useRef<typeof cleanStatus>("idle");
+  useEffect(() => {
+    const prev = prevCleanStatusRef.current;
+    if (prev === "running" && cleanStatus === "done") {
+      setStatus({
+        kind: "success",
+        msg: t("live.done"),
+      });
+      reloadCurrentMeeting();
+    }
+    prevCleanStatusRef.current = cleanStatus;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanStatus]);
+
+  // Seed status on recording switch — kicks off polling above if status
+  // turns out to be "running".
+  useEffect(() => {
+    if (!currentRecordingId) {
+      setCleanStatusState("idle");
+      setCleanProgress(null);
+      return;
+    }
+    pingCleanStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRecordingId]);
 
   // ─── Load transcript whenever the selected recording changes ───
   useEffect(() => {
@@ -130,8 +276,30 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         const r = await api.recordings.transcript(currentRecordingId);
         if (cancelled) return;
         setRawText(r.transcript || "");
+        dbTextRef.current = r.transcript || "";
         setCleanSegs(null);    // invalidate clean cache on recording switch
         setEditedHtml(null);
+        setClusterMapping({});
+        setPreMappedClusters([]);
+        setAvailableClusters([]);
+        // If user was on the Clean tab when they switched recording, fetch
+        // the new recording's clean automatically — otherwise the pane goes
+        // blank and they'd have to bounce Raw→Clean to trigger a load.
+        if (view === "clean") {
+          try {
+            const c = await api.recordings.clean(currentRecordingId, false);
+            if (cancelled) return;
+            setCleanSegs(c.clean_segments);
+            setClusterMapping(c.cluster_mapping || {});
+            setPreMappedClusters(c.pre_mapped_clusters || []);
+            setAvailableClusters(c.available_clusters || []);
+            setEditedHtml(c.edited_html || null);
+          } catch {
+            // Clean not generated yet for this recording — fall back to Raw
+            // so user sees something instead of an empty Clean pane.
+            if (!cancelled) setView("raw");
+          }
+        }
       } catch (e) {
         if (!cancelled) {
           setStatus({ kind: "error", msg: `Tải transcript lỗi: ${(e as Error).message}` });
@@ -139,6 +307,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRecordingId]);
 
   // ─── Upload audio file ───
@@ -151,19 +320,73 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     setBusy(true);
     setStatus({ kind: "assessing", msg: `Đang upload "${file.name}"…` });
     try {
-      const { text } = await api.transcribe(file);
+      // Pass attendees to bias Whisper STT + diarization (correct name
+      // spellings, expected speaker count). Defined in MeetingControl
+      // details panel.
+      // Per-meeting-event metadata moved to recording in migration 0012.
+      // Look up the current recording for attendees + recording-level vocab.
+      const currentRec = currentMeeting?.recordings.find(
+        (r) => r.id === currentRecordingId,
+      );
+      const attendeesStr =
+        currentRec?.attendees?.map((a) => a.name).filter(Boolean).join(", ") || "";
+      // Vocab is 2-tier: project default + recording-specific. Concat both.
+      const vocabParts = [
+        (currentMeeting?.vocab_hints || "").trim(),
+        (currentRec?.vocab_hints || "").trim(),
+      ].filter(Boolean);
+      const vocabStr = vocabParts.join(", ");
+      const transcribeResp = await api.transcribe(file, "vi", vocabStr, attendeesStr);
+      const text = transcribeResp.text;
       if (!text?.trim()) {
         setStatus({ kind: "error", msg: "Không phát hiện giọng nói." });
         return;
       }
-      setRawText(text);
+      // Format text with [mm:ss] SPEAKER_NN: prefixes for the Raw textarea
+      // view, when PhoWhisper returned structured segments.
+      const phoSegs = transcribeResp.segments;
+      const formattedText = phoSegs?.length
+        ? phoSegs
+            .map((s) => {
+              const spk = (s.speaker || "").trim();
+              const body = (s.text || "").trim();
+              let ts = "";
+              if (typeof s.start === "number") {
+                const sec = Math.floor(s.start);
+                const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+                const ss = String(sec % 60).padStart(2, "0");
+                ts = `[${mm}:${ss}] `;
+              }
+              return body ? `${ts}${spk ? spk + ": " : ""}${body}` : "";
+            })
+            .filter(Boolean)
+            .join("\n")
+        : text;
+      setRawText(formattedText);
+      dbTextRef.current = formattedText;
       setStatus({ kind: "assessing", msg: "Đang lưu transcript vào DB…" });
       const imp = await api.meetings.importTranscript(currentMeetingId, {
-        text,
+        text,  // legacy fallback (only used if segments absent)
+        // Pass structured segments — backend uses these to populate
+        // transcript_segments with speaker + timestamps.
+        segments: phoSegs?.map((s) => ({
+          text: s.text,
+          speaker: s.speaker || null,
+          start: s.start ?? null,
+          end: s.end ?? null,
+        })),
         recording_id: currentRecordingId,
         replace: false,
+        // Forward PhoWhisper's per-cluster embeddings (if STT returned them)
+        // so the Clean step's matcher can recognise returning speakers.
+        cluster_embeddings:
+          (transcribeResp as { cluster_embeddings?: Record<string, number[]> })
+            .cluster_embeddings || null,
       });
       await reloadCurrentMeeting();
+      // Background clean was just triggered by import-transcript endpoint —
+      // flip the badge to "running" right away.
+      pingCleanStatus();
       setStatus({
         kind: "success",
         msg: `Đã transcribe "${file.name}" ✓ (${imp.segments_count} đoạn)`,
@@ -192,7 +415,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           replace: false,
         });
       }
-      const res = await api.recordings.generateMom(currentRecordingId);
+      const res = await api.recordings.generateMom(currentRecordingId, lang);
       // Cache immediately — MoMPane displays without waiting for backend reload
       // (which would also require backend to be running latest code).
       setRecordingMom(currentRecordingId, res.notes);
@@ -240,13 +463,40 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       setBusy(true);
       setStatus({ kind: "assessing", msg: "Đang clean transcript (LLM)…" });
       try {
+        // If user typed/pasted text directly into the Raw textarea but never
+        // recorded/uploaded (no auto-save path triggered), DB is empty for
+        // this recording → /clean would fail with "No segments to clean".
+        // Only persist textarea content if the user actually changed it
+        // (pasted / typed). Re-importing identical text wipes the cached
+        // clean_segments on the backend → /clean would re-run LLM each time
+        // user toggles to Clean tab.
+        const userEditedText =
+          rawText.trim() && rawText !== dbTextRef.current;
+        if (currentMeetingId && userEditedText) {
+          try {
+            await api.meetings.importTranscript(currentMeetingId, {
+              text: rawText,
+              recording_id: currentRecordingId,
+              replace: false,
+            });
+            dbTextRef.current = rawText;
+          } catch {
+            // Non-fatal — /clean will surface the real problem below if any.
+          }
+        }
         const r = await api.recordings.clean(currentRecordingId, false);
         setCleanSegs(r.clean_segments);
         setEditedHtml(r.edited_html || null);
+        setClusterMapping(r.cluster_mapping || {});
+        setPreMappedClusters(r.pre_mapped_clusters || []);
+        setAvailableClusters(r.available_clusters || []);
         setStatus({
           kind: "success",
           msg: r.cached ? "Clean (cache) ✓" : "Clean ✓",
         });
+        // After /clean returns, background task is finished — refresh status
+        // so the progress bar hides immediately (don't wait next poll tick).
+        pingCleanStatus();
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
         setStatus({ kind: "error", msg: `Clean lỗi: ${msg}` });
@@ -255,7 +505,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         setBusy(false);
       }
     },
-    [currentRecordingId, cleanSegs],
+    [currentRecordingId, currentMeetingId, cleanSegs, rawText],
   );
 
   function regenerateClean() {
@@ -267,6 +517,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       .then((r) => {
         setCleanSegs(r.clean_segments);
         setEditedHtml(r.edited_html || null);
+        setClusterMapping(r.cluster_mapping || {});
+        setPreMappedClusters(r.pre_mapped_clusters || []);
+        setAvailableClusters(r.available_clusters || []);
         setStatus({ kind: "success", msg: "Clean ✓" });
       })
       .catch((e) => {
@@ -313,8 +566,23 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             className={`view-toggle-btn${view === "clean" ? " active" : ""}`}
             type="button"
             onClick={() => switchView("clean")}
+            title={
+              cleanStatus === "running"
+                ? "Clean đang được tạo ngầm — bấm sẽ đợi LLM xong (~30s-2min)"
+                : cleanStatus === "done"
+                ? "Clean đã sẵn sàng — bấm để xem instant từ DB"
+                : ""
+            }
           >
             {t("view.clean")}
+            {cleanStatus === "done" && view !== "clean" && (
+              <span
+                style={{ marginLeft: 4, fontSize: 10, color: "var(--accent)" }}
+                aria-label="Clean sẵn sàng"
+              >
+                ✓
+              </span>
+            )}
           </button>
         </div>
         <div className="pane-actions">
@@ -402,10 +670,21 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                     ↻ Regenerate
                   </button>
                 </div>
+                <SpeakerMapper
+                  recordingId={currentRecordingId!}
+                  segments={cleanSegs}
+                  clusterMapping={clusterMapping}
+                  preMappedClusters={preMappedClusters}
+                  availableClusters={availableClusters}
+                  onSaved={reloadClean}
+                />
                 <CleanEditor
+                  key={`${currentRecordingId}-${editorRev}`}
                   recordingId={currentRecordingId!}
                   segments={cleanSegs}
                   editedHtml={editedHtml}
+                  clusterMapping={clusterMapping}
+                  onSaved={(html) => setEditedHtml(html)}
                 />
               </>
             )}
@@ -421,6 +700,12 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           >
             {t("btn.saveTxt")}
           </button>
+          {/* Background clean progress bar — only visible while running.
+              Positioned between "Save .txt" and "Project summary" so it
+              doesn't crowd the view toggle in the header. */}
+          {cleanStatus === "running" && (
+            <CleanProgressBar progress={cleanProgress} />
+          )}
           <div className="spacer"></div>
           <button
             className="btn btn-ghost btn-sm"
@@ -457,5 +742,112 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         </div>
       </div>
     </section>
+  );
+}
+
+/** Background clean progress bar. Combines chunk progress (deterministic if
+ * cleaner is mid-way through multi-chunk transcript) with a time-based
+ * estimate (~45s per chunk for Qwen3-8B on a 14K-char chunk). Caps at 95%
+ * until backend reports done so user doesn't see 100% then wait. */
+function CleanProgressBar({
+  progress,
+}: {
+  progress: {
+    phase: "cleaning" | "saving";
+    current_chunk: number;
+    total_chunks: number;
+    started_at_ms: number;
+    raw_chars: number;
+  } | null;
+}) {
+  // Tick every 500ms so the time-based portion of the estimate animates.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 500);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (!progress) {
+    // Backend started a task but hasn't recorded progress yet (very first
+    // moment) — indeterminate animated stripe.
+    return (
+      <div
+        style={{
+          marginLeft: 12,
+          width: 160,
+          height: 6,
+          borderRadius: 4,
+          background: "var(--surface-3)",
+          overflow: "hidden",
+          position: "relative",
+        }}
+        aria-label="Đang chuẩn bị clean"
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%)",
+            backgroundSize: "40% 100%",
+            animation: "clean-stripe 1.2s linear infinite",
+          }}
+        />
+        <style>{`@keyframes clean-stripe { 0% { background-position: -40% 0; } 100% { background-position: 140% 0; } }`}</style>
+      </div>
+    );
+  }
+
+  // Estimate based on chunk count + elapsed time. ~45s budget per chunk.
+  const SEC_PER_CHUNK = 45;
+  const elapsedSec = (Date.now() - progress.started_at_ms) / 1000;
+  const totalBudget = Math.max(SEC_PER_CHUNK, SEC_PER_CHUNK * progress.total_chunks);
+  // Time-based fraction, slowed at the tail so we don't hit 100% prematurely.
+  const timePct = Math.min(95, (elapsedSec / totalBudget) * 100);
+  // Chunk-based fraction (deterministic if cleaner has flushed progress).
+  const chunkPct =
+    progress.total_chunks > 0
+      ? (progress.current_chunk / progress.total_chunks) * 100
+      : 0;
+  const pct = Math.max(timePct, chunkPct);
+  const phaseLabel =
+    progress.phase === "saving"
+      ? "Đang lưu…"
+      : progress.total_chunks > 1
+      ? `Cleaning ${Math.min(progress.current_chunk + 1, progress.total_chunks)}/${progress.total_chunks}`
+      : "Cleaning…";
+
+  return (
+    <div
+      style={{
+        marginLeft: 12,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+      title={`${Math.round(pct)}% · ${Math.round(elapsedSec)}s elapsed`}
+    >
+      <div
+        style={{
+          width: 140,
+          height: 6,
+          borderRadius: 4,
+          background: "var(--surface-3)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: "var(--accent)",
+            transition: "width 0.4s ease-out",
+          }}
+        />
+      </div>
+      <span style={{ fontSize: 10, color: "var(--text-mute)", whiteSpace: "nowrap" }}>
+        {phaseLabel}
+      </span>
+    </div>
   );
 }
