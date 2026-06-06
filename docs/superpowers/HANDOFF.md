@@ -8,8 +8,9 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 
 > Continue the Mee meeting-agent work on branch `feat/backend-agents`. Read `CLAUDE.md`,
 > `docs/superpowers/HANDOFF.md`, the spec, and the plan under `docs/superpowers/`.
-> Phase 1 (interactive ChatPane wired to `/api/chat`) is done. Next: Phase 2 — design/build
-> the multipurpose chat LangGraph with the pm-agent A2A branch (per the spec/plan).
+> Phases 1 & 2 are done (interactive ChatPane + the pm-agent A2A chat branch, 26 passing
+> tests under `tests/meeting/`). Next: live smoke against a real `PM_AGENT_API_KEY` + a DB
+> at head, and the React `need_more_info` text-reply affordance (see PENDING/NEXT).
 
 ## Reference artifacts (all committed, self-contained)
 
@@ -32,14 +33,40 @@ Read this first when resuming. It captures state a fresh session can't infer fro
      approve/reject card, busy/error states).
 4. **README** — clarified Python install (incl. `psycopg[binary]`) + UI/npm install; fixed `.venv`→`venv`.
 
+5. **Phase 2 — pm-agent A2A chat branch (backend, Tasks 1–6 of the plan)** — DONE, 26 tests pass
+   (`venv/bin/python -m pytest tests/meeting -v`):
+   - `meeting/services/pm_agent_client.py` — thin httpx A2A v0.3 JSON-RPC client
+     (`PmAgentClient.send_message/cancel`, `PmAgentResult`, `PmAgentError`); exported from
+     `meeting/services/__init__.py`.
+   - **Open Q #3 RESOLVED:** non-streaming `message/send` *does* return the interrupted Task
+     (state `input-required` + `approval_request` DataPart) in the response body — verified by
+     reading the a2a-sdk's `DefaultRequestHandler.on_message_send` /
+     `ResultAggregator.consume_and_break_on_interrupt` (only `auth-required` breaks early;
+     `input-required` lets the queue drain and returns the aggregated Task). No SSE needed.
+   - `meeting/graphs/chat_graph.py` — `pm_task` intent + `pm_call` (one idempotent send, no
+     interrupt) / `pm_await` (the only `interrupt()`) / `pm_reply`, looped, capped by
+     `PM_MAX_ROUNDS=6`. `build_chat_graph(…, pm_client=None)` seam (prod lazily resolves
+     `get_pm_agent_client()` inside `pm_call`, so non-PM chats need no `PM_AGENT_*`).
+     `resume_chat_turn` now detects re-interrupts (need_more_info → need_approval).
+   - `meeting/api/chat.py` — `ApprovalRequest` gains `approval_action` + `text`; pm interrupts
+     persist as `PendingAction(tool_name="pm_agent")`; approve/reject build the pm decision.
+     Logic in pure helpers (`_persist_fields`/`_approve_decision`/`_reject_decision`).
+   - `.env.example` — `PM_AGENT_A2A_URL` / `PM_AGENT_API_KEY` / `PM_AGENT_TIMEOUT`.
+   - Test infra: first suite for `meeting/` under `tests/meeting/` (`pytest.ini` asyncio
+     auto-mode scoped there; `conftest.py` seeds dummy env); `requirements-dev.txt`.
+
 ## PENDING / NEXT
 
-- **Phase 2:** Build the multipurpose chat LangGraph + pm-agent A2A branch (Tasks 1–6 in the plan).
-  Decisions already locked: extend existing `chat_graph.py` with a `pm_task` branch; static
-  `X-API-KEY` auth; mirror pm-agent HITL approvals via `interrupt()`.
-- **Verify ChatPane end-to-end** against a running backend (only typechecked so far, not run live).
-- **Plan refinements noted but not yet applied:** (a) inject the pm-agent client via monkeypatch of
-  `get_pm_agent_client` rather than a new `build_chat_graph` param; (b) Tasks 5–6 need a working DB.
+- **Live smoke (plan Task 6, last bullet) — NOT yet run** (blocked: no real `PM_AGENT_API_KEY`
+  and no DB at head here). With a key in `.env` + a DB: `venv/bin/python run_meeting.py`, create a
+  chat session, send "liệt kê issue overdue" (read-only) → real pm-agent reply; then a create
+  request → approval card → approve → Redmine write.
+- **React FE `need_more_info` affordance** (spec Open Q #4): the backend can now interrupt with
+  `pending_action.kind == "need_more_info"` (a free-text prompt, no issues). The FE only renders
+  approve/reject; add a text-reply box that calls `…/approve` with `{text}`.
+- **transcript_segments injection** — still deferred (spec §5). The single seam is marked with a
+  comment in `pm_call`; no trigger/shape decided.
+- **Verify ChatPane end-to-end** against a running backend (still only typechecked, not run live).
 
 ## ⚠️ Live blockers / gotchas (will bite the next session)
 
