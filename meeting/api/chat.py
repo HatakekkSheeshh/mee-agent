@@ -44,6 +44,11 @@ class MessageSend(BaseModel):
 class ApprovalRequest(BaseModel):
     edited_args: Optional[dict] = None
     reason: Optional[str] = None
+    # pm-agent (A2A) additions:
+    #   approval_action — "approve" | "edit" | "reject" for a need_approval step
+    #   text            — free-text answer to a need_more_info step
+    approval_action: Optional[str] = None
+    text: Optional[str] = None
 
 
 class RejectionRequest(BaseModel):
@@ -52,11 +57,103 @@ class RejectionRequest(BaseModel):
 
 # ─── Helpers ──────────────────────────────────────────────────────
 
+# Sentinel tool_name marking a PendingAction that represents a pm-agent (A2A)
+# HITL step rather than a local tool. Drives resume-payload shaping below.
+PM_TOOL_NAME = "pm_agent"
+
+
 def _parse_uuid(s: str) -> uuid.UUID:
     try:
         return uuid.UUID(s)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid UUID: {s}")
+
+
+def _is_pm_interrupt(pa_data: dict) -> bool:
+    """A pm-agent interrupt carries a `kind` and no local `tool` key."""
+    return pa_data.get("kind") in ("need_approval", "need_more_info") or "tool" not in pa_data
+
+
+def _persist_fields(pa_data: dict) -> dict:
+    """Map a graph interrupt payload → PendingAction fields + the API response body.
+
+    Local-tool interrupt: {"tool","args","rationale","description"}.
+    pm-agent interrupt:    {"kind":"need_approval"|"need_more_info","issues"?,"prompt"}.
+    """
+    if _is_pm_interrupt(pa_data):
+        return {
+            "tool_name": PM_TOOL_NAME,
+            "tool_args": pa_data,
+            "rationale": pa_data.get("prompt"),
+            "response": {
+                "tool": PM_TOOL_NAME,
+                "args": pa_data,
+                "kind": pa_data.get("kind"),
+                "issues": pa_data.get("issues"),
+                "prompt": pa_data.get("prompt"),
+            },
+        }
+    return {
+        "tool_name": pa_data["tool"],
+        "tool_args": pa_data.get("args") or {},
+        "rationale": pa_data.get("rationale"),
+        "response": {
+            "tool": pa_data["tool"],
+            "args": pa_data.get("args") or {},
+            "rationale": pa_data.get("rationale"),
+            "description": pa_data.get("description"),
+        },
+    }
+
+
+def _approve_decision(
+    tool_name: str,
+    *,
+    approval_action: Optional[str],
+    text: Optional[str],
+    edited_args: Optional[dict],
+    reason: Optional[str],
+) -> dict:
+    """Build the resume decision for an approve. pm-agent steps carry an
+    approval verb or free text; local tools keep the existing shape."""
+    if tool_name == PM_TOOL_NAME:
+        decision: dict = {}
+        if approval_action:
+            decision["approval_action"] = approval_action
+        if text is not None:
+            decision["text"] = text
+        if not approval_action and text is None:
+            decision["approval_action"] = "approve"  # default: confirm
+        return decision
+    return {"action": "approved", "edited_args": edited_args, "reason": reason}
+
+
+def _reject_decision(tool_name: str, *, reason: Optional[str]) -> dict:
+    if tool_name == PM_TOOL_NAME:
+        return {"approval_action": "reject", "approval_input": reason or ""}
+    return {"action": "rejected", "reason": reason}
+
+
+async def _persist_interrupt(
+    session: AsyncSession, sid: uuid.UUID, user, result: dict
+) -> dict:
+    """Persist a (possibly fresh) pending action and shape the interrupted response."""
+    fields = _persist_fields(result["pending_action"])
+    action = await repo.create_pending_action(
+        session,
+        session_id=sid,
+        user_id=user.id,
+        thread_id=str(sid),
+        tool_name=fields["tool_name"],
+        tool_args=fields["tool_args"],
+        rationale=fields["rationale"],
+        checkpoint_id=result.get("checkpoint_id"),
+    )
+    return {
+        "status": "interrupted",
+        "pending_action_id": str(action.id),
+        "pending_action": {"id": str(action.id), **fields["response"]},
+    }
 
 
 # ─── Sessions ─────────────────────────────────────────────────────
@@ -153,29 +250,9 @@ async def send_message(
     )
 
     if result["status"] == "interrupted":
-        # Persist pending_action so FE can fetch + user can approve later
-        pa_data = result["pending_action"]
-        action = await repo.create_pending_action(
-            session,
-            session_id=sid,
-            user_id=user.id,
-            thread_id=session_id,
-            tool_name=pa_data["tool"],
-            tool_args=pa_data["args"],
-            rationale=pa_data.get("rationale"),
-            checkpoint_id=result.get("checkpoint_id"),
-        )
-        return {
-            "status": "interrupted",
-            "pending_action_id": str(action.id),
-            "pending_action": {
-                "id": str(action.id),
-                "tool": pa_data["tool"],
-                "args": pa_data["args"],
-                "rationale": pa_data.get("rationale"),
-                "description": pa_data.get("description"),
-            },
-        }
+        # Persist pending_action so FE can fetch + user can approve later.
+        # Handles both local-tool and pm-agent interrupts (see _persist_fields).
+        return await _persist_interrupt(session, sid, user, result)
 
     return {
         "status": "complete",
@@ -224,11 +301,13 @@ async def approve_action(
             status_code=400, detail=f"Action already {action.status}"
         )
 
-    decision = {
-        "action": "approved",
-        "edited_args": req.edited_args,
-        "reason": req.reason,
-    }
+    decision = _approve_decision(
+        action.tool_name,
+        approval_action=req.approval_action,
+        text=req.text,
+        edited_args=req.edited_args,
+        reason=req.reason,
+    )
     await repo.resolve_pending_action(
         session, aid, decision="approved",
         edited_args=req.edited_args, reason=req.reason,
@@ -242,6 +321,12 @@ async def approve_action(
         session=session,
         checkpointer=checkpointer,
     )
+
+    # A pm-agent step may interrupt again (need_more_info → need_approval):
+    # persist a fresh pending action and surface it like a first-turn interrupt.
+    if result["status"] == "interrupted":
+        user = await repo.get_or_create_dev_user(session)
+        return await _persist_interrupt(session, action.session_id, user, result)
 
     # Mark as executed
     if result.get("tool_result"):
@@ -278,10 +363,15 @@ async def reject_action(
     checkpointer = get_checkpointer()
     result = await resume_chat_turn(
         session_id=action.thread_id,
-        decision={"action": "rejected", "reason": req.reason},
+        decision=_reject_decision(action.tool_name, reason=req.reason),
         session=session,
         checkpointer=checkpointer,
     )
+
+    # Rejecting one pm step can still lead to a follow-up prompt — surface it.
+    if result["status"] == "interrupted":
+        user = await repo.get_or_create_dev_user(session)
+        return await _persist_interrupt(session, action.session_id, user, result)
 
     return {
         "status": "rejected",

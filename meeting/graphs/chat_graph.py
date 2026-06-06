@@ -597,6 +597,35 @@ def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None):
 
 # ─── Runner ───────────────────────────────────────────────────────
 
+async def _interrupt_or_complete(graph, config, result: dict, session_id: str) -> dict:
+    """Inspect the post-invoke snapshot: paused → interrupted, else complete.
+
+    Shared by run_chat_turn and resume_chat_turn so that a *resume* which leads
+    to another interrupt (e.g. need_more_info → need_approval in the pm-agent
+    loop) is surfaced exactly like a first-turn interrupt.
+    """
+    snap = await graph.aget_state(config)
+    if snap.next:  # has a next node = paused on interrupt()
+        for task in snap.tasks:
+            if task.interrupts:
+                int_payload = task.interrupts[0].value
+                logger.info("=== ChatGraph INTERRUPTED — pending action ===")
+                return {
+                    "status": "interrupted",
+                    "pending_action": int_payload,
+                    "thread_id": session_id,
+                    "checkpoint_id": snap.config.get("configurable", {}).get("checkpoint_id"),
+                }
+
+    logger.info("=== ChatGraph turn complete ===")
+    return {
+        "status": "complete",
+        "reply": result.get("final_reply", ""),
+        "intent": result.get("intent"),
+        "tool_result": result.get("tool_result"),
+    }
+
+
 async def run_chat_turn(
     *,
     session_id: str,
@@ -626,48 +655,24 @@ async def run_chat_turn(
 
     logger.info(f"=== Running ChatGraph turn for session {session_id[:8]} ===")
     result = await graph.ainvoke(initial_state, config=config)
-
-    # Check if interrupted
-    snap = await graph.aget_state(config)
-    if snap.next:  # has next node = paused
-        # Pull interrupt payload from the snapshot
-        interrupts = snap.tasks
-        for task in interrupts:
-            if task.interrupts:
-                int_payload = task.interrupts[0].value
-                logger.info(f"=== ChatGraph INTERRUPTED — pending action ===")
-                return {
-                    "status": "interrupted",
-                    "pending_action": int_payload,
-                    "thread_id": session_id,
-                    "checkpoint_id": snap.config.get("configurable", {}).get("checkpoint_id"),
-                }
-
-    logger.info(f"=== ChatGraph turn complete ===")
-    return {
-        "status": "complete",
-        "reply": result.get("final_reply", ""),
-        "intent": result.get("intent"),
-        "tool_result": result.get("tool_result"),
-    }
+    return await _interrupt_or_complete(graph, config, result, session_id)
 
 
 async def resume_chat_turn(
     *,
     session_id: str,
-    decision: dict,  # {"action": "approved"|"rejected", "edited_args"?, "reason"?}
+    decision: dict,  # {"action": "approved"|"rejected", ...} or pm {"approval_action"|"text"}
     session: AsyncSession,
     checkpointer,
 ) -> dict:
-    """Resume graph after user approves/rejects pending action."""
+    """Resume graph after a user decision.
+
+    May complete OR interrupt again (multi-step pm-agent HITL) — the return
+    shape mirrors run_chat_turn so the API can persist a fresh pending action.
+    """
     graph = build_chat_graph(session, checkpointer)
     config = {"configurable": {"thread_id": session_id}}
 
     logger.info(f"=== Resuming ChatGraph session {session_id[:8]} with decision={decision}")
     result = await graph.ainvoke(Command(resume=decision), config=config)
-    logger.info(f"=== ChatGraph resume complete ===")
-    return {
-        "status": "complete",
-        "reply": result.get("final_reply", ""),
-        "tool_result": result.get("tool_result"),
-    }
+    return await _interrupt_or_complete(graph, config, result, session_id)
