@@ -51,7 +51,7 @@ class ChatState(TypedDict, total=False):
     recent_messages: list[dict]  # last N messages from chat_messages
 
     # Filled by classify_intent
-    intent: Literal["question", "tool"]
+    intent: Literal["question", "tool", "pm_task"]
     proposed_tool: Optional[str]
     proposed_args: Optional[dict]
     rationale: Optional[str]
@@ -139,11 +139,17 @@ Meeting context hiện tại:
 
 PHÂN LOẠI:
 1. "question" — user hỏi về nội dung họp / MoM / tóm tắt → trả lời trực tiếp, KHÔNG cần tool
-2. "tool" — user yêu cầu hành động cần tool (gửi email, tạo task, search transcript)
+2. "tool" — user yêu cầu hành động cần tool nội bộ (gửi email, tạo task, search transcript)
+3. "pm_task" — user yêu cầu thao tác quản lý dự án trên Redmine qua pm-agent:
+   - Truy vấn/báo cáo issue (liệt kê, tìm, issue overdue / stale / sắp đến hạn, workload…)
+   - Tạo / cập nhật / cập nhật hàng loạt issue (các thao tác ghi sẽ cần user duyệt)
+   Ví dụ: "tạo issue cho việc deploy v1", "liệt kê issue overdue của tôi",
+   "cập nhật trạng thái issue #123". Với pm_task KHÔNG cần proposed_tool/args
+   (pm-agent tự chọn skill); chỉ cần đặt intent = "pm_task".
 
 Trả về CHỈ JSON (không markdown, không giải thích):
 {{
-  "intent": "question" | "tool",
+  "intent": "question" | "tool" | "pm_task",
   "proposed_tool": "<tool_name>" or null,
   "proposed_args": {{...}} or null,
   "rationale": "<vì sao chọn intent/tool này — 1 câu ngắn>"
@@ -185,10 +191,15 @@ Trả về CHỈ JSON (không markdown, không giải thích):
         return {"intent": "question", "error": f"classify failed: {e}"}
 
 
-def route_after_classify(state: ChatState) -> Literal["answer", "propose_action"]:
+def route_after_classify(
+    state: ChatState,
+) -> Literal["answer", "propose_action", "pm_call"]:
     """Conditional edge: pick branch based on intent."""
     intent = state.get("intent", "question")
     tool_name = state.get("proposed_tool")
+
+    if intent == "pm_task":
+        return "pm_call"
 
     if intent == "tool" and tool_name:
         tool_spec = get_tool(tool_name)
