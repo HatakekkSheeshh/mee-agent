@@ -33,8 +33,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
 from meeting.services import execute_tool, get_tool, list_tools
+from meeting.services.pm_agent_client import (
+    PmAgentError,
+    PmAgentResult,
+    get_pm_agent_client,
+)
 
 logger = logging.getLogger(__name__)
+
+# Safety cap on the pm_call ⇄ pm_await loop against a misbehaving agent.
+PM_MAX_ROUNDS = 6
 
 
 # ─── State ────────────────────────────────────────────────────────
@@ -62,6 +70,17 @@ class ChatState(TypedDict, total=False):
     # Filled by execute_action / answer
     tool_result: Optional[dict]
     final_reply: str           # text to show user
+
+    # ── pm-agent A2A branch (intent == "pm_task") ──
+    # All checkpointed (thread_id = session_id) so a multi-step pm-agent
+    # conversation survives across approve/reject round-trips on one thread.
+    pm_task_id: Optional[str]      # A2A task id; None on first call, set from result
+    pm_next_payload: dict          # what pm_call sends next:
+    #   {kind:"start"|"text", text} | {kind:"approval", approval_action, approval_input}
+    pm_last: Optional[dict]        # last PmAgentResult, as a dict
+    pm_pending: Optional[dict]     # payload handed to interrupt() for the FE
+    pm_rounds: int                 # loop counter for PM_MAX_ROUNDS
+    pm_route: Optional[str]        # pm_call → router hint: "await" | "reply" | "end"
 
     # Internal
     error: Optional[str]
@@ -379,9 +398,161 @@ def make_save_reply(session: AsyncSession):
     return save_reply
 
 
+# ─── pm-agent A2A branch ──────────────────────────────────────────
+#
+# Correctness constraint (LangGraph replays an interrupted node from its top
+# on resume): the non-idempotent A2A send MUST live in pm_call, which has NO
+# interrupt(). pm_await is the ONLY node that interrupts — it performs no send.
+# So each pm_call invocation sends exactly once, and resuming re-runs only
+# pm_await (recomputing its idempotent pending payload), never re-sending.
+
+
+def _result_to_dict(result: PmAgentResult) -> dict:
+    return {
+        "task_id": result.task_id,
+        "state": result.state,
+        "text": result.text,
+        "need_approval": result.need_approval,
+        "issues": result.issues,
+    }
+
+
+def _decision_to_payload(decision: Optional[dict]) -> dict:
+    """Map a resume decision (from the API/FE) → the next pm_call payload."""
+    decision = decision or {}
+
+    # Explicit pm-agent approval verb wins.
+    action = decision.get("approval_action")
+    if action in ("approve", "edit", "reject"):
+        return {
+            "kind": "approval",
+            "approval_action": action,
+            "approval_input": decision.get("approval_input") or decision.get("text") or "",
+        }
+
+    # Generic local-tool style decision (approved/rejected) → approval verb.
+    act = decision.get("action")
+    if act == "approved":
+        return {
+            "kind": "approval",
+            "approval_action": "approve",
+            "approval_input": decision.get("approval_input") or decision.get("text") or "",
+        }
+    if act == "rejected":
+        return {
+            "kind": "approval",
+            "approval_action": "reject",
+            "approval_input": decision.get("reason") or "",
+        }
+
+    # Otherwise: free-text answer to a need_more_info prompt.
+    text = decision.get("text") or decision.get("approval_input") or ""
+    return {"kind": "text", "text": text}
+
+
+def make_pm_call(pm_client):
+    async def pm_call(state: ChatState) -> dict:
+        """One A2A send per invocation (idempotent). Never interrupts."""
+        rounds = state.get("pm_rounds", 0) + 1
+        if rounds > PM_MAX_ROUNDS:
+            logger.warning("[Node pm_call] PM_MAX_ROUNDS exceeded — aborting")
+            return {
+                "pm_rounds": rounds,
+                "pm_route": "end",
+                "final_reply": (
+                    "Xin lỗi, yêu cầu với pm-agent lặp quá nhiều vòng nên mình "
+                    "tạm dừng. Bạn thử diễn đạt lại nhé."
+                ),
+                "tool_result": {"status": "aborted", "reason": "max_rounds", "via": "pm_agent"},
+            }
+
+        payload = state.get("pm_next_payload") or {
+            "kind": "start",
+            "text": state.get("user_message", ""),
+        }
+        task_id = state.get("pm_task_id")
+        kind = payload.get("kind")
+
+        try:
+            client = pm_client or get_pm_agent_client()
+            if kind == "approval":
+                data_part = {
+                    "approval_action": payload.get("approval_action", "approve"),
+                    "approval_input": payload.get("approval_input", ""),
+                }
+                result = await client.send_message("", task_id=task_id, data_part=data_part)
+            else:
+                # kind in ("start", "text"). DEFERRED SEAM (spec §5): transcript
+                # context for the chat's bound meeting/recording could be folded
+                # into `text` here. Trigger/shape TBD — no behavior added in v1.
+                result = await client.send_message(payload.get("text", ""), task_id=task_id)
+        except PmAgentError as e:
+            logger.exception("[Node pm_call] pm-agent call failed")
+            return {
+                "pm_rounds": rounds,
+                "pm_route": "end",
+                "final_reply": f"Xin lỗi, không kết nối được pm-agent: {e}",
+                "tool_result": {"error": str(e), "via": "pm_agent"},
+            }
+
+        route = "await" if result.state == "input_required" else "reply"
+        logger.info(
+            f"[Node pm_call] round={rounds} state={result.state} "
+            f"task_id={result.task_id!r} route={route}"
+        )
+        return {
+            "pm_rounds": rounds,
+            "pm_task_id": result.task_id or task_id,
+            "pm_last": _result_to_dict(result),
+            "pm_route": route,
+        }
+
+    return pm_call
+
+
+def route_after_pm_call(state: ChatState) -> Literal["pm_await", "pm_reply", "save_reply"]:
+    route = state.get("pm_route")
+    if route == "await":
+        return "pm_await"
+    if route == "end":
+        return "save_reply"
+    return "pm_reply"
+
+
+async def pm_await(state: ChatState) -> dict:
+    """The ONLY interrupt in the pm branch. No A2A send here (replay-safe)."""
+    last = state.get("pm_last") or {}
+    if last.get("need_approval"):
+        pending = {
+            "kind": "need_approval",
+            "issues": last.get("issues") or [],
+            "prompt": last.get("text", ""),
+        }
+    else:
+        pending = {"kind": "need_more_info", "prompt": last.get("text", "")}
+
+    logger.info(f"[Node pm_await] INTERRUPT kind={pending['kind']}")
+    decision = interrupt(pending)
+    # On resume, `decision` is the value passed to Command(resume=...).
+    logger.info(f"[Node pm_await] RESUMED decision={decision}")
+    return {"pm_pending": pending, "pm_next_payload": _decision_to_payload(decision)}
+
+
+async def pm_reply(state: ChatState) -> dict:
+    last = state.get("pm_last") or {}
+    return {
+        "final_reply": last.get("text") or "(pm-agent không trả về nội dung)",
+        "tool_result": {
+            "status": last.get("state"),
+            "task_id": last.get("task_id"),
+            "via": "pm_agent",
+        },
+    }
+
+
 # ─── Builder ──────────────────────────────────────────────────────
 
-def build_chat_graph(session: AsyncSession, checkpointer):
+def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None):
     g = StateGraph(ChatState)
 
     g.add_node("load_context", make_load_context(session))
@@ -389,6 +560,12 @@ def build_chat_graph(session: AsyncSession, checkpointer):
     g.add_node("answer", answer_node)
     g.add_node("propose_action", propose_action_node)
     g.add_node("execute_action", make_execute_action(session))
+    # pm-agent branch. pm_client is injected in tests; in production the
+    # pm_call node lazily resolves get_pm_agent_client() on first use, so
+    # non-PM chats never require PM_AGENT_* to be configured.
+    g.add_node("pm_call", make_pm_call(pm_client))
+    g.add_node("pm_await", pm_await)
+    g.add_node("pm_reply", pm_reply)
     g.add_node("save_reply", make_save_reply(session))
 
     g.set_entry_point("load_context")
@@ -396,11 +573,23 @@ def build_chat_graph(session: AsyncSession, checkpointer):
     g.add_conditional_edges(
         "classify_intent",
         route_after_classify,
-        {"answer": "answer", "propose_action": "propose_action"},
+        {
+            "answer": "answer",
+            "propose_action": "propose_action",
+            "pm_call": "pm_call",
+        },
     )
     g.add_edge("answer", "save_reply")
     g.add_edge("propose_action", "execute_action")
     g.add_edge("execute_action", "save_reply")
+    # pm-agent loop: pm_call → (await ⇄ pm_call) → pm_reply → save_reply
+    g.add_conditional_edges(
+        "pm_call",
+        route_after_pm_call,
+        {"pm_await": "pm_await", "pm_reply": "pm_reply", "save_reply": "save_reply"},
+    )
+    g.add_edge("pm_await", "pm_call")
+    g.add_edge("pm_reply", "save_reply")
     g.add_edge("save_reply", END)
 
     return g.compile(checkpointer=checkpointer)
