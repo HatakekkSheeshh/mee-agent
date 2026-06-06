@@ -159,3 +159,19 @@ export interface ChatMessage {
     args: Record<string, unknown>;
   } | null;
 }
+
+/** A HITL action the chat graph paused on, awaiting user approve/reject. */
+export interface PendingAction {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  rationale?: string | null;
+  description?: string | null;
+}
+
+/** Envelope returned by POST /messages and /pending-actions/{id}/approve|reject. */
+export type ChatTurnResult =
+  | { status: "complete"; reply: string; intent?: string; tool_result?: unknown }
+  | { status: "interrupted"; pending_action_id: string; pending_action: PendingAction }
+  | { status: "executed"; reply: string; tool_result?: unknown }
+  | { status: "rejected"; reply: string };
