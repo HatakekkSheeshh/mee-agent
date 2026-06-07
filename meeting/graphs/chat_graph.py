@@ -75,6 +75,7 @@ class ChatState(TypedDict, total=False):
     # All checkpointed (thread_id = session_id) so a multi-step pm-agent
     # conversation survives across approve/reject round-trips on one thread.
     pm_task_id: Optional[str]      # A2A task id; None on first call, set from result
+    pm_context_id: Optional[str]   # A2A contextId; echoed with task_id on resume
     pm_next_payload: dict          # what pm_call sends next:
     #   {kind:"start"|"text", text} | {kind:"approval", approval_action, approval_input}
     pm_last: Optional[dict]        # last PmAgentResult, as a dict
@@ -414,6 +415,7 @@ def _result_to_dict(result: PmAgentResult) -> dict:
         "text": result.text,
         "need_approval": result.need_approval,
         "issues": result.issues,
+        "context_id": result.context_id,
     }
 
 
@@ -471,6 +473,7 @@ def make_pm_call(pm_client):
             "text": state.get("user_message", ""),
         }
         task_id = state.get("pm_task_id")
+        context_id = state.get("pm_context_id")
         kind = payload.get("kind")
 
         try:
@@ -480,12 +483,16 @@ def make_pm_call(pm_client):
                     "approval_action": payload.get("approval_action", "approve"),
                     "approval_input": payload.get("approval_input", ""),
                 }
-                result = await client.send_message("", task_id=task_id, data_part=data_part)
+                result = await client.send_message(
+                    "", task_id=task_id, context_id=context_id, data_part=data_part
+                )
             else:
                 # kind in ("start", "text"). DEFERRED SEAM (spec §5): transcript
                 # context for the chat's bound meeting/recording could be folded
                 # into `text` here. Trigger/shape TBD — no behavior added in v1.
-                result = await client.send_message(payload.get("text", ""), task_id=task_id)
+                result = await client.send_message(
+                    payload.get("text", ""), task_id=task_id, context_id=context_id
+                )
         except PmAgentError as e:
             logger.exception("[Node pm_call] pm-agent call failed")
             return {
@@ -503,6 +510,7 @@ def make_pm_call(pm_client):
         return {
             "pm_rounds": rounds,
             "pm_task_id": result.task_id or task_id,
+            "pm_context_id": result.context_id or context_id,
             "pm_last": _result_to_dict(result),
             "pm_route": route,
         }

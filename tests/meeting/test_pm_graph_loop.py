@@ -28,15 +28,15 @@ from meeting.services.pm_agent_client import PmAgentError, PmAgentResult
 # ─── fixtures ────────────────────────────────────────────────────────
 
 def completed(text="Đã liệt kê 3 issue.", task_id="task-1") -> PmAgentResult:
-    return PmAgentResult(task_id, "completed", text, False, None)
+    return PmAgentResult(task_id, "completed", text, False, None, context_id="ctx-1")
 
 
 def need_approval(issues, task_id="task-1", text="Xác nhận tạo issue?") -> PmAgentResult:
-    return PmAgentResult(task_id, "input_required", text, True, issues)
+    return PmAgentResult(task_id, "input_required", text, True, issues, context_id="ctx-1")
 
 
 def need_more_info(task_id="task-1", text="Issue thuộc project nào?") -> PmAgentResult:
-    return PmAgentResult(task_id, "input_required", text, False, None)
+    return PmAgentResult(task_id, "input_required", text, False, None, context_id="ctx-1")
 
 
 class FakeClient:
@@ -48,8 +48,10 @@ class FakeClient:
         self.calls: list[dict] = []
         self.cancelled = None
 
-    async def send_message(self, text, *, task_id=None, data_part=None):
-        self.calls.append({"text": text, "task_id": task_id, "data_part": data_part})
+    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None):
+        self.calls.append(
+            {"text": text, "task_id": task_id, "context_id": context_id, "data_part": data_part}
+        )
         idx = len(self.calls) - 1
         if idx < len(self._results):
             return self._results[idx]
@@ -160,6 +162,9 @@ async def test_resume_approve_sends_datapart():
     assert len(client.calls) == 2
     second = client.calls[1]
     assert second["task_id"] == "task-42"
+    # contextId from the first result must be echoed on resume (avoids the
+    # server's -32603 "Context doesn't match TaskManager" error).
+    assert second["context_id"] == "ctx-1"
     assert second["data_part"]["approval_action"] == "approve"
 
 

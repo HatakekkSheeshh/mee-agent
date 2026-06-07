@@ -142,11 +142,12 @@ async def test_resume_includes_task_id_and_datapart():
 
     client = _make_client(handler)
     await client.send_message(
-        "", task_id="task-456", data_part={"approval_action": "approve"}
+        "", task_id="task-456", context_id="ctx-1", data_part={"approval_action": "approve"}
     )
 
     msg = captured["body"]["params"]["message"]
     assert msg["taskId"] == "task-456"
+    assert msg["contextId"] == "ctx-1"
     data_parts = [p for p in msg["parts"] if p.get("kind") == "data"]
     assert data_parts and data_parts[0]["data"] == {"approval_action": "approve"}
 
@@ -164,6 +165,7 @@ async def test_parse_completed():
     assert result.need_approval is False
     assert result.issues is None
     assert result.task_id == "task-123"
+    assert result.context_id == "ctx-1"
 
 
 async def test_parse_need_approval():

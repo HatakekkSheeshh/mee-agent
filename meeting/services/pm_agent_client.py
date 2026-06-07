@@ -76,6 +76,10 @@ class PmAgentResult:
     text: str
     need_approval: bool
     issues: Optional[list[dict]]
+    # A2A conversation context. MUST be echoed back (with task_id) on every
+    # follow-up/resume, or the server's TaskManager raises a -32603
+    # "Context in event doesn't match TaskManager" error.
+    context_id: Optional[str] = None
 
 
 class PmAgentError(Exception):
@@ -108,6 +112,7 @@ class PmAgentClient:
         text: str,
         *,
         task_id: Optional[str] = None,
+        context_id: Optional[str] = None,
         data_part: Optional[dict] = None,
     ) -> PmAgentResult:
         """One `message/send` call. Idempotent per invocation (never auto-resumes)."""
@@ -123,6 +128,10 @@ class PmAgentClient:
         }
         if task_id:
             message["taskId"] = task_id
+        # Echo the conversation context on resume so the server's TaskManager
+        # matches it to the existing task (else -32603 context mismatch).
+        if context_id:
+            message["contextId"] = context_id
 
         result = await self._rpc("message/send", {"message": message})
         return self._parse_result(result)
@@ -187,6 +196,7 @@ class PmAgentClient:
                 text=_parts_text(result.get("parts")),
                 need_approval=False,
                 issues=None,
+                context_id=result.get("contextId"),
             )
 
         task_id = result.get("id") or result.get("taskId") or ""
@@ -205,6 +215,7 @@ class PmAgentClient:
             text=text,
             need_approval=need_approval,
             issues=issues,
+            context_id=result.get("contextId"),
         )
 
 
