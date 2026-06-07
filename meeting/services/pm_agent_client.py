@@ -92,8 +92,11 @@ class PmAgentClient:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not url:
-            raise PmAgentError("PM_AGENT_A2A_URL is not configured")
-        self._url = url
+            raise PmAgentError("PM_AGENT_URL is not configured")
+        # A2A JSON-RPC posts to the `/a2a/` base. Ensure the trailing slash so
+        # we don't hit a 307/308 redirect (this httpx client does not follow
+        # redirects, and a cross-host redirect would also drop the auth header).
+        self._url = url if url.endswith("/") else url + "/"
         self._api_key = api_key
         self._timeout = timeout
         self._transport = transport  # injected in tests (httpx.MockTransport)
@@ -140,7 +143,12 @@ class PmAgentClient:
             "method": method,
             "params": params,
         }
+        # The deployed agentbase endpoint authenticates via
+        # `Authorization: Bearer <token>` (verified: X-API-KEY → 401, Bearer →
+        # 200). A locally-run pm-agent uses X-API-KEY = API_SEC_KEY. Send both
+        # so the client works against either; the server reads whichever it wants.
         headers = {
+            "Authorization": f"Bearer {self._api_key}",
             "X-API-KEY": self._api_key,
             "Content-Type": "application/json",
         }
@@ -243,11 +251,11 @@ _singleton: Optional[PmAgentClient] = None
 
 
 def get_pm_agent_client() -> PmAgentClient:
-    """Lazy singleton built from env (PM_AGENT_A2A_URL / PM_AGENT_API_KEY)."""
+    """Lazy singleton built from env (PM_AGENT_URL / TOKEN_AUTHEN_PM_AGENT)."""
     global _singleton
     if _singleton is None:
         _singleton = PmAgentClient(
-            url=os.getenv("PM_AGENT_A2A_URL", ""),
-            api_key=os.getenv("PM_AGENT_API_KEY", ""),
+            url=os.getenv("PM_AGENT_URL", ""),
+            api_key=os.getenv("TOKEN_AUTHEN_PM_AGENT", ""),
         )
     return _singleton

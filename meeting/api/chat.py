@@ -91,6 +91,7 @@ def _persist_fields(pa_data: dict) -> dict:
                 "kind": pa_data.get("kind"),
                 "issues": pa_data.get("issues"),
                 "prompt": pa_data.get("prompt"),
+                "task_id": pa_data.get("task_id"),
             },
         }
     return {

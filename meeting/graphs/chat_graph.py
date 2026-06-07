@@ -522,14 +522,22 @@ def route_after_pm_call(state: ChatState) -> Literal["pm_await", "pm_reply", "sa
 async def pm_await(state: ChatState) -> dict:
     """The ONLY interrupt in the pm branch. No A2A send here (replay-safe)."""
     last = state.get("pm_last") or {}
+    # The pm-agent thread (task) id — surfaced on the card so the FE/user can
+    # see which pm-agent thread this pause belongs to and follow it up.
+    task_id = state.get("pm_task_id") or last.get("task_id")
     if last.get("need_approval"):
         pending = {
             "kind": "need_approval",
             "issues": last.get("issues") or [],
             "prompt": last.get("text", ""),
+            "task_id": task_id,
         }
     else:
-        pending = {"kind": "need_more_info", "prompt": last.get("text", "")}
+        pending = {
+            "kind": "need_more_info",
+            "prompt": last.get("text", ""),
+            "task_id": task_id,
+        }
 
     logger.info(f"[Node pm_await] INTERRUPT kind={pending['kind']}")
     decision = interrupt(pending)
