@@ -7,7 +7,7 @@ No business logic here — just data access.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
 from sqlalchemy import delete, select
@@ -518,7 +518,7 @@ async def add_chat_message(
     # Touch last_activity_at
     chat = await session.get(ChatSession, session_id)
     if chat:
-        chat.last_activity_at = datetime.utcnow()
+        chat.last_activity_at = datetime.now(timezone.utc)
     await session.flush()
     return msg
 
