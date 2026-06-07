@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { ChatTurnResult, PendingAction } from "../types/api";
+import { Markdown } from "./Markdown";
 
 interface ThreadMsg {
   role: "user" | "agent";
@@ -14,6 +15,8 @@ export function ChatPane() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  // Free-text reply for a pm-agent need_more_info pause.
+  const [infoInput, setInfoInput] = useState("");
 
   // The chat session id (LangGraph thread). Created lazily on first send and
   // re-created when the bound meeting changes. Kept in refs so it survives
@@ -81,6 +84,26 @@ export function ChatPane() {
     [pending, busy, t],
   );
 
+  // Submit the free-text answer to a pm-agent need_more_info pause: resume the
+  // same task via /approve with {text} (backend maps it to the next message).
+  const provideInfo = useCallback(async () => {
+    if (!pending || busy) return;
+    const text = infoInput.trim();
+    if (!text) return;
+    const id = pending.id;
+    setPending(null);
+    setInfoInput("");
+    setMessages((m) => [...m, { role: "user", text }]);
+    setBusy(true);
+    try {
+      applyResult(await api.chat.approve(id, { text }));
+    } catch (e) {
+      pushAgent(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pending, busy, infoInput, t]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -117,16 +140,62 @@ export function ChatPane() {
 
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "msg msg-user" : "msg msg-agent"}>
-            {m.text}
+            {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
           </div>
         ))}
 
-        {pending && (
+        {pending && pending.kind === "need_more_info" && (
+          <div className="msg msg-agent pending-action">
+            <div className="pending-title">{t("chat.needInfo")}</div>
+            {pending.task_id && (
+              <div className="pending-thread small">Thread: {pending.task_id}</div>
+            )}
+            {pending.prompt && <Markdown>{pending.prompt}</Markdown>}
+            <textarea
+              className="chat-input pending-info-input"
+              rows={2}
+              placeholder={t("chat.infoPlaceholder")}
+              value={infoInput}
+              disabled={busy}
+              onChange={(e) => setInfoInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void provideInfo();
+                }
+              }}
+            />
+            <div className="pending-buttons">
+              <button className="btn btn-approve" type="button" disabled={busy || !infoInput.trim()} onClick={() => void provideInfo()}>
+                {t("chat.send")}
+              </button>
+              <button className="btn btn-reject" type="button" disabled={busy} onClick={() => void decide(false)}>
+                {t("chat.cancel")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {pending && pending.kind !== "need_more_info" && (
           <div className="msg msg-agent pending-action">
             <div className="pending-title">
               {t("chat.pending")}: <strong>{pending.tool}</strong>
             </div>
-            <pre className="pending-args">{JSON.stringify(pending.args, null, 2)}</pre>
+            {pending.task_id && (
+              <div className="pending-thread small">Thread: {pending.task_id}</div>
+            )}
+            {pending.kind === "need_approval" && pending.issues?.length ? (
+              <ul className="pending-issues">
+                {pending.issues.map((iss, i) => (
+                  <li key={i}>
+                    {String(iss.actions ?? "")}{" "}
+                    <strong>{String(iss.subject ?? JSON.stringify(iss))}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <pre className="pending-args">{JSON.stringify(pending.args, null, 2)}</pre>
+            )}
             <div className="pending-buttons">
               <button className="btn btn-approve" type="button" disabled={busy} onClick={() => void decide(true)}>
                 {t("chat.approve")}

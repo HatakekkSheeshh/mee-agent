@@ -234,7 +234,13 @@ export const api = {
     // HITL resume hits /pending-actions/{id}/approve|reject (there is no /resume route).
     approve: (
       actionId: string,
-      body: { edited_args?: Record<string, unknown>; reason?: string } = {},
+      body: {
+        edited_args?: Record<string, unknown>;
+        reason?: string;
+        // pm-agent: free-text answer to need_more_info, or the approval verb.
+        text?: string;
+        approval_action?: string;
+      } = {},
     ) =>
       http<ChatTurnResult>(
         "POST", `/api/chat/pending-actions/${actionId}/approve`, body,

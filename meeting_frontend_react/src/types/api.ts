@@ -167,6 +167,15 @@ export interface PendingAction {
   args: Record<string, unknown>;
   rationale?: string | null;
   description?: string | null;
+  /** pm-agent HITL kind: "need_approval" (issues to confirm) |
+   * "need_more_info" (free-text question the user must answer). */
+  kind?: "need_approval" | "need_more_info" | null;
+  /** need_more_info: the prompt text (markdown) to show the user. */
+  prompt?: string | null;
+  /** need_approval: the issues pm-agent wants to create/update. */
+  issues?: Record<string, unknown>[] | null;
+  /** pm-agent thread (task) id this pause belongs to — shown on the card. */
+  task_id?: string | null;
 }
 
 /** Envelope returned by POST /messages and /pending-actions/{id}/approve|reject. */
