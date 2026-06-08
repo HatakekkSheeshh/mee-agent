@@ -645,6 +645,12 @@ def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve
     return "agent_approve" if state.get("agent_route") == "approve" else "agent"
 
 
+def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call"]:
+    """After an approved create_task, bridge into the pm reconcile loop;
+    otherwise loop back to the agent (normal side-effect tools)."""
+    return "pm_call" if state.get("agent_route") == "reconcile" else "agent"
+
+
 # ─── pm-agent A2A branch ──────────────────────────────────────────
 #
 # Correctness constraint (LangGraph replays an interrupted node from its top

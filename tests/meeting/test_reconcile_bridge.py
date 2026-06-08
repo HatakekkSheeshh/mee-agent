@@ -52,3 +52,12 @@ async def test_build_template_from_explicit_title():
     assert len(tpl["items"]) == 1
     assert tpl["items"][0]["subject"] == "Deploy v1"
     assert tpl["items"][0]["due_date"] == "06/06/2026"
+
+
+def test_route_after_agent_execute_reconcile_goes_to_pm():
+    assert chat_graph.route_after_agent_execute({"agent_route": "reconcile"}) == "pm_call"
+
+
+def test_route_after_agent_execute_default_goes_to_agent():
+    assert chat_graph.route_after_agent_execute({"agent_route": "agent"}) == "agent"
+    assert chat_graph.route_after_agent_execute({}) == "agent"
