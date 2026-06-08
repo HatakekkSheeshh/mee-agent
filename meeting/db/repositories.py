@@ -497,6 +497,52 @@ async def get_mom_action_items(
     return items
 
 
+async def list_recordings(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> list[dict]:
+    """List a meeting's recordings as lightweight dicts, oldest first.
+
+    Each entry = {recording_id, label, date, has_mom}, where label =
+    `title or session_label` and date is the event date (falling back to the
+    started_at date). Lets the chat agent map "Meeting 1"/ordinal/date →
+    recording_id before reading that recording's MoM. Returns [] if the meeting
+    is missing or has no recordings.
+    """
+    meeting = await get_meeting(session, meeting_id)
+    if not meeting:
+        return []
+    recordings = sorted(
+        (meeting.recordings or []),
+        key=lambda r: r.started_at or datetime.min,
+    )
+    out: list[dict] = []
+    for rec in recordings:
+        if rec.date:
+            iso_date = rec.date.isoformat()
+        elif rec.started_at:
+            iso_date = rec.started_at.date().isoformat()
+        else:
+            iso_date = None
+        out.append({
+            "recording_id": str(rec.id),
+            "label": rec.title or rec.session_label or "phiên",
+            "date": iso_date,
+            "has_mom": bool(rec.mom_json),
+        })
+    return out
+
+
+async def get_recording_mom(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> Optional[dict]:
+    """Return one recording's stored MoM (recordings.mom_json), or None if the
+    recording is missing or has no MoM yet."""
+    recording = await session.get(Recording, recording_id)
+    if not recording:
+        return None
+    return recording.mom_json
+
+
 async def join_meeting_transcript(
     session: AsyncSession, meeting_id: uuid.UUID
 ) -> str:

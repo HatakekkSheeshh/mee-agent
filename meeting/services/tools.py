@@ -209,6 +209,45 @@ async def _exec_switch_meeting(
     }
 
 
+async def _exec_list_recordings(
+    args: dict, *, session: AsyncSession, user_id: uuid.UUID
+) -> dict:
+    """Safe read tool — enumerate a meeting/project's recordings (phiên) so the
+    agent can map "Meeting 1"/ordinal/date → recording_id before reading one
+    recording's MoM. meeting_id is auto-injected server-side."""
+    meeting_id_str = args.get("meeting_id", "")
+    if not meeting_id_str:
+        return {"error": "meeting_id required"}
+    try:
+        mid = uuid.UUID(meeting_id_str)
+    except ValueError:
+        return {"error": f"invalid meeting_id: {meeting_id_str}"}
+
+    recordings = await repo.list_recordings(session, mid)
+    return {"status": "ok", "recordings": recordings, "count": len(recordings)}
+
+
+async def _exec_recording_mom(
+    args: dict, *, session: AsyncSession, user_id: uuid.UUID
+) -> dict:
+    """Safe read tool — return ONE recording's structured MoM (summary,
+    decisions, action_items with `pic`). Use after list_recordings to answer
+    questions scoped to a specific recording (e.g. "X's tasks in recording Y")
+    without mixing in other recordings' data."""
+    rid_str = args.get("recording_id", "")
+    if not rid_str:
+        return {"error": "recording_id required"}
+    try:
+        rid = uuid.UUID(rid_str)
+    except ValueError:
+        return {"error": f"invalid recording_id: {rid_str}"}
+
+    mom = await repo.get_recording_mom(session, rid)
+    if not mom:
+        return {"status": "not_found", "recording_id": rid_str}
+    return {"status": "ok", "recording_id": rid_str, "mom": mom}
+
+
 # ─── Tool registry ────────────────────────────────────────────────
 
 TOOLS: dict[str, dict[str, Any]] = {
@@ -299,6 +338,50 @@ TOOLS: dict[str, dict[str, Any]] = {
             },
         },
         "executor": _exec_retrieve,
+    },
+    "list_recordings": {
+        "name": "list_recordings",
+        "description": (
+            "List the recordings (phiên/buổi họp) of the current project, with "
+            "each recording's label, date, and whether it has minutes (MoM). "
+            "Call this FIRST when the user asks about a SPECIFIC recording / "
+            "phiên / 'Meeting N' / a date, to resolve which recording they mean "
+            "before reading it with `recording_mom`. "
+            "Safe — no side-effect, runs immediately."
+        ),
+        "side_effect": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "meeting_id": {"type": "string", "format": "uuid"},
+            },
+        },
+        "executor": _exec_list_recordings,
+    },
+    "recording_mom": {
+        "name": "recording_mom",
+        "description": (
+            "Read ONE recording's minutes (MoM): summary, decisions, and "
+            "action_items (each with `pic`/người phụ trách, deadline, item). "
+            "Use after `list_recordings` to answer questions scoped to a "
+            "specific recording — e.g. 'việc của Hiếu trong phiên X' — by reading "
+            "that recording's action_items and filtering by `pic`. Only attribute "
+            "a fact to the recording you actually read. "
+            "Safe — no side-effect, runs immediately."
+        ),
+        "side_effect": False,
+        "schema": {
+            "type": "object",
+            "required": ["recording_id"],
+            "properties": {
+                "recording_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "From list_recordings",
+                },
+            },
+        },
+        "executor": _exec_recording_mom,
     },
     "search_transcript": {
         "name": "search_transcript",
