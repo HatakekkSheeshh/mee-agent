@@ -237,7 +237,7 @@ def _strip_slash_hint(text: str) -> str:
     kept = []
     for line in text.splitlines():
         stripped = line.strip()
-        is_slash_hint = ("/add" in stripped and "/cancel" in stripped) or stripped.startswith("→ Dùng")
+        is_slash_hint = ("/add" in stripped and "/cancel" in stripped)
         if is_slash_hint:
             continue
         kept.append(line)
