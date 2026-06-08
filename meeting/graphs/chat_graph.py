@@ -35,7 +35,7 @@ from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
-from meeting.services import execute_tool, get_tool, list_tools
+from meeting.services import build_task_items, execute_tool, get_tool, list_tools
 from meeting.services.pm_agent_client import (
     PmAgentError,
     PmAgentResult,
@@ -387,6 +387,36 @@ def _reconcile_text(project: str, items: list[dict]) -> str:
             parts.append(f"hạn {it['due_date']}")
         lines.append(f"{i}. " + " — ".join(p for p in parts if p))
     return "\n".join(lines)
+
+
+async def _build_reconcile_template(
+    session: AsyncSession,
+    args: dict,
+    meeting_ctx: dict,
+    resolved_meeting_id: Optional[str],
+) -> dict:
+    """Build the reconcile template {project, items} for a create_task handoff.
+
+    project defaults to the bound meeting's title (editable on the local card).
+    items come from an explicit task in args, else the meeting's MoM action_items.
+    """
+    project = (meeting_ctx or {}).get("title") or ""
+    explicit_title = args.get("title") or args.get("subject")
+    if explicit_title:
+        items = [{
+            "subject": explicit_title,
+            "assignee": args.get("assignee", ""),
+            "due_date": args.get("deadline") or args.get("due_date", ""),
+            "description": args.get("description", ""),
+        }]
+    elif resolved_meeting_id:
+        action_items = await repo.get_mom_action_items(
+            session, uuid.UUID(resolved_meeting_id)
+        )
+        items = build_task_items(action_items)
+    else:
+        items = []
+    return {"project": project, "items": items}
 
 
 def _last_assistant_text(messages: list[dict]) -> str:
