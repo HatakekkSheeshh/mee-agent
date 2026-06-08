@@ -196,13 +196,31 @@ async def classify_intent(state: ChatState) -> dict:
     """
     msg = state["user_message"]
     system_prompt = (
-        "Phân loại tin nhắn của user thành đúng 1 nhãn. Trả về CHỈ JSON "
-        '{"intent": "pm_task" | "agent"} (không markdown, không giải thích).\n'
-        '- "pm_task": thao tác quản lý dự án trên Redmine qua pm-agent — '
-        "tạo/cập nhật/liệt kê/báo cáo issue, workload, issue overdue/stale/sắp đến hạn. "
-        'Ví dụ: "tạo issue deploy v1", "liệt kê issue overdue của tôi".\n'
-        '- "agent": MỌI yêu cầu khác — hỏi nội dung/tóm tắt cuộc họp, tìm trong '
-        "transcript, tạo task nội bộ, gửi email…"
+        "Bạn là bộ định tuyến cho trợ lý cuộc họp Mee. Phân loại tin nhắn user thành "
+        'đúng MỘT nhãn, trả về CHỈ JSON {"intent": "pm_task" | "agent"} '
+        "(không markdown, không giải thích).\n\n"
+        'MẶC ĐỊNH là "agent". CHỈ chọn "pm_task" khi user nói RÕ RÀNG về hệ thống '
+        "quản lý issue Redmine. Nếu phân vân → chọn \"agent\".\n\n"
+        '"agent" — mọi thứ liên quan tới NỘI DUNG / DỮ LIỆU CUỘC HỌP:\n'
+        "  • nội dung, tóm tắt, biên bản (MoM), ai nói gì, quyết định, blocker của cuộc họp\n"
+        "  • danh sách recording/phiên họp, recording_id, transcript của một dự án/cuộc họp\n"
+        "  • việc cần làm / action item RÚT RA TỪ cuộc họp — kể cả hỏi theo người "
+        "(vd 'Hiếu cần làm gì?', 'việc của Mai trong buổi họp')\n"
+        "  • tạo task nội bộ, gửi email, tìm trong transcript\n\n"
+        '"pm_task" — CHỈ khi user nói rõ về Redmine / issue tracker:\n'
+        "  • có từ khoá rõ ràng: Redmine, issue, ticket, mã '#123', 'trên Redmine', "
+        "'đồng bộ/sync issue'\n"
+        "  • tạo/cập nhật/đóng issue trên Redmine; liệt kê issue overdue/stale/sắp đến hạn; "
+        "workload hoặc issue được giao TRÊN HỆ THỐNG\n\n"
+        "Ví dụ:\n"
+        '  "List the recorded_id in AI Innovation Project" → agent\n'
+        '  "what tasks does Hieu need to do?" → agent\n'
+        '  "tóm tắt cuộc họp tuần trước" → agent\n'
+        '  "liệt kê các phiên họp của dự án X" → agent\n'
+        '  "tạo task cho Mai deploy v1" → agent\n'
+        '  "tạo issue trên Redmine cho việc deploy v1" → pm_task\n'
+        '  "liệt kê issue overdue của tôi" → pm_task\n'
+        '  "cập nhật trạng thái issue #123" → pm_task'
     )
     try:
         client = _llm_client()
