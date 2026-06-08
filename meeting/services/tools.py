@@ -54,19 +54,46 @@ async def _exec_send_email(args: dict, *, session: AsyncSession, user_id: uuid.U
 
 
 async def _exec_create_task(args: dict, *, session: AsyncSession, user_id: uuid.UUID) -> dict:
-    """MOCK: simulate creating a task in MS Planner/To-Do."""
-    title = args.get("title", "")
-    assignee = args.get("assignee", "")
-    deadline = args.get("deadline", "")
-    logger.info(f"[MOCK create_task] title={title!r} assignee={assignee!r}")
-    return {
-        "status": "created_mock",
-        "task_id": f"mock-task-{uuid.uuid4().hex[:8]}",
-        "title": title,
-        "assignee": assignee,
-        "deadline": deadline,
-        "note": "Mock execution — Phase E wires MS Planner.",
-    }
+    """Build a structured task from explicit args OR the meeting's MoM action_items.
+
+    Produces a normalized task list ({subject, assignee, due_date, description}).
+    No external write yet — persistence / pm-agent reconcile is a later step; this
+    is the HITL-approved producer the chat agent surfaces for confirmation.
+    """
+    explicit_title = args.get("title") or args.get("subject")
+    if explicit_title:
+        task = {
+            "subject": explicit_title,
+            "assignee": args.get("assignee", ""),
+            "due_date": args.get("deadline") or args.get("due_date", ""),
+            "description": args.get("description", ""),
+        }
+        logger.info(f"[create_task] explicit task subject={explicit_title!r}")
+        return {"status": "prepared", "source": "explicit", "tasks": [task], "count": 1}
+
+    meeting_id_str = args.get("meeting_id", "")
+    if not meeting_id_str:
+        return {"error": "create_task needs a title, or a meeting_id with action_items"}
+    try:
+        mid = uuid.UUID(meeting_id_str)
+    except ValueError:
+        return {"error": f"invalid meeting_id: {meeting_id_str}"}
+
+    action_items = await repo.get_mom_action_items(session, mid)
+    tasks = [
+        {
+            "subject": ai.get("item", ""),
+            "assignee": ai.get("pic", ""),
+            "due_date": ai.get("deadline", ""),
+            "description": "",
+        }
+        for ai in action_items
+        if ai.get("item")
+    ]
+    if not tasks:
+        return {"error": "no action_items found in this meeting's MoM"}
+    logger.info(f"[create_task] built {len(tasks)} task(s) from MoM action_items")
+    return {"status": "prepared", "source": "mom", "tasks": tasks, "count": len(tasks)}
 
 
 async def _exec_search_transcript(
@@ -192,19 +219,25 @@ TOOLS: dict[str, dict[str, Any]] = {
     "create_task": {
         "name": "create_task",
         "description": (
-            "Create a task assigned to someone with a deadline. "
-            "Use when user asks to track an action item as a task. "
+            "Prepare a task (or batch of tasks) to track action items. "
+            "Provide an explicit `title` (+ optional assignee/deadline) for a single "
+            "task, OR pass only `meeting_id` to build the task list automatically from "
+            "the meeting's MoM action_items. "
             "REQUIRES user approval before execution (side-effect)."
         ),
         "side_effect": True,
         "schema": {
             "type": "object",
-            "required": ["title", "assignee"],
             "properties": {
-                "title": {"type": "string"},
+                "title": {"type": "string", "description": "Single-task subject"},
                 "assignee": {"type": "string", "description": "Name or email"},
-                "deadline": {"type": "string", "description": "ISO date or 'YYYY-MM-DD'"},
+                "deadline": {"type": "string", "description": "Date, e.g. DD/MM/YYYY"},
                 "description": {"type": "string"},
+                "meeting_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Build tasks from this meeting's MoM action_items",
+                },
             },
         },
         "executor": _exec_create_task,

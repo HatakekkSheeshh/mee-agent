@@ -451,6 +451,26 @@ async def soft_delete_segment(
     return True
 
 
+async def get_mom_action_items(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> list[dict]:
+    """Aggregate action_items from every recording's MoM for a meeting.
+
+    Each item follows the note_generator shape: {pic, deadline, item}.
+    Returns [] if the meeting/recordings have no MoM yet.
+    """
+    meeting = await get_meeting(session, meeting_id)
+    if not meeting:
+        return []
+    items: list[dict] = []
+    for rec in (meeting.recordings or []):
+        mom = rec.mom_json or {}
+        for ai in (mom.get("action_items") or []):
+            if ai:
+                items.append(ai)
+    return items
+
+
 async def join_meeting_transcript(
     session: AsyncSession, meeting_id: uuid.UUID
 ) -> str:
