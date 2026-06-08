@@ -7,3 +7,5 @@ __pycache__/
 .dockerignore
 venv
 temp
+.claude/
+.pytest_cache/
