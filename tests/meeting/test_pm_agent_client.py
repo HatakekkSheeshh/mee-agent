@@ -104,7 +104,7 @@ def _need_more_info_task() -> dict:
                     "kind": "message",
                     "role": "agent",
                     "messageId": "m2",
-                    "parts": [{"kind": "text", "text": "Issue thuộc project nào?"}],
+                    "parts": [{"kind": "text", "text": "Issue thuộc project nào?\n\n→ Dùng /add <thông tin> để cung cấp thêm, hoặc /cancel để hủy yêu cầu."}],
                 },
             },
         },
@@ -194,6 +194,9 @@ async def test_parse_need_more_info():
     assert result.need_approval is False
     assert result.issues is None
     assert "project nào" in result.text
+    # the "/add … /cancel" slash hint is stripped for display
+    assert "/add" not in result.text
+    assert "→ Dùng" not in result.text
 
 
 async def test_http_error_raises_pmagenterror():

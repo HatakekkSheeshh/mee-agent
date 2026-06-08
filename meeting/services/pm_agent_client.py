@@ -193,7 +193,7 @@ class PmAgentClient:
             return PmAgentResult(
                 task_id=result.get("taskId") or "",
                 state="completed",
-                text=_parts_text(result.get("parts")),
+                text=_strip_slash_hint(_parts_text(result.get("parts"))),
                 need_approval=False,
                 issues=None,
                 context_id=result.get("contextId"),
@@ -207,7 +207,9 @@ class PmAgentClient:
         need_approval, issues = _detect_approval(artifacts)
 
         # Prefer text artifacts; fall back to the status message text.
-        text = _artifacts_text(artifacts) or _status_text(status)
+        # Strip pm-agent's "/add … /cancel" slash-command hint — the chat UI
+        # replaces it with a reply input + Gửi/Hủy buttons.
+        text = _strip_slash_hint(_artifacts_text(artifacts) or _status_text(status))
 
         return PmAgentResult(
             task_id=task_id,
@@ -220,6 +222,27 @@ class PmAgentClient:
 
 
 # ─── parsing helpers ────────────────────────────────────────────────
+
+def _strip_slash_hint(text: str) -> str:
+    """Drop pm-agent's slash-command instruction line(s).
+
+    pm-agent appends a guidance line like
+    "→ Dùng /add <thông tin> để cung cấp thêm, hoặc /cancel để hủy yêu cầu."
+    to need_more_info / auth prompts. Our chat UI replaces that with a reply
+    input + Gửi/Hủy buttons, so we remove the line for display. Other content
+    (e.g. an auth URL) is kept.
+    """
+    if not text:
+        return text
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        is_slash_hint = ("/add" in stripped and "/cancel" in stripped) or stripped.startswith("→ Dùng")
+        if is_slash_hint:
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
 
 def _parts_text(parts: Optional[list[dict]]) -> str:
     if not parts:
