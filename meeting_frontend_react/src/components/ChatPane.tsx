@@ -64,6 +64,20 @@ export function ChatPane() {
     }
   }, [messages, pending, storageKey]);
 
+  // Rotating example placeholder — surfaces what users can ask, including how
+  // to reach the Redmine/pm-agent path. Cycles only while the box is empty/idle.
+  const placeholderExamples = t("chat.examples").split("|").filter(Boolean);
+  const [phIdx, setPhIdx] = useState(0);
+  useEffect(() => {
+    if (input || busy || placeholderExamples.length <= 1) return;
+    const id = setInterval(
+      () => setPhIdx((i) => (i + 1) % placeholderExamples.length),
+      3500,
+    );
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, busy, placeholderExamples.length]);
+
   const pushAgent = (text: string) =>
     setMessages((m) => [...m, { role: "agent", text }]);
 
@@ -270,7 +284,7 @@ export function ChatPane() {
         <textarea
           className="chat-input"
           rows={1}
-          placeholder={t("chat.placeholder")}
+          placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
           value={input}
           disabled={busy}
           onChange={(e) => setInput(e.target.value)}
