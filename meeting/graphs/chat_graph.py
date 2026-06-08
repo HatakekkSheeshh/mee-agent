@@ -724,7 +724,17 @@ def make_pm_call(pm_client):
 
         try:
             client = pm_client or get_pm_agent_client()
-            if kind == "approval":
+            if kind == "reconcile":
+                data_part = {
+                    "kind": "reconcile_items",
+                    "project": payload.get("project", ""),
+                    "items": payload.get("items", []),
+                }
+                result = await client.send_message(
+                    payload.get("text", ""),
+                    task_id=task_id, context_id=context_id, data_part=data_part,
+                )
+            elif kind == "approval":
                 data_part = {
                     "approval_action": payload.get("approval_action", "approve"),
                     "approval_input": payload.get("approval_input", ""),

@@ -217,6 +217,31 @@ async def test_pm_error_graceful_reply():
     assert len(client.calls) == 1
 
 
+async def test_pm_call_reconcile_sends_text_and_datapart():
+    client = FakeClient([completed("Đã đối chiếu.")])
+    graph = _build(client, MemorySaver())
+    cfg = _config("t-reconcile")
+
+    items = [{"subject": "viết migration", "assignee": "Hiếu", "due_date": "10/01"}]
+    state = {
+        "user_message": "đồng bộ task",
+        "pm_next_payload": {
+            "kind": "reconcile", "project": "GIP", "items": items,
+            "text": "Đối chiếu ... trên dự án GIP:\n1. viết migration",
+        },
+    }
+    result = await graph.ainvoke(state, cfg)
+
+    assert not await _interrupted(graph, cfg)
+    assert result["final_reply"] == "Đã đối chiếu."
+    assert len(client.calls) == 1
+    sent = client.calls[0]
+    assert "GIP" in sent["text"]
+    assert sent["data_part"]["kind"] == "reconcile_items"
+    assert sent["data_part"]["project"] == "GIP"
+    assert sent["data_part"]["items"] == items
+
+
 async def test_max_rounds_cap():
     issues = [{"actions": "CREATE", "subject": "X"}]
     client = FakeClient([need_approval(issues)], repeat_last=True)
