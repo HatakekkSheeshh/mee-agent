@@ -712,6 +712,7 @@ async def retrieve_memory_events(
     query: str = "",
     topic: Optional[str] = None,
     exclude_meeting_id: Optional[uuid.UUID] = None,
+    meeting_id: Optional[uuid.UUID] = None,
     event_types: Optional[list[str]] = None,
     limit: int = 10,
 ) -> Sequence[MemoryEventRow]:
@@ -733,6 +734,8 @@ async def retrieve_memory_events(
 
     def _base_filter(stmt):
         stmt = stmt.where(MemoryEventRow.user_id == user_id)
+        if meeting_id:
+            stmt = stmt.where(MemoryEventRow.meeting_id == meeting_id)
         if exclude_meeting_id:
             stmt = stmt.where(MemoryEventRow.meeting_id != exclude_meeting_id)
         if event_types:
