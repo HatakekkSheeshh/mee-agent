@@ -9,10 +9,12 @@ Pattern:
         schema         — JSON Schema for args validation
         executor       — async function to actually run
 
-Tools đang là MOCK trong Phase B2:
-    - send_email     — Phase E sẽ wire MS Graph
-    - create_task    — Phase E sẽ wire MS Graph (Planner/To-Do)
-    - search_transcript — safe (no side-effect), auto-run
+Tools:
+    - retrieve       — safe: hybrid retrieval over a meeting (memory_service + MoM)
+    - search_transcript — safe: keyword match over a meeting's transcript
+    - switch_meeting — safe: resolve a project by title (re-scopes retrieval)
+    - create_task    — side-effect: builds a structured task from MoM action_items
+    - send_email     — side-effect, still MOCK (Phase E wires MS Graph)
 
 Adding new tool:
     1. Define spec dict

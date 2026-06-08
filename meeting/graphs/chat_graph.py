@@ -2,17 +2,20 @@
 Chat Agent Graph — LangGraph với HITL pattern.
 
 Flow:
-    load_context → classify_intent → branch:
-        ├─ "question" → answer (LLM RAG over MoM + transcript) → reply
-        └─ "tool"     → propose_action → interrupt() ◄── pause for user approval
-                            ↓ (resume)
-                       execute_action → reply
+    load_context → classify_intent (binary) → branch:
+        ├─ "agent"   → unified native tool-calling agent:
+        │                agent ⇄ agent_tools                       (read tools auto-run)
+        │                  └ side-effect → agent_approve interrupt() → agent_execute ↺
+        └─ "pm_task" → pm_call ⇄ pm_await interrupt() → pm_reply    (Redmine via pm-agent)
+    → save_reply
 
 Key concepts:
     - interrupt() pauses graph, persists state via checkpointer
     - Frontend gets `__interrupt__` event with pending_action data
     - User clicks Approve/Reject → API resumes graph với Command(resume={...})
     - Same thread_id → resume từ checkpoint just before interrupt()
+    - Replay-safety: LLM/tool-exec nodes never interrupt; only *_approve / pm_await
+      do, and they perform no side effects, so each tool/send runs exactly once.
 
 Sources:
     - https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/
@@ -64,14 +67,11 @@ class ChatState(TypedDict, total=False):
 
     # Filled by classify_intent (binary router: agent vs pm_task)
     intent: Literal["agent", "pm_task"]
-    proposed_tool: Optional[str]
-    proposed_args: Optional[dict]
-    rationale: Optional[str]
 
     # Filled after interrupt + resume
     user_decision: Optional[dict]  # {action: 'approved'|'rejected', edited_args?, reason?}
 
-    # Filled by execute_action / answer
+    # Filled by the agent loop / pm branch
     tool_result: Optional[dict]
     final_reply: str           # text to show user
 
@@ -238,142 +238,6 @@ def route_entry(state: ChatState) -> Literal["pm_call", "agent"]:
     return "pm_call" if state.get("intent") == "pm_task" else "agent"
 
 
-async def answer_node(state: ChatState) -> dict:
-    """LLM: trả lời user dựa trên meeting context + recent messages."""
-    msg = state["user_message"]
-    meeting = state.get("meeting_context", {})
-    recent = state.get("recent_messages", [])
-
-    mom_summary = ""
-    # Prefer project summary (cross-recording context). Fall back to listing
-    # individual recording MoMs if no project summary yet.
-    project_summary = meeting.get("project_summary_json")
-    recording_moms = meeting.get("recording_moms") or []
-    if project_summary:
-        narrative = project_summary.get("narrative", "")
-        timeline = project_summary.get("decisions_timeline", [])
-        mom_summary = (
-            f"Project narrative: {narrative}\n"
-            f"Decisions count: {sum(len(e.get('decisions', [])) for e in timeline)}\n"
-        )
-    elif recording_moms:
-        # Show titles + summaries of each recording's MoM, truncated
-        bits = []
-        for rm in recording_moms[:5]:
-            m = rm.get("mom_json") or {}
-            bits.append(
-                f"- {rm.get('session_label', 'phiên')}: {m.get('summary', '')[:200]}"
-            )
-        mom_summary = "Per-recording MoMs:\n" + "\n".join(bits)
-
-    system_prompt = f"""Bạn là Mee — trợ lý cuộc họp thông minh. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.
-
-Meeting context:
-{mom_summary or 'Chưa có MoM cho meeting này.'}
-"""
-    history = [{"role": "system", "content": system_prompt}]
-    # Include recent messages (last 6 to keep prompt small)
-    for m in recent[-6:]:
-        if m["role"] == "user":
-            history.append({"role": "user", "content": m["content"].get("text", "")})
-        elif m["role"] == "agent":
-            history.append({"role": "assistant", "content": m["content"].get("text", "")})
-    history.append({"role": "user", "content": msg})
-
-    try:
-        client = _llm_client()
-        resp = client.chat.completions.create(
-            model=_llm_model(),
-            messages=history,
-            max_tokens=512,
-            timeout=60,
-        )
-        reply = resp.choices[0].message.content.strip()
-        logger.info(f"[Node answer] reply_len={len(reply)}")
-        return {"final_reply": reply}
-    except Exception as e:
-        logger.exception("answer_node failed")
-        return {"final_reply": f"(Lỗi: {e})", "error": str(e)}
-
-
-async def propose_action_node(state: ChatState) -> dict:
-    """
-    Pause graph với interrupt() — chờ user approve.
-    Frontend nhận pending_action info, hiển thị card, user click Approve/Reject.
-    """
-    tool_name = state.get("proposed_tool", "")
-    tool_args = state.get("proposed_args", {}) or {}
-    rationale = state.get("rationale", "")
-
-    tool_spec = get_tool(tool_name)
-    if not tool_spec:
-        return {"final_reply": f"Tool không tồn tại: {tool_name}", "error": "unknown_tool"}
-
-    # Tools không side-effect → auto-approve
-    if not tool_spec.get("side_effect"):
-        logger.info(f"[Node propose_action] auto-approving safe tool {tool_name}")
-        return {"user_decision": {"action": "approved", "auto": True}}
-
-    # Side-effect tool → interrupt for HITL
-    logger.info(f"[Node propose_action] INTERRUPT — waiting for user approval on {tool_name}")
-    decision = interrupt({
-        "tool": tool_name,
-        "args": tool_args,
-        "rationale": rationale,
-        "description": tool_spec.get("description", ""),
-    })
-    # When resumed with Command(resume={...}), `decision` = that dict
-    logger.info(f"[Node propose_action] RESUMED with decision={decision}")
-    return {"user_decision": decision}
-
-
-def make_execute_action(session: AsyncSession):
-    async def execute_action(state: ChatState) -> dict:
-        """Sau khi user decision → execute tool nếu approved, else reply rejected."""
-        decision = state.get("user_decision") or {}
-        action = decision.get("action", "rejected")
-        tool_name = state.get("proposed_tool", "")
-        tool_args = state.get("proposed_args") or {}
-        user_id = uuid.UUID(state["user_id"])
-
-        if action == "rejected":
-            reason = decision.get("reason", "user rejected")
-            logger.info(f"[Node execute_action] REJECTED: {reason}")
-            return {
-                "final_reply": f"OK, không thực hiện {tool_name}. ({reason})",
-                "tool_result": {"status": "rejected", "reason": reason},
-            }
-
-        # Approved — use edited args if provided
-        if decision.get("edited_args"):
-            tool_args = decision["edited_args"]
-
-        logger.info(f"[Node execute_action] APPROVED — executing {tool_name}")
-        result = await execute_tool(
-            tool_name, tool_args, session=session, user_id=user_id
-        )
-
-        # Format reply
-        if result.get("error"):
-            reply = f"Đã thực hiện {tool_name} nhưng lỗi: {result['error']}"
-        else:
-            reply = f"Đã thực hiện {tool_name}. Kết quả: {result.get('status', 'ok')}"
-            if tool_name == "send_email":
-                reply = f"📧 Đã gửi email tới {tool_args.get('to', '?')}."
-            elif tool_name == "create_task":
-                reply = f"✓ Đã tạo task: {tool_args.get('title', '?')}."
-            elif tool_name == "search_transcript":
-                matches = result.get("matches", [])
-                if matches:
-                    reply = "Tìm thấy:\n" + "\n".join(f"• {m}" for m in matches[:5])
-                else:
-                    reply = "Không tìm thấy đoạn nào khớp."
-
-        return {"tool_result": result, "final_reply": reply}
-
-    return execute_action
-
-
 def make_save_reply(session: AsyncSession):
     async def save_reply(state: ChatState) -> dict:
         """Persist user msg + agent reply into chat_messages."""
@@ -391,8 +255,14 @@ def make_save_reply(session: AsyncSession):
         agent_content = {"text": state.get("final_reply", "")}
         if state.get("tool_result"):
             agent_content["tool_result"] = state["tool_result"]
-        if state.get("proposed_tool"):
-            agent_content["tool_called"] = state["proposed_tool"]
+        tools_called = [
+            tc["function"]["name"]
+            for m in (state.get("agent_messages") or [])
+            if m.get("role") == "assistant"
+            for tc in (m.get("tool_calls") or [])
+        ]
+        if tools_called:
+            agent_content["tools_called"] = tools_called
 
         await repo.add_chat_message(
             session,
