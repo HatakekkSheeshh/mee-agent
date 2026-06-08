@@ -78,6 +78,13 @@ export function ChatPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input, busy, placeholderExamples.length]);
 
+  // Auto-scroll the thread to the bottom whenever new content arrives.
+  const threadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, pending, busy]);
+
   const pushAgent = (text: string) =>
     setMessages((m) => [...m, { role: "agent", text }]);
 
@@ -197,7 +204,7 @@ export function ChatPane() {
         </div>
       </div>
 
-      <div className="chat-thread">
+      <div className="chat-thread" ref={threadRef}>
         <WelcomeBanner />
 
         {messages.length === 0 && (
