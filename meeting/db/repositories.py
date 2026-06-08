@@ -108,6 +108,32 @@ async def list_meetings_for_user(
     return (await session.execute(stmt)).scalars().all()
 
 
+async def find_meetings_by_title(
+    session: AsyncSession, user_id: uuid.UUID, q: str
+) -> Sequence[Meeting]:
+    """ILIKE-search the user's meetings by title fragment, most-recent first.
+
+    User-scoped via MeetingMember (mirrors list_meetings_for_user). Used by the
+    chat agent to resolve a project the user names by title. Returns [] for a
+    blank query.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    stmt = (
+        select(Meeting)
+        .join(MeetingMember, MeetingMember.meeting_id == Meeting.id)
+        .where(
+            MeetingMember.user_id == user_id,
+            MeetingMember.revoked_at.is_(None),
+            Meeting.deleted_at.is_(None),
+            Meeting.title.ilike(f"%{q}%"),
+        )
+        .order_by(Meeting.created_at.desc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
 async def update_meeting(
     session: AsyncSession,
     meeting_id: uuid.UUID,

@@ -100,6 +100,34 @@ def _llm_model() -> str:
     return os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 
 
+# ─── Meeting resolution ───────────────────────────────────────────
+
+async def resolve_meeting(
+    session: AsyncSession,
+    *,
+    user_id,
+    bound_meeting_id: Optional[str],
+    title: Optional[str],
+) -> dict:
+    """Resolve which meeting the user means.
+
+    Default = the chat's bound meeting_id. If a `title` is named, ILIKE-resolve
+    the user's meetings (most-recent first) and pick the most recent match; on
+    no match, fall back to the bound meeting.
+
+    Returns {meeting_id, resolved_by: "bound"|"title", candidates: [{id,title}]}.
+    """
+    if title and title.strip():
+        matches = await repo.find_meetings_by_title(session, user_id, title)
+        if matches:
+            return {
+                "meeting_id": str(matches[0].id),
+                "resolved_by": "title",
+                "candidates": [{"id": str(m.id), "title": m.title} for m in matches],
+            }
+    return {"meeting_id": bound_meeting_id, "resolved_by": "bound", "candidates": []}
+
+
 # ─── Nodes ────────────────────────────────────────────────────────
 
 def make_load_context(session: AsyncSession):
