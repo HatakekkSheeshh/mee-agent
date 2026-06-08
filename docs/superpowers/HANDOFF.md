@@ -1,22 +1,40 @@
 # Session Handoff — pm-agent A2A chat + interactive ChatPane
 
-**Branch:** `feat/backend-agents`  ·  **Last updated:** 2026-06-06
+**Branch:** `feat/backend-agents`  ·  **Last updated:** 2026-06-08
 
 Read this first when resuming. It captures state a fresh session can't infer from git alone.
 
 ## Kickoff message to paste into the new session
 
-> Continue the Mee meeting-agent work on branch `feat/backend-agents`. Read `CLAUDE.md`,
-> `docs/superpowers/HANDOFF.md`, the spec, and the plan under `docs/superpowers/`.
-> Phases 1 & 2 are done (interactive ChatPane + the pm-agent A2A chat branch, 26 passing
-> tests under `tests/meeting/`). Next: live smoke against a real `PM_AGENT_API_KEY` + a DB
-> at head, and the React `need_more_info` text-reply affordance (see PENDING/NEXT).
+> Continue the Mee meeting-agent work on branch `feat/backend-agents`. Read CLAUDE.md,
+> `docs/superpowers/plans/2026-06-08-unified-qa-tool-agent.md` (the current plan = Task #8),
+> `docs/superpowers/specs/2026-06-06-happy-path-retrieval-reconcile-design.md`,
+> `docs/superpowers/HANDOFF.md`, `docs/pm-agent-graph.md`.
+> Phase 2 (pm-agent A2A branch) is DONE and auth is verified LIVE; chat UX is polished;
+> all committed, 26 tests green. NEXT = Task #8: unify `question` + `tool` into one
+> tool-calling (ReAct) agent that auto-retrieves from the DB and runs side-effect tools
+> with HITL — keep `pm_task` a SEPARATE branch. Start with the LLM tool-calling probe
+> (Path A native vs Path B JSON loop), then TDD Tasks 1–5 in the plan.
 
 ## Reference artifacts (all committed, self-contained)
 
-- `docs/superpowers/specs/2026-06-02-pm-agent-a2a-chat-design.md` — A2A integration design.
-- `docs/superpowers/plans/2026-06-02-pm-agent-a2a-chat.md` — lean, task-by-task plan (Tasks 1–6).
+- `docs/superpowers/plans/2026-06-08-unified-qa-tool-agent.md` — **current plan (Task #8)**.
+- `docs/superpowers/specs/2026-06-06-happy-path-retrieval-reconcile-design.md` — title-scoped
+  retrieval + create_task→reconcile design.
+- `docs/pm-agent-graph.md` — pm-agent's full LangGraph (auth, classify, per-skill nodes,
+  need_more_info pause, issue_approve, reconcile).
+- `docs/superpowers/specs/2026-06-02-pm-agent-a2a-chat-design.md` + `plans/2026-06-02-…` — Phase 2.
 - `CLAUDE.md` — repo architecture + critical gotchas.
+
+## pm-agent integration — verified facts (live)
+
+- Auth = **per-user Microsoft OIDC**, sent as `Authorization: Bearer <token>` (NOT static
+  X-API-KEY). Code reads env **`PM_AGENT_URL`** + **`TOKEN_AUTHEN_PM_AGENT`**; URL must end `/a2a/`.
+- Resume MUST echo **both `taskId` and `contextId`** (else `-32603` "Context doesn't match
+  TaskManager"). Captured in `PmAgentResult.context_id` + `ChatState.pm_context_id`.
+- pm-agent surfaces auth via a `need_more_info` message with a `/auth?url=…` link; ends a
+  need_more_info thread on the text **`/cancel`** (the FE "Hủy" now sends that).
+- Client sends Bearer + X-API-KEY (works against deployed endpoint or a local pm-agent).
 
 ## DONE this session
 
@@ -55,18 +73,29 @@ Read this first when resuming. It captures state a fresh session can't infer fro
    - Test infra: first suite for `meeting/` under `tests/meeting/` (`pytest.ini` asyncio
      auto-mode scoped there; `conftest.py` seeds dummy env); `requirements-dev.txt`.
 
+## DONE since 2026-06-06 (this session)
+
+- **pm-agent auth verified LIVE** (Bearer + Microsoft token → 200, real Redmine data).
+- **`-32603` contextId bug fixed** — echo taskId + contextId on resume.
+- **Client**: read `PM_AGENT_URL`/`TOKEN_AUTHEN_PM_AGENT`, Bearer auth, trailing-slash
+  normalization, strip pm-agent's `/add … /cancel` hint line for display.
+- **Chat UX (FE)**: markdown rendering; pending cards parsed by kind (need_more_info =
+  reply input + Gửi/Hủy, need_approval = issues + approve/reject); welcome banner;
+  localStorage-persisted thread per meeting (survives F5); need_more_info "Hủy" → `/cancel`.
+- **Task #8 plan** written + committed.
+
 ## PENDING / NEXT
 
-- **Live smoke (plan Task 6, last bullet) — NOT yet run** (blocked: no real `PM_AGENT_API_KEY`
-  and no DB at head here). With a key in `.env` + a DB: `venv/bin/python run_meeting.py`, create a
-  chat session, send "liệt kê issue overdue" (read-only) → real pm-agent reply; then a create
-  request → approval card → approve → Redmine write.
-- **React FE `need_more_info` affordance** (spec Open Q #4): the backend can now interrupt with
-  `pending_action.kind == "need_more_info"` (a free-text prompt, no issues). The FE only renders
-  approve/reject; add a text-reply box that calls `…/approve` with `{text}`.
-- **transcript_segments injection** — still deferred (spec §5). The single seam is marked with a
-  comment in `pm_call`; no trigger/shape decided.
-- **Verify ChatPane end-to-end** against a running backend (still only typechecked, not run live).
+- **Task #8 (current plan): unify `question` + `tool` into one tool-calling agent.**
+  See `docs/superpowers/plans/2026-06-08-unified-qa-tool-agent.md`. Start with the LLM
+  tool-calling probe (Path A native vs Path B JSON loop), then TDD Tasks 1–5. Keep
+  `pm_task` separate. Best done in a FRESH session (this one ran long/expensive).
+- **pm_task lifecycle deltas (PARKED)**: Edit affordance on need_approval cards; clear
+  cached `pm_task_id`/`pm_context_id` on terminal so a later message doesn't reuse an
+  ended task; bump `PM_MAX_ROUNDS` (reconcile/batch need several pauses).
+- **transcript_segments injection** — still deferred (spec §5); seam marked in `pm_call`.
+- **Verify ChatPane end-to-end live** (still only typechecked; pm flow exercised via curl,
+  not yet through `run_meeting.py` UI end-to-end).
 
 ## ⚠️ Live blockers / gotchas (will bite the next session)
 
