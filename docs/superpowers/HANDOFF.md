@@ -112,6 +112,40 @@ Implemented per `plans/2026-06-08-unified-qa-tool-agent.md`, full TDD, **48 test
   approve interrupt reuses the local-tool payload shape `{tool,args,rationale,description}`,
   so existing approve/reject machinery drives it.
 
+## NEXT (decided) — recording-scoped task queries (Option B)
+
+**Problem (verified against live data):** `retrieve` is project-scoped — `memory_events`
+carry only `meeting_id`, NOT `recording_id` — so "Hiệu's tasks in *Meeting 1*" returns
+the whole project's aggregated memory and the LLM mis-attributes it to the named
+recording. The agent has no concept of recordings (only `switch_meeting` by project
+title). Accurate per-recording data already exists in `recordings.mom_json.action_items`
+(correct `pic`); it just isn't queried at recording granularity.
+
+**Chosen fix = Option B (no schema change, no migration):** add per-recording MoM tooling.
+TDD in `tests/meeting/`. Steps:
+1. **repo** (`meeting/db/repositories.py`):
+   - `list_recordings(session, meeting_id) -> [{recording_id, label, date, has_mom}]`
+     (label = `title or session_label`; reuse `get_meeting`).
+   - `get_recording_action_items(session, recording_id) -> list[dict]` and/or
+     `get_recording_mom(session, recording_id) -> dict|None`.
+2. **tools** (`meeting/services/tools.py`, both `side_effect: False`):
+   - `list_recordings` — `meeting_id` auto-injected (already stripped from LLM schema);
+     lets the agent map "Meeting 1"/ordinal/date → `recording_id`.
+   - `recording_mom` — arg `recording_id`; returns that recording's structured MoM
+     (summary/decisions/action_items w/ `pic`). For "X's tasks in recording Y" the agent
+     reads action_items and filters by `pic`. Keep `retrieve` for cross-recording semantic Q&A.
+3. **agent wiring** (`chat_graph.py`): NO graph change (read tools auto-run in `agent_tools`).
+   Update `_agent_system_prompt`: for a specific recording/phiên/"Meeting N", call
+   `list_recordings` then `recording_mom`; CITE which recording each fact came from;
+   NEVER attribute a fact to a recording it didn't read (this is also Option C mitigation).
+4. **tests:** tool tests (fake repo) for both tools + read-only flag; agent_loop test —
+   scripted FakeLLM does `list_recordings → recording_mom → answer` scoped to one recording.
+
+Note: a recording named "Meeting 1" lives in project **GIP**; the bad answer came from
+**AI Innovation Project** (`e7f14228`) — so resolving the right recording (and possibly the
+right project) matters. `switch_meeting` resolves the project; `list_recordings` resolves
+within it.
+
 ## PENDING / NEXT
 
 - **Verify the unified agent end-to-end LIVE** through `run_meeting.py` UI — only unit-tested
