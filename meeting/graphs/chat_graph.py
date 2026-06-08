@@ -827,6 +827,48 @@ async def _interrupt_or_complete(graph, config, result: dict, session_id: str) -
     }
 
 
+def _initial_turn_state(
+    session_id: str, user_id: str, user_message: str, meeting_id: Optional[str]
+) -> "ChatState":
+    """Initial state for a NEW user message.
+
+    thread_id = session_id is reused for the whole chat session, so LangGraph's
+    checkpoint carries the previous turn's loop state forward. We MUST clear the
+    per-turn buffers/counters here, or:
+      - agent_messages persists → the agent skips re-seeding → the new user
+        message is dropped (agent re-answers stale context);
+      - pm_rounds accumulates → a fresh pm message instantly hits PM_MAX_ROUNDS;
+      - pm_task_id/pm_context_id/pm_next_payload reuse an ended pm-agent task.
+    History is NOT lost: load_context reloads recent messages from the DB and
+    the agent re-seeds from those + this message. resume_chat_turn does NOT use
+    this (a resume must keep the mid-loop state).
+    """
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "user_message": user_message,
+        "meeting_id": meeting_id,
+        # reset unified-agent loop state
+        "agent_messages": [],
+        "agent_rounds": 0,
+        "agent_route": None,
+        "pending_tool": None,
+        # reset pm-agent branch state (new message = new pm request)
+        "pm_rounds": 0,
+        "pm_next_payload": None,
+        "pm_last": None,
+        "pm_pending": None,
+        "pm_route": None,
+        "pm_task_id": None,
+        "pm_context_id": None,
+        # reset shared per-turn outputs
+        "tool_result": None,
+        "user_decision": None,
+        "final_reply": "",
+        "error": None,
+    }
+
+
 async def run_chat_turn(
     *,
     session_id: str,
@@ -847,12 +889,7 @@ async def run_chat_turn(
     """
     graph = build_chat_graph(session, checkpointer)
     config = {"configurable": {"thread_id": session_id}}
-    initial_state: ChatState = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "user_message": user_message,
-        "meeting_id": meeting_id,
-    }
+    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id)
 
     logger.info(f"=== Running ChatGraph turn for session {session_id[:8]} ===")
     result = await graph.ainvoke(initial_state, config=config)
