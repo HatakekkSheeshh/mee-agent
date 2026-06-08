@@ -98,7 +98,12 @@ SWITCH_SPEC = {
     "name": "switch_meeting", "description": "switch project by title", "side_effect": False,
     "schema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
 }
-_SPECS = {s["name"]: s for s in (RETRIEVE_SPEC, CREATE_SPEC, SWITCH_SPEC)}
+SEND_SPEC = {
+    "name": "send_email", "description": "send email", "side_effect": True,
+    "schema": {"type": "object",
+               "properties": {"meeting_id": {"type": "string"}, "to": {"type": "string"}}},
+}
+_SPECS = {s["name"]: s for s in (RETRIEVE_SPEC, CREATE_SPEC, SWITCH_SPEC, SEND_SPEC)}
 
 
 class FakeTools:
@@ -204,50 +209,50 @@ async def test_agent_auto_retrieve_then_answer(monkeypatch):
 
 
 async def test_agent_side_effect_interrupts_then_executes(monkeypatch):
-    ft = _install(monkeypatch, {"create_task": {"status": "prepared", "tasks": [{"subject": "Deploy v1"}]}})
+    ft = _install(monkeypatch, {"send_email": {"status": "sent_mock"}})
     llm = FakeLLM([
-        tool([{"id": "c1", "name": "create_task", "arguments": '{"title": "Deploy v1"}'}]),
-        text("Đã tạo task Deploy v1."),
+        tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
+        text("Đã gửi email."),
     ])
     graph = _build(llm, MemorySaver())
     cfg = _config("side-effect")
 
-    await graph.ainvoke(_initial("tạo task deploy v1"), cfg)
+    await graph.ainvoke(_initial("gửi email"), cfg)
 
     assert await _interrupted(graph, cfg)
     pending = await _interrupt_value(graph, cfg)
-    assert pending["tool"] == "create_task"
-    assert pending["args"]["title"] == "Deploy v1"
+    assert pending["tool"] == "send_email"
+    assert pending["args"]["to"] == "a@x.vn"
     assert pending["args"]["meeting_id"] == "bound-mid"
     assert ft.calls == []  # not executed before approval
 
     result = await graph.ainvoke(Command(resume={"action": "approved"}), cfg)
 
     assert not await _interrupted(graph, cfg)
-    assert result["final_reply"] == "Đã tạo task Deploy v1."
-    assert len(ft.calls) == 1  # executed exactly once (replay-safe)
-    assert ft.calls[0]["name"] == "create_task"
+    assert result["final_reply"] == "Đã gửi email."
+    assert len(ft.calls) == 1
+    assert ft.calls[0]["name"] == "send_email"
     assert len(llm.calls) == 2
 
 
 async def test_agent_side_effect_rejected(monkeypatch):
     ft = _install(monkeypatch)
     llm = FakeLLM([
-        tool([{"id": "c1", "name": "create_task", "arguments": '{"title": "X"}'}]),
-        text("OK, mình không tạo task nữa."),
+        tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
+        text("OK, mình không gửi nữa."),
     ])
     graph = _build(llm, MemorySaver())
     cfg = _config("rejected")
 
-    await graph.ainvoke(_initial("tạo task"), cfg)
+    await graph.ainvoke(_initial("gửi email"), cfg)
     assert await _interrupted(graph, cfg)
 
     result = await graph.ainvoke(Command(resume={"action": "rejected", "reason": "thôi"}), cfg)
 
     assert not await _interrupted(graph, cfg)
     assert ft.calls == []  # never executed
-    assert result["final_reply"] == "OK, mình không tạo task nữa."
-    assert len(llm.calls) == 2  # rejection fed back, agent replies
+    assert result["final_reply"] == "OK, mình không gửi nữa."
+    assert len(llm.calls) == 2
 
 
 async def test_agent_max_rounds_cap(monkeypatch):
