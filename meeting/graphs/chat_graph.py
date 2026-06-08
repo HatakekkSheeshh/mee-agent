@@ -374,6 +374,21 @@ def _inject_meeting(args: dict, name: str, resolved: Optional[str]) -> dict:
     return args
 
 
+def _reconcile_text(project: str, items: list[dict]) -> str:
+    """Phrase a reconcile request pm-agent's reconcile_check_info can parse:
+    a target project + a numbered list of items."""
+    header = f"Đối chiếu và tạo/cập nhật các công việc sau trên dự án {project or '(chưa rõ)'}:"
+    lines = [header]
+    for i, it in enumerate(items, 1):
+        parts = [it.get("subject", "")]
+        if it.get("assignee"):
+            parts.append(f"phụ trách {it['assignee']}")
+        if it.get("due_date"):
+            parts.append(f"hạn {it['due_date']}")
+        lines.append(f"{i}. " + " — ".join(p for p in parts if p))
+    return "\n".join(lines)
+
+
 def _last_assistant_text(messages: list[dict]) -> str:
     for m in reversed(messages):
         if m.get("role") == "assistant" and m.get("content"):
