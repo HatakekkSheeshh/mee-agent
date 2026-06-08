@@ -84,12 +84,44 @@ Read this first when resuming. It captures state a fresh session can't infer fro
   localStorage-persisted thread per meeting (survives F5); need_more_info "Hủy" → `/cancel`.
 - **Task #8 plan** written + committed.
 
+## Task #8 — DONE (2026-06-08, this session) — unified tool-calling agent
+
+Implemented per `plans/2026-06-08-unified-qa-tool-agent.md`, full TDD, **48 tests green**
+(`venv/bin/python -m pytest tests/meeting -v`). 5 commits on `feat/backend-agents`
+(`5361a76`→`1d26611`), unpushed.
+
+- **Pre-flight verdict = Path A (native tool-calling).** `scripts/probe_tool_calling.py`
+  proved the MaaS endpoint (actually **`google/gemma-4-31b-it`**, NOT Qwen3 as CLAUDE.md
+  says) returns reliable `tool_calls` + parseable args, and answers directly when no tool
+  is needed (loop terminates). Verdict recorded in `chat_graph.py` agent-section comment.
+- **Task 1** `retrieve` read tool (`tools.py`) — hybrid retrieval via `memory_service`,
+  MoM-text fallback on empty embeddings. Threaded optional `meeting_id` include-filter
+  through `memory_service.retrieve` + `repo.retrieve_memory_events`.
+- **Task 2** `create_task` no longer mock — builds structured tasks from explicit args OR
+  the meeting's MoM `action_items` (new `repo.get_mom_action_items`). Still `side_effect`.
+- **Task 3** `repo.find_meetings_by_title` (ILIKE, user-scoped) + `chat_graph.resolve_meeting`
+  (bound default / title override / most-recent on ambiguity).
+- **Task 4** unified agent: `load_context → classify_intent (binary: pm_task|agent) →
+  agent ⇄ agent_tools → (agent_approve interrupt → agent_execute) ↺ → save_reply`.
+  Replay-safe (LLM/exec nodes never interrupt; only `agent_approve` does, no side effects
+  → side-effect tools run exactly once). Read tools auto-run; `meeting_id` injected
+  server-side (stripped from LLM schema). New `switch_meeting` tool re-scopes by title.
+  `MAX_AGENT_ROUNDS=6`. `pm_task` branch untouched (regression tests pass).
+- **Task 5** removed dead `answer_node`/`propose_action_node`/`make_execute_action`/
+  `route_after_classify` + `proposed_*` state. **`api/chat.py` unchanged** — the agent's
+  approve interrupt reuses the local-tool payload shape `{tool,args,rationale,description}`,
+  so existing approve/reject machinery drives it.
+
 ## PENDING / NEXT
 
-- **Task #8 (current plan): unify `question` + `tool` into one tool-calling agent.**
-  See `docs/superpowers/plans/2026-06-08-unified-qa-tool-agent.md`. Start with the LLM
-  tool-calling probe (Path A native vs Path B JSON loop), then TDD Tasks 1–5. Keep
-  `pm_task` separate. Best done in a FRESH session (this one ran long/expensive).
+- **Verify the unified agent end-to-end LIVE** through `run_meeting.py` UI — only unit-tested
+  (no DB suite). Needs the live blockers below cleared (psycopg + DB at head). Worth checking:
+  auto-retrieve grounding quality, that gemma honors `tool_choice=auto` in real chats, and
+  that the FE approve/reject card still works against the agent interrupt (same payload shape).
+- **Wire `create_task` → pm-agent `redmine_reconcile`** (spec `2026-06-06-…`): the happy-path
+  goal #2 (template → reconcile) is NOT in Task #8 — `create_task` currently only *produces*
+  the structured task. Could later expose pm reconcile as a tool or post-approval step.
+- **`transcript_segments` injection** — still deferred (spec §5); seam in `pm_call`.
 - **pm_task lifecycle deltas (PARKED)**: Edit affordance on need_approval cards; clear
   cached `pm_task_id`/`pm_context_id` on terminal so a later message doesn't reuse an
   ended task; bump `PM_MAX_ROUNDS` (reconcile/batch need several pauses).
