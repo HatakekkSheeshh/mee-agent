@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
+import { WelcomeBanner } from "./WelcomeBanner";
 
 interface ThreadMsg {
   role: "user" | "agent";
@@ -23,6 +24,45 @@ export function ChatPane() {
   // re-renders without triggering them.
   const sessionIdRef = useRef<string | null>(null);
   const sessionMeetingRef = useRef<string | null>(null);
+
+  // Persist the thread per meeting so it survives a page refresh (F5).
+  const storageKey = `mee.chat.${currentMeetingId ?? "none"}`;
+
+  // Restore on mount / when the bound meeting changes.
+  useEffect(() => {
+    sessionMeetingRef.current = currentMeetingId;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const saved = raw
+        ? (JSON.parse(raw) as {
+            sessionId?: string | null;
+            messages?: ThreadMsg[];
+            pending?: PendingAction | null;
+          })
+        : null;
+      sessionIdRef.current = saved?.sessionId ?? null;
+      setMessages(saved?.messages ?? []);
+      setPending(saved?.pending ?? null);
+    } catch {
+      sessionIdRef.current = null;
+      setMessages([]);
+      setPending(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMeetingId]);
+
+  // Save whenever the thread changes (sessionIdRef is set before any message,
+  // so it is captured alongside the messages that triggered its creation).
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ sessionId: sessionIdRef.current, messages, pending }),
+      );
+    } catch {
+      /* ignore quota / serialization errors */
+    }
+  }, [messages, pending, storageKey]);
 
   const pushAgent = (text: string) =>
     setMessages((m) => [...m, { role: "agent", text }]);
@@ -104,6 +144,25 @@ export function ChatPane() {
     }
   }, [pending, busy, infoInput, t]);
 
+  // Cancel a pm-agent need_more_info pause: pm-agent's need_more_info node
+  // ends the thread on the literal text "/cancel" (NOT an approval-reject
+  // DataPart), so send it as free text via /approve {text:"/cancel"}.
+  const cancelInfo = useCallback(async () => {
+    if (!pending || busy) return;
+    const id = pending.id;
+    setPending(null);
+    setInfoInput("");
+    setMessages((m) => [...m, { role: "user", text: "/cancel" }]);
+    setBusy(true);
+    try {
+      applyResult(await api.chat.approve(id, { text: "/cancel" }));
+    } catch (e) {
+      pushAgent(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pending, busy, t]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -125,10 +184,7 @@ export function ChatPane() {
       </div>
 
       <div className="chat-thread">
-        <div className="msg msg-agent">
-          {t("agent.welcome")}
-          <div className="msg-meta">{t("agent.justNow")}</div>
-        </div>
+        <WelcomeBanner />
 
         {messages.length === 0 && (
           <div className="suggested-prompts">
@@ -147,9 +203,9 @@ export function ChatPane() {
         {pending && pending.kind === "need_more_info" && (
           <div className="msg msg-agent pending-action">
             <div className="pending-title">{t("chat.needInfo")}</div>
-            {pending.task_id && (
+            {/* {pending.task_id && (
               <div className="pending-thread small">Thread: {pending.task_id}</div>
-            )}
+            )} */}
             {pending.prompt && <Markdown>{pending.prompt}</Markdown>}
             <textarea
               className="chat-input pending-info-input"
@@ -169,7 +225,7 @@ export function ChatPane() {
               <button className="btn btn-approve" type="button" disabled={busy || !infoInput.trim()} onClick={() => void provideInfo()}>
                 {t("chat.send")}
               </button>
-              <button className="btn btn-reject" type="button" disabled={busy} onClick={() => void decide(false)}>
+              <button className="btn btn-reject" type="button" disabled={busy} onClick={() => void cancelInfo()}>
                 {t("chat.cancel")}
               </button>
             </div>
@@ -181,9 +237,9 @@ export function ChatPane() {
             <div className="pending-title">
               {t("chat.pending")}: <strong>{pending.tool}</strong>
             </div>
-            {pending.task_id && (
+            {/* {pending.task_id && (
               <div className="pending-thread small">Thread: {pending.task_id}</div>
-            )}
+            )} */}
             {pending.kind === "need_approval" && pending.issues?.length ? (
               <ul className="pending-issues">
                 {pending.issues.map((iss, i) => (
