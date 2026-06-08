@@ -74,3 +74,17 @@ async def test_create_task_meeting_without_action_items(monkeypatch):
 
     out = await _executor()({"meeting_id": MID}, session=object(), user_id=UID)
     assert out.get("error")
+
+
+def test_build_task_items_normalizes_action_items():
+    items = tools.build_task_items([
+        {"pic": "Tuấn", "deadline": "06/06/2026", "item": "migration"},
+        {"pic": "", "deadline": "", "item": ""},          # dropped (no item)
+        {"pic": "Mai", "deadline": "Chưa xác định", "item": "POC caching"},
+    ])
+    assert len(items) == 2
+    assert items[0] == {
+        "subject": "migration", "assignee": "Tuấn",
+        "due_date": "06/06/2026", "description": "",
+    }
+    assert items[1]["subject"] == "POC caching"

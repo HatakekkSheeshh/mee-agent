@@ -55,6 +55,21 @@ async def _exec_send_email(args: dict, *, session: AsyncSession, user_id: uuid.U
     }
 
 
+def build_task_items(action_items: list[dict]) -> list[dict]:
+    """Normalize MoM action_items ({pic, deadline, item}) → task items
+    ({subject, assignee, due_date, description}). Drops items without text."""
+    return [
+        {
+            "subject": ai.get("item", ""),
+            "assignee": ai.get("pic", ""),
+            "due_date": ai.get("deadline", ""),
+            "description": "",
+        }
+        for ai in action_items
+        if ai.get("item")
+    ]
+
+
 async def _exec_create_task(args: dict, *, session: AsyncSession, user_id: uuid.UUID) -> dict:
     """Build a structured task from explicit args OR the meeting's MoM action_items.
 
@@ -82,16 +97,7 @@ async def _exec_create_task(args: dict, *, session: AsyncSession, user_id: uuid.
         return {"error": f"invalid meeting_id: {meeting_id_str}"}
 
     action_items = await repo.get_mom_action_items(session, mid)
-    tasks = [
-        {
-            "subject": ai.get("item", ""),
-            "assignee": ai.get("pic", ""),
-            "due_date": ai.get("deadline", ""),
-            "description": "",
-        }
-        for ai in action_items
-        if ai.get("item")
-    ]
+    tasks = build_task_items(action_items)
     if not tasks:
         return {"error": "no action_items found in this meeting's MoM"}
     logger.info(f"[create_task] built {len(tasks)} task(s) from MoM action_items")
