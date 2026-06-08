@@ -258,3 +258,12 @@ async def test_bridge_reject_gate1_no_handoff(monkeypatch):
     assert not await _interrupted_b(graph, cfg)
     assert pm.calls == []                       # never bridged to pm
     assert result["final_reply"] == "OK, mình không đồng bộ nữa."
+
+
+def test_classify_prompt_routes_meeting_tasks_to_agent():
+    import inspect
+    src = inspect.getsource(chat_graph.classify_intent)
+    assert "biên bản" in src and "agent" in src
+    assert "đồng bộ" in src or "lên Redmine" in src
+    # The new bias line/example routes meeting-derived task sync to the agent.
+    assert "lên Redmine" in src

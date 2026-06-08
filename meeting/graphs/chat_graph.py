@@ -206,7 +206,9 @@ async def classify_intent(state: ChatState) -> dict:
         "  • danh sách recording/phiên họp, recording_id, transcript của một dự án/cuộc họp\n"
         "  • việc cần làm / action item RÚT RA TỪ cuộc họp — kể cả hỏi theo người "
         "(vd 'Hiếu cần làm gì?', 'việc của Mai trong buổi họp')\n"
-        "  • tạo task nội bộ, gửi email, tìm trong transcript\n\n"
+        "  • tạo task nội bộ, gửi email, tìm trong transcript\n"
+        "  • đồng bộ / tạo task TỪ biên bản họp lên Redmine — agent tự dựng danh "
+        "sách việc từ MoM rồi chuyển cho pm-agent đối chiếu (KHÔNG tự route sang pm_task)\n\n"
         '"pm_task" — CHỈ khi user nói rõ về Redmine / issue tracker:\n'
         "  • có từ khoá rõ ràng: Redmine, issue, ticket, mã '#123', 'trên Redmine', "
         "'đồng bộ/sync issue'\n"
@@ -218,6 +220,8 @@ async def classify_intent(state: ChatState) -> dict:
         '  "tóm tắt cuộc họp tuần trước" → agent\n'
         '  "liệt kê các phiên họp của dự án X" → agent\n'
         '  "tạo task cho Mai deploy v1" → agent\n'
+        '  "đồng bộ các việc trong biên bản họp lên Redmine" → agent\n'
+        '  "tạo issue trên Redmine cho từng action item của cuộc họp" → agent\n'
         '  "tạo issue trên Redmine cho việc deploy v1" → pm_task\n'
         '  "liệt kê issue overdue của tôi" → pm_task\n'
         '  "cập nhật trạng thái issue #123" → pm_task'
