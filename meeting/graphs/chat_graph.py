@@ -549,8 +549,13 @@ def make_agent_tools(session: AsyncSession):
             spec = get_tool(name)
             if spec and spec.get("side_effect"):
                 if pending is None:
-                    # Defer to HITL; agent_execute appends this tool's result.
-                    pending = {"id": tc["id"], "name": name, "args": args}
+                    if name == "create_task":
+                        template = await _build_reconcile_template(
+                            session, args, state.get("meeting_context") or {}, resolved
+                        )
+                        pending = {"id": tc["id"], "name": name, "args": template}
+                    else:
+                        pending = {"id": tc["id"], "name": name, "args": args}
                 else:
                     # Only one action approved per round — keep the message list
                     # valid by giving extra side-effect calls a deferred result.
@@ -613,6 +618,31 @@ def make_agent_execute(session: AsyncSession):
         args = pending.get("args") or {}
         user_id = uuid.UUID(state["user_id"])
         messages = list(state.get("agent_messages") or [])
+
+        # Approved create_task → bridge into the pm reconcile loop (GATE 2 is
+        # pm-agent's own write approval). The user may edit `project` on the card.
+        if action == "approved" and name == "create_task":
+            template = dict(args)  # {project, items}
+            if decision.get("edited_args"):
+                template.update(decision["edited_args"])
+            project = template.get("project", "")
+            items = template.get("items", [])
+            logger.info(
+                "[Node agent_execute] create_task → pm reconcile (%d item(s))", len(items)
+            )
+            return {
+                "pending_tool": None,
+                "user_decision": None,
+                "agent_route": "reconcile",
+                "pm_next_payload": {
+                    "kind": "reconcile", "project": project, "items": items,
+                    "text": _reconcile_text(project, items),
+                },
+                "pm_rounds": 0,
+                "tool_result": {
+                    "status": "reconcile_handoff", "project": project, "count": len(items),
+                },
+            }
 
         if action == "approved":
             if decision.get("edited_args"):
@@ -868,7 +898,11 @@ def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_
         {"agent": "agent", "agent_approve": "agent_approve"},
     )
     g.add_edge("agent_approve", "agent_execute")
-    g.add_edge("agent_execute", "agent")
+    g.add_conditional_edges(
+        "agent_execute",
+        route_after_agent_execute,
+        {"agent": "agent", "pm_call": "pm_call"},
+    )
     # pm-agent loop: pm_call → (await ⇄ pm_call) → pm_reply → save_reply
     g.add_conditional_edges(
         "pm_call",
