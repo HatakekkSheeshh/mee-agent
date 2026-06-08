@@ -112,7 +112,25 @@ Implemented per `plans/2026-06-08-unified-qa-tool-agent.md`, full TDD, **48 test
   approve interrupt reuses the local-tool payload shape `{tool,args,rationale,description}`,
   so existing approve/reject machinery drives it.
 
-## NEXT (decided) — recording-scoped task queries (Option B)
+## Option B — DONE (2026-06-08, this session) — recording-scoped task queries
+
+Implemented per the spec below, full TDD, **13 new tests** (suite now **64 green**:
+`venv/bin/python -m pytest tests/meeting -q`). Committed `591a6dd` (unpushed).
+
+- **repo** (`meeting/db/repositories.py`): `list_recordings` (→ `[{recording_id,
+  label, date, has_mom}]`, chronological; label = `title or session_label`; date =
+  event date w/ `started_at` fallback) + `get_recording_mom` (recording's `mom_json`).
+- **tools** (`meeting/services/tools.py`, both read-only): `list_recordings`
+  (`meeting_id` auto-injected) + `recording_mom` (arg `recording_id`) — agent maps
+  "Meeting N"/ordinal/date → recording, reads that recording's structured MoM, filters
+  `action_items` by `pic`.
+- **agent** (`chat_graph.py`): `_agent_system_prompt` only — steers recording-scoped
+  lookup + forbids cross-recording mis-attribution (Option C mitigation). **No graph
+  change** (read tools auto-run in `agent_tools`; verified by `test_agent_recording_scope`).
+- Tests: `test_repo_recordings.py`, `test_tools_recording_scoped.py`,
+  `test_agent_recording_scope.py`.
+
+### Original design notes (Option B)
 
 **Problem (verified against live data):** `retrieve` is project-scoped — `memory_events`
 carry only `meeting_id`, NOT `recording_id` — so "Hiệu's tasks in *Meeting 1*" returns
@@ -145,6 +163,27 @@ Note: a recording named "Meeting 1" lives in project **GIP**; the bad answer cam
 **AI Innovation Project** (`e7f14228`) — so resolving the right recording (and possibly the
 right project) matters. `switch_meeting` resolves the project; `list_recordings` resolves
 within it.
+
+## NEXT (decided, planned, NOT started) — create_task → pm-agent reconcile bridge
+
+Make the agent's `create_task` build a task template from the meeting MoM, let the
+user review it (editable project), then hand it to pm-agent's `redmine_reconcile` loop
+— instead of the user creating Redmine issues by hand. **Spec + 8-task TDD plan written
+& committed** (`35ac010`):
+
+- Spec: `docs/superpowers/specs/2026-06-08-create-task-reconcile-bridge-design.md`
+- Plan: `docs/superpowers/plans/2026-06-08-create-task-reconcile-bridge.md`
+
+Decisions locked: `create_task` bridges into the existing `pm_call`/`pm_await` loop
+(new `pm_next_payload` kind `"reconcile"`); **two HITL gates** (GATE 1 local template
+review → GATE 2 pm-agent's Redmine-write approval); project pre-filled from meeting
+title, **editable** on GATE 1's card. Only one graph edge changes (`agent_execute →
+agent` becomes conditional). `api/chat.py` unchanged (it already re-persists a fresh
+pending action when a resume re-interrupts).
+
+**Execute with `superpowers:executing-plans`, inline, TDD.** ⚠️ Task 6 deliberately
+breaks two `test_agent_loop.py` create_task tests (approved create_task no longer
+executes locally); Task 7 fixes them by switching to `send_email` — do 6→7 back-to-back.
 
 ## PENDING / NEXT
 
