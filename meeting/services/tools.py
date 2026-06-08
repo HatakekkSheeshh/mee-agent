@@ -189,6 +189,24 @@ async def _exec_retrieve(args: dict, *, session: AsyncSession, user_id: uuid.UUI
     return {"status": "ok", "source": "empty", "query": query, "chunks": [], "count": 0}
 
 
+async def _exec_switch_meeting(
+    args: dict, *, session: AsyncSession, user_id: uuid.UUID
+) -> dict:
+    """Safe read tool — resolve a project the user names by title and return its
+    id (most-recent match) so the agent can re-scope subsequent retrieval."""
+    title = (args.get("title") or "").strip()
+    if not title:
+        return {"error": "title required"}
+    matches = await repo.find_meetings_by_title(session, user_id, title)
+    if not matches:
+        return {"status": "not_found", "title": title, "candidates": []}
+    return {
+        "status": "ok",
+        "meeting_id": str(matches[0].id),
+        "candidates": [{"id": str(m.id), "title": m.title} for m in matches],
+    }
+
+
 # ─── Tool registry ────────────────────────────────────────────────
 
 TOOLS: dict[str, dict[str, Any]] = {
@@ -241,6 +259,24 @@ TOOLS: dict[str, dict[str, Any]] = {
             },
         },
         "executor": _exec_create_task,
+    },
+    "switch_meeting": {
+        "name": "switch_meeting",
+        "description": (
+            "Switch the active project/meeting by title when the user asks about a "
+            "DIFFERENT project than the current one. Returns the matched meeting(s). "
+            "After switching, use `retrieve` to read that project's content. "
+            "Safe — no side-effect, runs immediately."
+        ),
+        "side_effect": False,
+        "schema": {
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string", "description": "Project/meeting title fragment"},
+            },
+        },
+        "executor": _exec_switch_meeting,
     },
     "retrieve": {
         "name": "retrieve",

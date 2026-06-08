@@ -44,6 +44,9 @@ logger = logging.getLogger(__name__)
 # Safety cap on the pm_call ⇄ pm_await loop against a misbehaving agent.
 PM_MAX_ROUNDS = 6
 
+# Safety cap on the unified agent ⇄ tools loop (number of LLM tool-calling rounds).
+MAX_AGENT_ROUNDS = 6
+
 
 # ─── State ────────────────────────────────────────────────────────
 
@@ -57,9 +60,10 @@ class ChatState(TypedDict, total=False):
     # Loaded by load_context
     meeting_context: dict      # title, project_summary_json, recording_moms[]
     recent_messages: list[dict]  # last N messages from chat_messages
+    resolved_meeting_id: Optional[str]  # bound meeting (or title-resolved) for tool scoping
 
-    # Filled by classify_intent
-    intent: Literal["question", "tool", "pm_task"]
+    # Filled by classify_intent (binary router: agent vs pm_task)
+    intent: Literal["agent", "pm_task"]
     proposed_tool: Optional[str]
     proposed_args: Optional[dict]
     rationale: Optional[str]
@@ -70,6 +74,16 @@ class ChatState(TypedDict, total=False):
     # Filled by execute_action / answer
     tool_result: Optional[dict]
     final_reply: str           # text to show user
+
+    # ── unified tool-calling agent (intent == "agent") ──
+    # All checkpointed (thread_id = session_id) so the tool loop survives an
+    # approve/reject round-trip. agent_messages is the running OpenAI message
+    # list (assistant tool_calls + tool results); pending_tool is the one
+    # side-effect call awaiting HITL approval.
+    agent_messages: list[dict]
+    agent_rounds: int
+    pending_tool: Optional[dict]   # {id, name, args} of the side-effect call to approve
+    agent_route: Optional[str]     # "tools" | "finish" | "approve" | "agent"
 
     # ── pm-agent A2A branch (intent == "pm_task") ──
     # All checkpointed (thread_id = session_id) so a multi-step pm-agent
@@ -163,57 +177,42 @@ def make_load_context(session: AsyncSession):
             f"[Node load_context] session={state['session_id'][:8]}, "
             f"recent_msgs={len(recent)}, meeting={meeting_ctx.get('title', 'none')!r}"
         )
-        return {"recent_messages": recent, "meeting_context": meeting_ctx}
+        return {
+            "recent_messages": recent,
+            "meeting_context": meeting_ctx,
+            # Default scope for the agent's tools = the chat's bound meeting.
+            # switch_meeting can re-scope this mid-conversation by title.
+            "resolved_meeting_id": meeting_ctx.get("id") or state.get("meeting_id"),
+        }
 
     return load_context
 
 
 async def classify_intent(state: ChatState) -> dict:
-    """LLM: phân loại user_message → 'question' or 'tool', extract args."""
+    """Binary router: 'pm_task' (Redmine via pm-agent) vs 'agent' (everything else).
+
+    The unified tool-calling agent handles all meeting Q&A + local tools, so the
+    only split left is whether to hand off to the separate pm-agent A2A branch.
+    """
     msg = state["user_message"]
-    meeting = state.get("meeting_context", {})
-    tools_spec = list_tools()
-
-    system_prompt = f"""Bạn là Mee — agent trợ lý cuộc họp. Phân loại tin nhắn của user và respond với JSON.
-
-Bạn có các tools sau:
-{json.dumps(tools_spec, ensure_ascii=False, indent=2)}
-
-Meeting context hiện tại:
-- Title: {meeting.get('title', 'no meeting')}
-- Purpose: {meeting.get('purpose', '')}
-- Project summary available: {meeting.get('project_summary_json') is not None}
-- Recordings with MoM: {len(meeting.get('recording_moms', []))}
-
-PHÂN LOẠI:
-1. "question" — user hỏi về nội dung họp / MoM / tóm tắt → trả lời trực tiếp, KHÔNG cần tool
-2. "tool" — user yêu cầu hành động cần tool nội bộ (gửi email, tạo task, search transcript)
-3. "pm_task" — user yêu cầu thao tác quản lý dự án trên Redmine qua pm-agent:
-   - Truy vấn/báo cáo issue (liệt kê, tìm, issue overdue / stale / sắp đến hạn, workload…)
-   - Tạo / cập nhật / cập nhật hàng loạt issue (các thao tác ghi sẽ cần user duyệt)
-   Ví dụ: "tạo issue cho việc deploy v1", "liệt kê issue overdue của tôi",
-   "cập nhật trạng thái issue #123". Với pm_task KHÔNG cần proposed_tool/args
-   (pm-agent tự chọn skill); chỉ cần đặt intent = "pm_task".
-
-Trả về CHỈ JSON (không markdown, không giải thích):
-{{
-  "intent": "question" | "tool" | "pm_task",
-  "proposed_tool": "<tool_name>" or null,
-  "proposed_args": {{...}} or null,
-  "rationale": "<vì sao chọn intent/tool này — 1 câu ngắn>"
-}}
-"""
-    user_prompt = f"Tin nhắn user: {msg}"
-
+    system_prompt = (
+        "Phân loại tin nhắn của user thành đúng 1 nhãn. Trả về CHỈ JSON "
+        '{"intent": "pm_task" | "agent"} (không markdown, không giải thích).\n'
+        '- "pm_task": thao tác quản lý dự án trên Redmine qua pm-agent — '
+        "tạo/cập nhật/liệt kê/báo cáo issue, workload, issue overdue/stale/sắp đến hạn. "
+        'Ví dụ: "tạo issue deploy v1", "liệt kê issue overdue của tôi".\n'
+        '- "agent": MỌI yêu cầu khác — hỏi nội dung/tóm tắt cuộc họp, tìm trong '
+        "transcript, tạo task nội bộ, gửi email…"
+    )
     try:
         client = _llm_client()
         resp = client.chat.completions.create(
             model=_llm_model(),
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": f"Tin nhắn user: {msg}"},
             ],
-            max_tokens=512,
+            max_tokens=64,
             timeout=60,
         )
         raw = resp.choices[0].message.content.strip()
@@ -224,38 +223,19 @@ Trả về CHỈ JSON (không markdown, không giải thích):
                 raw = raw[4:]
             raw = raw.strip()
         parsed = json.loads(raw)
-        logger.info(
-            f"[Node classify_intent] intent={parsed.get('intent')!r} "
-            f"tool={parsed.get('proposed_tool')!r}"
-        )
-        return {
-            "intent": parsed.get("intent", "question"),
-            "proposed_tool": parsed.get("proposed_tool"),
-            "proposed_args": parsed.get("proposed_args"),
-            "rationale": parsed.get("rationale", ""),
-        }
+        intent = parsed.get("intent")
+        if intent not in ("pm_task", "agent"):
+            intent = "agent"
+        logger.info(f"[Node classify_intent] intent={intent!r}")
+        return {"intent": intent}
     except Exception as e:
         logger.exception("classify_intent failed")
-        return {"intent": "question", "error": f"classify failed: {e}"}
+        return {"intent": "agent", "error": f"classify failed: {e}"}
 
 
-def route_after_classify(
-    state: ChatState,
-) -> Literal["answer", "propose_action", "pm_call"]:
-    """Conditional edge: pick branch based on intent."""
-    intent = state.get("intent", "question")
-    tool_name = state.get("proposed_tool")
-
-    if intent == "pm_task":
-        return "pm_call"
-
-    if intent == "tool" and tool_name:
-        tool_spec = get_tool(tool_name)
-        if tool_spec and tool_spec.get("side_effect"):
-            return "propose_action"
-        # Tool without side-effect → run directly via answer path (auto-exec)
-        return "propose_action"  # we still go through propose, but auto-approve
-    return "answer"
+def route_entry(state: ChatState) -> Literal["pm_call", "agent"]:
+    """Conditional edge after classify: pm-agent branch, or the unified agent."""
+    return "pm_call" if state.get("intent") == "pm_task" else "agent"
 
 
 async def answer_node(state: ChatState) -> dict:
@@ -427,6 +407,304 @@ def make_save_reply(session: AsyncSession):
     return save_reply
 
 
+# ─── Unified tool-calling agent (intent == "agent") ───────────────
+#
+# Path A: native OpenAI tool-calling (verified via scripts/probe_tool_calling.py
+# against the MaaS gemma endpoint — reliable tool_calls + parseable args).
+#
+# Replay-safety mirrors the pm branch: the LLM call (agent) and tool execution
+# (agent_tools, agent_execute) NEVER interrupt; agent_approve is the ONLY node
+# that interrupts and it performs no side effects. So a side-effect tool runs
+# exactly once (in agent_execute, after resume), never re-run on replay.
+#
+#   agent ─ tools? ─► agent_tools ─ side-effect? ─► agent_approve ─► agent_execute ─┐
+#     ▲                   │ read-only                                               │
+#     └───────────────────┴──────────────────────◄─────────────────────────────────┘
+#   agent ─ no tool ─► (finish) ─► save_reply
+
+
+def _openai_tools() -> list[dict]:
+    """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent
+    never supplies it; we inject resolved_meeting_id server-side)."""
+    out = []
+    for s in list_tools():
+        schema = json.loads(json.dumps(s.get("schema") or {"type": "object", "properties": {}}))
+        props = schema.get("properties") or {}
+        props.pop("meeting_id", None)
+        schema["properties"] = props
+        if "required" in schema:
+            req = [r for r in schema["required"] if r != "meeting_id"]
+            if req:
+                schema["required"] = req
+            else:
+                schema.pop("required", None)
+        out.append({
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": s.get("description", ""),
+                "parameters": schema,
+            },
+        })
+    return out
+
+
+def _tc_to_dict(tc) -> dict:
+    """Serialize an OpenAI tool_call object into a checkpointable dict."""
+    return {
+        "id": tc.id,
+        "type": "function",
+        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+    }
+
+
+def _parse_tool_args(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("[agent] could not parse tool arguments: %r", raw)
+        return {}
+
+
+def _json(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def _inject_meeting(args: dict, name: str, resolved: Optional[str]) -> dict:
+    """Inject the resolved meeting_id into a tool's args when the tool takes one
+    and the model didn't supply it."""
+    args = dict(args or {})
+    if resolved and "meeting_id" not in args:
+        spec = get_tool(name) or {}
+        props = (spec.get("schema") or {}).get("properties") or {}
+        if "meeting_id" in props:
+            args["meeting_id"] = resolved
+    return args
+
+
+def _last_assistant_text(messages: list[dict]) -> str:
+    for m in reversed(messages):
+        if m.get("role") == "assistant" and m.get("content"):
+            return m["content"]
+    return ""
+
+
+def _seed_agent_messages(state: ChatState) -> list[dict]:
+    """Build the initial OpenAI message list from recent history + this turn."""
+    msgs: list[dict] = []
+    for m in (state.get("recent_messages") or [])[-6:]:
+        content = (m.get("content") or {}).get("text", "")
+        if not content:
+            continue
+        if m.get("role") == "user":
+            msgs.append({"role": "user", "content": content})
+        elif m.get("role") == "agent":
+            msgs.append({"role": "assistant", "content": content})
+    msgs.append({"role": "user", "content": state.get("user_message", "")})
+    return msgs
+
+
+def _agent_system_prompt(state: ChatState) -> str:
+    meeting = state.get("meeting_context") or {}
+    title = meeting.get("title") or "(chưa gắn cuộc họp)"
+    return (
+        "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
+        f"Cuộc họp hiện tại: {title}\n\n"
+        "Quy tắc:\n"
+        "- Khi cần nội dung cuộc họp (quyết định, action item, ai nói gì...) để trả lời, "
+        "GỌI tool `retrieve` trước — KHÔNG bịa.\n"
+        "- Tool có side-effect (create_task, send_email) cần người dùng DUYỆT; "
+        "cứ gọi khi phù hợp, hệ thống sẽ tự hỏi duyệt.\n"
+        "- KHÔNG cần truyền meeting_id — hệ thống tự gắn cuộc họp hiện tại.\n"
+        "- Khi đã đủ thông tin, trả lời trực tiếp (KHÔNG gọi tool)."
+    )
+
+
+def _to_llm_messages(state: ChatState, messages: list[dict]) -> list[dict]:
+    return [{"role": "system", "content": _agent_system_prompt(state)}, *messages]
+
+
+def make_agent(llm=None):
+    async def agent(state: ChatState) -> dict:
+        """One LLM tool-calling turn. Never interrupts (replay-safe)."""
+        rounds = state.get("agent_rounds", 0)
+        messages = state.get("agent_messages") or _seed_agent_messages(state)
+
+        if rounds >= MAX_AGENT_ROUNDS:
+            logger.warning("[Node agent] MAX_AGENT_ROUNDS reached — forcing finish")
+            return {
+                "agent_messages": messages,
+                "agent_route": "finish",
+                "final_reply": _last_assistant_text(messages)
+                or "Mình đã thử nhiều bước nhưng chưa hoàn tất được, bạn thử lại nhé.",
+            }
+
+        client = llm or _llm_client()
+        try:
+            resp = client.chat.completions.create(
+                model=_llm_model(),
+                messages=_to_llm_messages(state, messages),
+                tools=_openai_tools(),
+                tool_choice="auto",
+                max_tokens=1024,
+                timeout=60,
+            )
+        except Exception as e:
+            logger.exception("[Node agent] LLM call failed")
+            return {
+                "agent_messages": messages,
+                "agent_route": "finish",
+                "final_reply": f"(Lỗi khi gọi mô hình: {e})",
+                "error": str(e),
+            }
+
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            reply = (msg.content or "").strip()
+            logger.info(f"[Node agent] final answer (len={len(reply)})")
+            return {
+                "agent_messages": messages + [{"role": "assistant", "content": reply}],
+                "agent_route": "finish",
+                "final_reply": reply,
+            }
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [_tc_to_dict(tc) for tc in tool_calls],
+        }
+        logger.info(
+            "[Node agent] round=%d tool_calls=%s",
+            rounds + 1, [tc.function.name for tc in tool_calls],
+        )
+        return {
+            "agent_messages": messages + [assistant_msg],
+            "agent_rounds": rounds + 1,
+            "agent_route": "tools",
+        }
+
+    return agent
+
+
+def make_agent_tools(session: AsyncSession):
+    async def agent_tools(state: ChatState) -> dict:
+        """Run the assistant's tool_calls. Read tools execute now (idempotent);
+        the first side-effect tool is deferred to agent_approve. No interrupt."""
+        messages = list(state.get("agent_messages") or [])
+        assistant = messages[-1] if messages else {}
+        tool_calls = assistant.get("tool_calls") or []
+        resolved = state.get("resolved_meeting_id")
+        user_id = uuid.UUID(state["user_id"])
+
+        pending = None
+        switched = None
+        for tc in tool_calls:
+            name = tc["function"]["name"]
+            args = _inject_meeting(_parse_tool_args(tc["function"]["arguments"]), name, resolved)
+            spec = get_tool(name)
+            if spec and spec.get("side_effect"):
+                if pending is None:
+                    # Defer to HITL; agent_execute appends this tool's result.
+                    pending = {"id": tc["id"], "name": name, "args": args}
+                else:
+                    # Only one action approved per round — keep the message list
+                    # valid by giving extra side-effect calls a deferred result.
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc["id"],
+                        "content": _json({"status": "deferred",
+                                          "note": "một hành động được duyệt mỗi lần"}),
+                    })
+                continue
+
+            if not spec:
+                result = {"error": f"unknown tool: {name}"}
+            else:
+                result = await execute_tool(name, args, session=session, user_id=user_id)
+            if name == "switch_meeting" and isinstance(result, dict) and result.get("meeting_id"):
+                switched = result["meeting_id"]
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _json(result)})
+
+        out: dict = {"agent_messages": messages}
+        if switched:
+            out["resolved_meeting_id"] = switched
+        if pending:
+            out["pending_tool"] = pending
+            out["agent_route"] = "approve"
+        else:
+            out["agent_route"] = "agent"
+        return out
+
+    return agent_tools
+
+
+async def agent_approve(state: ChatState) -> dict:
+    """The ONLY interrupt in the agent branch. No side effects (replay-safe).
+
+    Surfaces the pending side-effect tool as a local-tool pending action
+    ({tool, args, rationale, description}) — the existing api/chat.py machinery
+    persists it and approve/reject resume with {action: approved|rejected, ...}.
+    """
+    pending = state.get("pending_tool") or {}
+    spec = get_tool(pending.get("name", "")) or {}
+    decision = interrupt({
+        "tool": pending.get("name"),
+        "args": pending.get("args") or {},
+        "rationale": _last_assistant_text(state.get("agent_messages") or []),
+        "description": spec.get("description", ""),
+    })
+    logger.info(f"[Node agent_approve] RESUMED decision={decision}")
+    return {"user_decision": decision}
+
+
+def make_agent_execute(session: AsyncSession):
+    async def agent_execute(state: ChatState) -> dict:
+        """Run the approved side-effect tool (or record rejection), append its
+        result to the message list, then loop back to the agent."""
+        pending = state.get("pending_tool") or {}
+        decision = state.get("user_decision") or {}
+        action = decision.get("action", "rejected")
+        name = pending.get("name", "")
+        tc_id = pending.get("id")
+        args = pending.get("args") or {}
+        user_id = uuid.UUID(state["user_id"])
+        messages = list(state.get("agent_messages") or [])
+
+        if action == "approved":
+            if decision.get("edited_args"):
+                args = _inject_meeting(
+                    decision["edited_args"], name, state.get("resolved_meeting_id")
+                )
+            result = await execute_tool(name, args, session=session, user_id=user_id)
+        else:
+            result = {"status": "rejected", "reason": decision.get("reason", "user rejected")}
+
+        if tc_id is not None:
+            messages.append({"role": "tool", "tool_call_id": tc_id, "content": _json(result)})
+        logger.info(f"[Node agent_execute] tool={name!r} action={action!r}")
+        return {
+            "agent_messages": messages,
+            "pending_tool": None,
+            "user_decision": None,
+            "tool_result": result,
+            "agent_route": "agent",
+        }
+
+    return agent_execute
+
+
+def route_after_agent(state: ChatState) -> Literal["agent_tools", "save_reply"]:
+    return "agent_tools" if state.get("agent_route") == "tools" else "save_reply"
+
+
+def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve"]:
+    return "agent_approve" if state.get("agent_route") == "approve" else "agent"
+
+
 # ─── pm-agent A2A branch ──────────────────────────────────────────
 #
 # Correctness constraint (LangGraph replays an interrupted node from its top
@@ -596,14 +874,17 @@ async def pm_reply(state: ChatState) -> dict:
 
 # ─── Builder ──────────────────────────────────────────────────────
 
-def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None):
+def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_llm=None):
     g = StateGraph(ChatState)
 
     g.add_node("load_context", make_load_context(session))
     g.add_node("classify_intent", classify_intent)
-    g.add_node("answer", answer_node)
-    g.add_node("propose_action", propose_action_node)
-    g.add_node("execute_action", make_execute_action(session))
+    # Unified tool-calling agent (question + local tools). agent_llm is injected
+    # in tests; in production the agent node lazily resolves _llm_client().
+    g.add_node("agent", make_agent(agent_llm))
+    g.add_node("agent_tools", make_agent_tools(session))
+    g.add_node("agent_approve", agent_approve)
+    g.add_node("agent_execute", make_agent_execute(session))
     # pm-agent branch. pm_client is injected in tests; in production the
     # pm_call node lazily resolves get_pm_agent_client() on first use, so
     # non-PM chats never require PM_AGENT_* to be configured.
@@ -616,16 +897,22 @@ def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None):
     g.add_edge("load_context", "classify_intent")
     g.add_conditional_edges(
         "classify_intent",
-        route_after_classify,
-        {
-            "answer": "answer",
-            "propose_action": "propose_action",
-            "pm_call": "pm_call",
-        },
+        route_entry,
+        {"agent": "agent", "pm_call": "pm_call"},
     )
-    g.add_edge("answer", "save_reply")
-    g.add_edge("propose_action", "execute_action")
-    g.add_edge("execute_action", "save_reply")
+    # unified agent loop: agent ⇄ agent_tools → (agent_approve → agent_execute) ↺
+    g.add_conditional_edges(
+        "agent",
+        route_after_agent,
+        {"agent_tools": "agent_tools", "save_reply": "save_reply"},
+    )
+    g.add_conditional_edges(
+        "agent_tools",
+        route_after_agent_tools,
+        {"agent": "agent", "agent_approve": "agent_approve"},
+    )
+    g.add_edge("agent_approve", "agent_execute")
+    g.add_edge("agent_execute", "agent")
     # pm-agent loop: pm_call → (await ⇄ pm_call) → pm_reply → save_reply
     g.add_conditional_edges(
         "pm_call",

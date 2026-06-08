@@ -1,30 +1,25 @@
-"""
-Task 3 — classify_intent gains a `pm_task` intent and route_after_classify
-sends it to the `pm_call` node. Pure-function routing tests + one classify
-test with a monkeypatched LLM (no network).
+"""Task 8 — classify_intent is now a binary router (pm_task vs agent) and
+route_entry sends pm_task → pm_call, everything else → the unified agent.
+Pure-function routing tests + one classify test with a monkeypatched LLM.
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from meeting.graphs import chat_graph
-from meeting.graphs.chat_graph import classify_intent, route_after_classify
+from meeting.graphs.chat_graph import classify_intent, route_entry
 
 
 def test_route_pm_task_goes_to_pm_call():
-    assert route_after_classify({"intent": "pm_task", "proposed_tool": None}) == "pm_call"
+    assert route_entry({"intent": "pm_task"}) == "pm_call"
 
 
-def test_route_question_unchanged():
-    assert route_after_classify({"intent": "question"}) == "answer"
+def test_route_agent_goes_to_agent():
+    assert route_entry({"intent": "agent"}) == "agent"
 
 
-def test_route_tool_unchanged():
-    # A tool intent with a named tool still routes to propose_action (HITL).
-    state = {"intent": "tool", "proposed_tool": "send_email"}
-    assert route_after_classify(state) == "propose_action"
+def test_route_defaults_to_agent_when_missing():
+    assert route_entry({}) == "agent"
 
 
 def _fake_llm_returning(json_text: str):
@@ -44,13 +39,28 @@ def _fake_llm_returning(json_text: str):
 
 
 async def test_classify_returns_pm_task(monkeypatch):
-    fake = _fake_llm_returning(
-        '{"intent": "pm_task", "proposed_tool": null, "proposed_args": null,'
-        ' "rationale": "user muốn tạo issue Redmine"}'
-    )
+    fake = _fake_llm_returning('{"intent": "pm_task"}')
     monkeypatch.setattr(chat_graph, "_llm_client", lambda: fake)
 
     out = await classify_intent(
         {"user_message": "tạo issue cho việc deploy v1", "meeting_context": {}}
     )
     assert out["intent"] == "pm_task"
+
+
+async def test_classify_returns_agent_for_meeting_question(monkeypatch):
+    fake = _fake_llm_returning('{"intent": "agent"}')
+    monkeypatch.setattr(chat_graph, "_llm_client", lambda: fake)
+
+    out = await classify_intent(
+        {"user_message": "tóm tắt cuộc họp tuần trước", "meeting_context": {}}
+    )
+    assert out["intent"] == "agent"
+
+
+async def test_classify_unknown_label_falls_back_to_agent(monkeypatch):
+    fake = _fake_llm_returning('{"intent": "banana"}')
+    monkeypatch.setattr(chat_graph, "_llm_client", lambda: fake)
+
+    out = await classify_intent({"user_message": "???", "meeting_context": {}})
+    assert out["intent"] == "agent"
