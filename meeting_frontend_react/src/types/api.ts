@@ -169,7 +169,7 @@ export interface PendingAction {
   description?: string | null;
   /** pm-agent HITL kind: "need_approval" (issues to confirm) |
    * "need_more_info" (free-text question the user must answer). */
-  kind?: "need_approval" | "need_more_info" | null;
+  kind?: "need_approval" | "need_more_info" | "pm_error" | null;
   /** need_more_info: the prompt text (markdown) to show the user. */
   prompt?: string | null;
   /** need_approval: the issues pm-agent wants to create/update. */

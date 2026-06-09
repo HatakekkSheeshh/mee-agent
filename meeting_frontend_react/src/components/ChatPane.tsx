@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import type { ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
 import { WelcomeBanner } from "./WelcomeBanner";
+import { CreateTaskCard, parseTaskTemplate, type TaskTemplate } from "./CreateTaskCard";
 
 interface ThreadMsg {
   role: "user" | "agent";
@@ -145,6 +146,31 @@ export function ChatPane() {
     [pending, busy, t],
   );
 
+  // Approve the create_task GATE-1 card with the user's edits. The edited
+  // template is sent as `edited_args`; the backend merges it into the reconcile
+  // payload before handing off to pm-agent (GATE 2).
+  const approveCreateTask = useCallback(
+    async (edited: TaskTemplate, reason: string) => {
+      if (!pending || busy) return;
+      const id = pending.id;
+      setPending(null);
+      setBusy(true);
+      try {
+        applyResult(
+          await api.chat.approve(id, {
+            edited_args: { project: edited.project, items: edited.items },
+            ...(reason ? { reason } : {}),
+          }),
+        );
+      } catch (e) {
+        pushAgent(errorText(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [pending, busy, t],
+  );
+
   // Submit the free-text answer to a pm-agent need_more_info pause: resume the
   // same task via /approve with {text} (backend maps it to the next message).
   const provideInfo = useCallback(async () => {
@@ -190,6 +216,13 @@ export function ChatPane() {
       void handleSend();
     }
   };
+
+  // GATE 1 for create_task carries an editable {project, items} template
+  // (tool === "create_task", no pm `kind`). Null for every other pending action.
+  const taskTemplate =
+    pending && pending.tool === "create_task" && !pending.kind
+      ? parseTaskTemplate(pending.args)
+      : null;
 
   return (
     <section className="pane pane-chat">
@@ -253,7 +286,31 @@ export function ChatPane() {
           </div>
         )}
 
-        {pending && pending.kind !== "need_more_info" && (
+        {taskTemplate && (
+          <CreateTaskCard
+            template={taskTemplate}
+            busy={busy}
+            onApprove={(edited, reason) => void approveCreateTask(edited, reason)}
+            onReject={() => void decide(false)}
+          />
+        )}
+
+        {pending && pending.kind === "pm_error" && (
+          <div className="msg msg-agent pending-action">
+            <div className="pending-title">{t("chat.pmError.title")}</div>
+            {pending.prompt && <Markdown>{pending.prompt}</Markdown>}
+            <div className="pending-buttons">
+              <button className="btn btn-approve" type="button" disabled={busy} onClick={() => void decide(true)}>
+                {t("chat.pmError.retry")}
+              </button>
+              <button className="btn btn-reject" type="button" disabled={busy} onClick={() => void decide(false)}>
+                {t("chat.cancel")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {pending && pending.kind !== "need_more_info" && pending.kind !== "pm_error" && !taskTemplate && (
           <div className="msg msg-agent pending-action">
             <div className="pending-title">
               {t("chat.pending")}: <strong>{pending.tool}</strong>
