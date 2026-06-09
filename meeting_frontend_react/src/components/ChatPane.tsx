@@ -12,7 +12,7 @@ interface ThreadMsg {
 }
 
 export function ChatPane() {
-  const { t, currentMeeting, currentMeetingId } = useApp();
+  const { t, currentMeeting, currentMeetingId, confirm } = useApp();
   const [messages, setMessages] = useState<ThreadMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -135,7 +135,14 @@ export function ChatPane() {
   // thread (sessionId kept), so the localStorage cache resets too.
   const handleClear = useCallback(async () => {
     if (busy) return;
-    if (!window.confirm(t("chat.clearConfirm"))) return;
+    const ok = await confirm({
+      title: t("chat.clear"),
+      message: t("chat.clearConfirm"),
+      confirmLabel: t("chat.clear"),
+      cancelLabel: t("confirm.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
     const sid = sessionIdRef.current;
     setBusy(true);
     try {
@@ -147,7 +154,7 @@ export function ChatPane() {
     } finally {
       setBusy(false);
     }
-  }, [busy, t]);
+  }, [busy, t, confirm]);
 
   const decide = useCallback(
     async (approve: boolean) => {
