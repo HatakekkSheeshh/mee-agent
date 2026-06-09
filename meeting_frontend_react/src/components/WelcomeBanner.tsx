@@ -16,7 +16,6 @@ export function WelcomeBanner() {
   return (
     <div className="welcome-banner">
       <div className="welcome-banner-head">
-        <span className="agent-dot" aria-hidden="true" />
         <span className="welcome-banner-title">{t("agent.bannerTitle")}</span>
       </div>
       <p className="welcome-banner-tagline">{t("agent.bannerTagline")}</p>

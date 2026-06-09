@@ -53,7 +53,7 @@ export const STRINGS = {
     "tip.downloadMd": "Tải .md",
     "tip.downloadPdf": "Tải PDF",
     // Agent pane
-    "pane.agent": "Trợ lý",
+    "pane.agent": "Chat Agent",
     "agent.noMeeting": "chưa có project",
     "agent.welcome": "Xin chào! Hỏi tôi tóm tắt, gửi email, hoặc tạo task. Action có side-effect sẽ xin phép trước.",
     "agent.justNow": "vừa xong",
