@@ -217,6 +217,30 @@ async def get_session_detail(
     }
 
 
+@router.post("/sessions/{session_id}/clear")
+async def clear_session(
+    session_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Clear a chat session in place: delete its messages + pending actions and
+    purge the LangGraph checkpoint thread, keeping the session row (and its
+    meeting_id binding). Resets `recent_messages` so the agent re-grounds."""
+    sid = _parse_uuid(session_id)
+    chat = await repo.get_chat_session(session, sid)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await repo.clear_chat_session(session, sid)
+
+    # Purge the checkpoint thread — best-effort. The grounding reset relies on the
+    # chat_messages deletion, not the checkpoint, so a purge failure is non-fatal.
+    try:
+        await get_checkpointer().adelete_thread(str(sid))
+    except Exception:
+        logger.warning("clear: checkpoint purge failed for %s", sid, exc_info=True)
+
+    return {"status": "cleared", "session_id": str(sid)}
+
+
 # ─── Messages ─────────────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/messages")

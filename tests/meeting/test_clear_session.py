@@ -9,9 +9,14 @@ AND pending_actions (scoped by session_id) and never touches the session row.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import Delete
 
+from meeting.api import chat as chat_api
 from meeting.db import repositories as repo
 
 SID = "33333333-3333-3333-3333-333333333333"
@@ -55,3 +60,56 @@ async def test_clear_chat_session_keeps_the_session_row():
 
     tables = {s.table.name for s in sess.executed}
     assert "chat_sessions" not in tables  # the session row survives an in-place clear
+
+
+# ─── endpoint: POST /sessions/{id}/clear ──────────────────────────────
+
+
+async def test_clear_endpoint_clears_and_purges_checkpoint(monkeypatch):
+    sid = uuid.UUID(SID)
+    sess = object()
+    fake_chat = SimpleNamespace(id=sid, meeting_id=uuid.uuid4(), title="Dự án Mee")
+
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=fake_chat))
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(repo, "clear_chat_session", clear_mock)
+    adelete = AsyncMock()
+    monkeypatch.setattr(
+        chat_api, "get_checkpointer", lambda: SimpleNamespace(adelete_thread=adelete)
+    )
+
+    out = await chat_api.clear_session(SID, session=sess)
+
+    assert out == {"status": "cleared", "session_id": SID}
+    clear_mock.assert_awaited_once_with(sess, sid)
+    adelete.assert_awaited_once_with(SID)  # thread_id == str(session_id)
+
+
+async def test_clear_endpoint_404_when_session_missing(monkeypatch):
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=None))
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(repo, "clear_chat_session", clear_mock)
+
+    with pytest.raises(HTTPException) as ei:
+        await chat_api.clear_session(SID, session=object())
+
+    assert ei.value.status_code == 404
+    clear_mock.assert_not_awaited()  # nothing deleted for a missing session
+
+
+async def test_clear_endpoint_checkpoint_failure_is_nonfatal(monkeypatch):
+    sid = uuid.UUID(SID)
+    fake_chat = SimpleNamespace(id=sid, meeting_id=None, title=None)
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=fake_chat))
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(repo, "clear_chat_session", clear_mock)
+    boom = AsyncMock(side_effect=RuntimeError("no checkpointer"))
+    monkeypatch.setattr(
+        chat_api, "get_checkpointer", lambda: SimpleNamespace(adelete_thread=boom)
+    )
+
+    # Purge failure is logged, not raised — the DB deletion already succeeded.
+    out = await chat_api.clear_session(SID, session=object())
+
+    assert out["status"] == "cleared"
+    clear_mock.assert_awaited_once()
