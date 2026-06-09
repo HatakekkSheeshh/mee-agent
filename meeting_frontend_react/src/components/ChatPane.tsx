@@ -129,6 +129,26 @@ export function ChatPane() {
     }
   }, [input, busy, ensureSession, t]);
 
+  // Clear the session in place: wipe its messages + pending + checkpoint on the
+  // backend (keeping the session id / meeting binding), then empty the local
+  // thread and re-show the welcome banner. The save effect persists the cleared
+  // thread (sessionId kept), so the localStorage cache resets too.
+  const handleClear = useCallback(async () => {
+    if (busy) return;
+    if (!window.confirm(t("chat.clearConfirm"))) return;
+    const sid = sessionIdRef.current;
+    setBusy(true);
+    try {
+      if (sid) await api.chat.clear(sid);
+      setMessages([]);
+      setPending(null);
+    } catch (e) {
+      pushAgent(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, t]);
+
   const decide = useCallback(
     async (approve: boolean) => {
       if (!pending || busy) return;
@@ -234,6 +254,21 @@ export function ChatPane() {
           <span className="small">
             {currentMeeting ? currentMeeting.title : t("agent.noMeeting")}
           </span>
+          {(messages.length > 0 || pending) && (
+            <button
+              className="icon-btn icon-btn-sm"
+              type="button"
+              data-tip={t("chat.clear")}
+              aria-label={t("chat.clear")}
+              disabled={busy}
+              onClick={() => void handleClear()}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 

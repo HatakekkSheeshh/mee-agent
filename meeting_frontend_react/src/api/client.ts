@@ -249,6 +249,12 @@ export const api = {
       http<ChatTurnResult>(
         "POST", `/api/chat/pending-actions/${actionId}/reject`, { reason },
       ),
+    // Clear a session in place: wipes its messages + pending + checkpoint, keeps
+    // the session id (and meeting binding), so the agent re-grounds on a clean thread.
+    clear: (sessionId: string) =>
+      http<{ status: string; session_id: string }>(
+        "POST", `/api/chat/sessions/${sessionId}/clear`,
+      ),
   },
 };
 
