@@ -69,7 +69,7 @@ def build_chat_graph(
     g.add_conditional_edges(
         "agent_execute",
         route_after_agent_execute,
-        {"agent": "agent", "pm_call": "pm_call"},
+        {"agent": "agent", "pm_call": "pm_call", "save_reply": "save_reply"},
     )
     # pm-agent loop: pm_call → (await ⇄ pm_call) → pm_reply → save_reply
     g.add_conditional_edges(

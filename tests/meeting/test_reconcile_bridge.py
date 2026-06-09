@@ -201,7 +201,7 @@ def _build_full(llm, pm_client, checkpointer, tools):
                             {"agent": "agent", "agent_approve": "agent_approve"})
     g.add_edge("agent_approve", "agent_execute")
     g.add_conditional_edges("agent_execute", route_after_agent_execute,
-                            {"agent": "agent", "pm_call": "pm_call"})
+                            {"agent": "agent", "pm_call": "pm_call", "save_reply": "save_reply"})
     g.add_conditional_edges("pm_call", route_after_pm_call,
                             {"pm_await": "pm_await", "pm_reply": "pm_reply", "save_reply": "save_reply"})
     g.add_edge("pm_await", "pm_call")
@@ -283,9 +283,9 @@ async def test_bridge_reject_gate1_no_handoff(monkeypatch):
         return [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}]
     monkeypatch.setattr(chat_graph.repo, "get_mom_action_items", fake_items)
 
+    # Reject is terminal: no 2nd LLM turn, so only the first tool-call response is needed.
     llm = _FakeLLM([
         _resp_tool([{"id": "c1", "name": "create_task", "arguments": "{}"}]),
-        _resp_text("OK, mình không đồng bộ nữa."),
     ])
     pm = _FakePm([])
     graph = _build_full(llm, pm, MemorySaver(), ts)
@@ -299,7 +299,8 @@ async def test_bridge_reject_gate1_no_handoff(monkeypatch):
     )
     assert not await _interrupted_b(graph, cfg)
     assert pm.calls == []                       # never bridged to pm
-    assert result["final_reply"] == "OK, mình không đồng bộ nữa."
+    # GATE-1 reject ends the turn with the canned reply (no handoff, no 2nd LLM turn).
+    assert result["final_reply"] == "Đã hủy — mình không tạo task nữa."
 
 
 def test_classify_prompt_routes_meeting_tasks_to_agent():

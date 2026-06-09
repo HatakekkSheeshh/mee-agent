@@ -29,6 +29,7 @@ from meeting.graphs.chat_graph import (
     make_agent_execute,
     make_agent_tools,
     route_after_agent,
+    route_after_agent_execute,
     route_after_agent_tools,
 )
 
@@ -165,7 +166,10 @@ def _build(llm, checkpointer, tools):
         {"agent": "agent", "agent_approve": "agent_approve"},
     )
     g.add_edge("agent_approve", "agent_execute")
-    g.add_edge("agent_execute", "agent")
+    g.add_conditional_edges(
+        "agent_execute", route_after_agent_execute,
+        {"agent": "agent", "save_reply": "save_reply"},
+    )
     g.add_edge("save_reply", END)
     return g.compile(checkpointer=checkpointer)
 
@@ -259,9 +263,9 @@ async def test_agent_side_effect_interrupts_then_executes(monkeypatch):
 
 async def test_agent_side_effect_rejected(monkeypatch):
     ft = _install(monkeypatch)
+    # Reject is terminal: no 2nd LLM turn, so only the first tool-call response is needed.
     llm = FakeLLM([
         tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
-        text("OK, mình không gửi nữa."),
     ])
     graph = _build(llm, MemorySaver(), ft)
     cfg = _config("rejected")
@@ -273,8 +277,9 @@ async def test_agent_side_effect_rejected(monkeypatch):
 
     assert not await _interrupted(graph, cfg)
     assert ft.calls == []  # never executed
-    assert result["final_reply"] == "OK, mình không gửi nữa."
-    assert len(llm.calls) == 2
+    # Reject ends the turn with the canned reply (no loop back to the LLM).
+    assert result["final_reply"] == "Đã hủy — mình không tạo task nữa."
+    assert len(llm.calls) == 1
 
 
 async def test_agent_max_rounds_cap(monkeypatch):

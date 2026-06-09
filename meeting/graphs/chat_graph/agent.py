@@ -31,6 +31,11 @@ from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
 
 logger = logging.getLogger(__name__)
 
+# Canned acknowledgement for a rejected side-effect tool. The reject ends the turn
+# deterministically (route="finish") instead of looping back to the LLM, which would
+# re-read the standing user instruction from the checkpoint and re-attempt the action.
+REJECT_REPLY = "Đã hủy — mình không tạo task nữa."
+
 def _openai_tools(*, tools=_services) -> list[dict]:
     """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent
     never supplies it; we inject resolved_meeting_id server-side)."""
@@ -293,14 +298,29 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
                 },
             }
 
-        if action == "approved":
-            if decision.get("edited_args"):
-                args = _inject_meeting(
-                    decision["edited_args"], name, state.get("resolved_meeting_id"), tools=ts
-                )
-            result = await ts.execute_tool(name, args, session=session, user_id=user_id)
-        else:
+        # Rejected side-effect tool → terminal. Append the rejected result (keeps the
+        # message list valid), then finish the turn with a canned reply instead of
+        # looping back to the agent — otherwise the LLM re-reads the standing user
+        # instruction and re-attempts the whole tool sequence.
+        if action != "approved":
             result = {"status": "rejected", "reason": decision.get("reason", "user rejected")}
+            if tc_id is not None:
+                messages.append({"role": "tool", "tool_call_id": tc_id, "content": _json(result)})
+            logger.info(f"[Node agent_execute] tool={name!r} action={action!r} → finish (terminal)")
+            return {
+                "agent_messages": messages,
+                "pending_tool": None,
+                "user_decision": None,
+                "tool_result": result,
+                "agent_route": "finish",
+                "final_reply": REJECT_REPLY,
+            }
+
+        if decision.get("edited_args"):
+            args = _inject_meeting(
+                decision["edited_args"], name, state.get("resolved_meeting_id"), tools=ts
+            )
+        result = await ts.execute_tool(name, args, session=session, user_id=user_id)
 
         if tc_id is not None:
             messages.append({"role": "tool", "tool_call_id": tc_id, "content": _json(result)})
@@ -321,7 +341,13 @@ def route_after_agent(state: ChatState) -> Literal["agent_tools", "save_reply"]:
 def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve"]:
     return "agent_approve" if state.get("agent_route") == "approve" else "agent"
 
-def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call"]:
-    """After an approved create_task, bridge into the pm reconcile loop;
-    otherwise loop back to the agent (normal side-effect tools)."""
-    return "pm_call" if state.get("agent_route") == "reconcile" else "agent"
+def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call", "save_reply"]:
+    """After an approved create_task, bridge into the pm reconcile loop; on a
+    rejected side-effect tool, finish the turn (terminal); otherwise loop back to
+    the agent (normal approved side-effect tools)."""
+    route = state.get("agent_route")
+    if route == "reconcile":
+        return "pm_call"
+    if route == "finish":
+        return "save_reply"
+    return "agent"
