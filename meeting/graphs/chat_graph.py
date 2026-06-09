@@ -34,6 +34,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
 from meeting.graphs._chat_llm import _llm_client, _llm_model
+from meeting.graphs._chat_prompts import (
+    CLASSIFY_SYSTEM_PROMPT,
+    _agent_system_prompt,
+    _to_llm_messages,
+)
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS, PM_MAX_ROUNDS
 from meeting.services import build_task_items, execute_tool, get_tool, list_tools
 from meeting.services.pm_agent_client import (
@@ -126,46 +131,12 @@ async def classify_intent(state: ChatState) -> dict:
     only split left is whether to hand off to the separate pm-agent A2A branch.
     """
     msg = state["user_message"]
-    system_prompt = (
-        "Bạn là bộ định tuyến cho trợ lý cuộc họp Mee. Phân loại tin nhắn user thành "
-        'đúng MỘT nhãn, trả về CHỈ JSON {"intent": "pm_task" | "agent"} '
-        "(không markdown, không giải thích).\n\n"
-        'MẶC ĐỊNH là "agent". CHỈ chọn "pm_task" khi user nói RÕ RÀNG về hệ thống '
-        "quản lý issue Redmine. Nếu phân vân → chọn \"agent\".\n\n"
-        '"agent" — mọi thứ liên quan tới NỘI DUNG / DỮ LIỆU CUỘC HỌP:\n'
-        "  • nội dung, tóm tắt, biên bản (MoM), ai nói gì, quyết định, blocker của cuộc họp\n"
-        "  • danh sách recording/phiên họp, recording_id, transcript của một dự án/cuộc họp\n"
-        "  • việc cần làm / action item RÚT RA TỪ cuộc họp — kể cả hỏi theo người "
-        "(vd 'Hiếu cần làm gì?', 'việc của Mai trong buổi họp')\n"
-        "  • tạo task nội bộ, gửi email, tìm trong transcript\n"
-        "  • đồng bộ / tạo task / tạo task template / 'hỗ trợ tạo task template' lên "
-        "Redmine TỪ cuộc họp — agent tự dựng danh sách việc từ MoM rồi chuyển cho "
-        "pm-agent đối chiếu (KHÔNG tự route sang pm_task)\n\n"
-        '"pm_task" — CHỈ khi user nói rõ về Redmine / issue tracker:\n'
-        "  • có từ khoá rõ ràng: Redmine, issue, ticket, mã '#123', 'trên Redmine', "
-        "'đồng bộ/sync issue'\n"
-        "  • tạo/cập nhật/đóng issue trên Redmine; liệt kê issue overdue/stale/sắp đến hạn; "
-        "workload hoặc issue được giao TRÊN HỆ THỐNG\n\n"
-        "Ví dụ:\n"
-        '  "List the recorded_id in AI Innovation Project" → agent\n'
-        '  "what tasks does Hieu need to do?" → agent\n'
-        '  "tóm tắt cuộc họp tuần trước" → agent\n'
-        '  "liệt kê các phiên họp của dự án X" → agent\n'
-        '  "tạo task cho Mai deploy v1" → agent\n'
-        '  "đồng bộ các việc trong biên bản họp lên Redmine" → agent\n'
-        '  "tạo issue trên Redmine cho từng action item của cuộc họp" → agent\n'
-        '  "hỗ trợ tạo task template lên Redmine" → agent\n'
-        '  "tạo task template lên Redmine từ cuộc họp này" → agent\n'
-        '  "tạo issue trên Redmine cho việc deploy v1" → pm_task\n'
-        '  "liệt kê issue overdue của tôi" → pm_task\n'
-        '  "cập nhật trạng thái issue #123" → pm_task'
-    )
     try:
         client = _llm_client()
         resp = client.chat.completions.create(
             model=_llm_model(),
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Tin nhắn user: {msg}"},
             ],
             max_tokens=64,
@@ -385,45 +356,6 @@ def _seed_agent_messages(state: ChatState) -> list[dict]:
             msgs.append({"role": "assistant", "content": content})
     msgs.append({"role": "user", "content": state.get("user_message", "")})
     return msgs
-
-
-def _agent_system_prompt(state: ChatState) -> str:
-    meeting = state.get("meeting_context") or {}
-    title = meeting.get("title") or "(chưa gắn cuộc họp)"
-    return (
-        "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
-        f"Cuộc họp hiện tại: {title}\n\n"
-        "Quy tắc:\n"
-        "- Khi cần nội dung cuộc họp (quyết định, action item, ai nói gì...) để trả lời, "
-        "GỌI tool `retrieve` trước — KHÔNG bịa.\n"
-        "- Khi user hỏi về MỘT phiên/recording cụ thể (vd 'phiên 1', 'Meeting 2', "
-        "buổi họp ngày nào đó), HOẶC hỏi việc/action item của một người trong một phiên: "
-        "GỌI `list_recordings` để xác định đúng recording_id, rồi GỌI `recording_mom` "
-        "với recording_id đó để đọc biên bản phiên ấy (đọc action_items, lọc theo `pic`).\n"
-        "- CHỈ gán một thông tin cho recording mà bạn ĐÃ đọc bằng `recording_mom`; "
-        "nêu rõ thông tin đến từ phiên nào. TUYỆT ĐỐI không gán nhầm dữ liệu sang "
-        "một recording khác. Dùng `retrieve` cho câu hỏi xuyên nhiều phiên.\n"
-        "- Khi user muốn TẠO TASK / tạo 'task template' / lập danh sách việc / "
-        "đồng bộ action item lên Redmine (vd 'tạo task template cho Duy Anh trong "
-        "phiên Meeting 2', 'đồng bộ việc lên Redmine'): BẮT BUỘC GỌI tool "
-        "`create_task` — KHÔNG tự liệt kê bằng văn bản, KHÔNG trả lời suông. Hệ thống "
-        "sẽ dựng danh sách việc từ MoM và hỏi người dùng duyệt (rồi chuyển pm-agent "
-        "đối chiếu lên Redmine). Nếu cần biết nội dung phiên trước, cứ GỌI "
-        "`recording_mom` để đọc, NHƯNG vẫn phải kết thúc bằng `create_task`.\n"
-        "- QUAN TRỌNG khi gọi `create_task` cho việc TỪ cuộc họp: ĐỪNG truyền `title` "
-        "(để hệ thống tự dựng danh sách việc theo từng người từ MoM). CHỈ truyền `title` "
-        "khi user đọc rõ MỘT task mới hoàn toàn. Nếu user chỉ định một người (vd 'cho "
-        "Duy Anh'), truyền `assignee` = tên người đó để lọc đúng việc của họ.\n"
-        "- Tool có side-effect (create_task, send_email) cần người dùng DUYỆT; "
-        "cứ gọi khi phù hợp, hệ thống sẽ tự hỏi duyệt.\n"
-        "- KHÔNG cần truyền meeting_id — hệ thống tự gắn cuộc họp hiện tại.\n"
-        "- Với câu hỏi THÔNG TIN (hỏi-đáp), khi đã đủ dữ liệu thì trả lời trực tiếp "
-        "(KHÔNG gọi tool). Quy tắc này KHÔNG áp dụng cho yêu cầu tạo task/đồng bộ ở trên."
-    )
-
-
-def _to_llm_messages(state: ChatState, messages: list[dict]) -> list[dict]:
-    return [{"role": "system", "content": _agent_system_prompt(state)}, *messages]
 
 
 def make_agent(llm=None):
