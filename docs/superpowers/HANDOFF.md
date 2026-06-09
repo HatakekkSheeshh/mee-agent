@@ -7,17 +7,21 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 ## Kickoff message to paste into the new session
 
 > Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md, `docs/superpowers/HANDOFF.md`,
-> and `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md` (the current plan).
-> The chat_graph reorg is fully DONE — Phase 1 (extract `_chat_*.py` helpers) and Phase 2
-> (DI seams + split into the `meeting/graphs/chat_graph/` package with a facade `__init__.py`)
-> are committed and **77 tests green** (`venv/bin/python -m pytest tests/meeting -q`).
-> NEXT = execute the **create_task reject-terminal** plan with `superpowers:executing-plans`
-> (option 3): when the user presses Từ chối on a create_task GATE-1 card, end the turn with a
-> canned reply instead of looping back to the agent (which makes gemma re-attempt the whole
-> list_recordings → recording_mom → create_task sequence). 4 tasks, ~3 prod edits + 1 test
-> expectation change, suite stays 77. Run with `ECC_GATEGUARD=off`. Do NOT fix the other
-> create_task findings (login↔name filter, recording scoping, summary date grounding) — they're
-> logged in HANDOFF as separate follow-ups.
+> and `docs/superpowers/plans/2026-06-09-clear-chat-session.md` (the current plan).
+> The chat_graph reorg is fully DONE (Phase 1 + 2: `_chat_*.py` helpers, DI seams, split into the
+> `meeting/graphs/chat_graph/` package with a facade) — committed, **77 tests green**
+> (`venv/bin/python -m pytest tests/meeting -q`).
+> NEXT = execute the **clear-chat-session** plan with `superpowers:executing-plans`, inline, TDD:
+> a `POST /api/chat/sessions/{id}/clear` endpoint + `repo.clear_chat_session` that deletes the
+> session's chat_messages + pending_actions IN PLACE (keep session_id/meeting_id) and best-effort
+> purges the LangGraph checkpoint thread (`get_checkpointer().adelete_thread(str(id))`), plus a
+> "Xóa hội thoại" button in ChatPane (confirm → empty thread + re-show welcome, clear localStorage
+> messages but keep the session id). Spec:
+> `docs/superpowers/specs/2026-06-09-clear-chat-session-design.md`. 3 tasks, adds tests, suite
+> stays green. Run with `ECC_GATEGUARD=off`.
+> ALSO PENDING (separate plans, not started): `2026-06-09-create-task-reject-terminal.md`
+> (option 3 — make create_task reject terminal). Do NOT fix the other create_task findings
+> (login↔name filter, recording scoping) — logged below as follow-ups.
 
 ## DONE this session (2026-06-09) — bridge live, retry, card, tools package
 
@@ -92,11 +96,29 @@ All committed on `feat/backend-agents` (unpushed); suite **77 passed**.
    recording ("trong Meeting 1") — no `recording_id` scoping. Builds tasks from **action_items
    only** (not decisions/commitments/blockers). FOLLOW-UP, not in the next plan.
 2b. The agent DOES call `list_recordings`/`recording_mom` in the create_task flow (proven by logs).
-3. **Summary date can be hallucinated + carried forward** — a per-recording summary reported a
-   wrong date (04/06 vs real 03/06), and a follow-up "tóm tắt cái đó" re-emitted the wrong date
-   from `recent_messages` (its own earlier answer) rather than re-grounding. FOLLOW-UP.
+3. **Summary regurgitates stale history instead of grounding — ROOT CAUSE CONFIRMED.**
+   "tóm tắt phiên họp meeting 1" answered with the WRONG date (04/06 vs real 03/06) and content
+   from a DIFFERENT meeting (Meeting Note / "Hiệu" / speaker diarization — none of which is in
+   record 1's `mom_json`, whose `date` is correctly `2026-06-03`). Decisive log:
+   `load_context (recent_msgs=10) → classify_intent → [Node agent] final answer` with **NO
+   `tool_calls` line** — the agent called ZERO tools, so it never read the recording. It
+   regurgitated a prior (wrong) summary sitting in `recent_messages` (loaded by `load_context`,
+   seeded by `_seed_agent_messages`), enabled by the `_agent_system_prompt` escape hatch *"khi đã
+   đủ dữ liệu thì trả lời trực tiếp (KHÔNG gọi tool)"*. A fresh session grounds correctly (empty
+   history). **MITIGATION = the clear-chat-session feature (NEXT plan).** DEEPER FIX (separate
+   follow-up): force a grounding call for recording-scoped / "tóm tắt phiên/Meeting N" questions
+   — tighten the prompt or set `tool_choice` so the answer-directly hatch can't skip
+   `list_recordings`/`recording_mom`.
 
-## NEXT — create_task reject-terminal (option 3)
+## NEXT — clear chat session (in-place)
+
+**Plan:** `docs/superpowers/plans/2026-06-09-clear-chat-session.md` ·
+**Spec:** `docs/superpowers/specs/2026-06-09-clear-chat-session-design.md`. User-facing mitigation
+for finding #3: a "Xóa hội thoại" button + `POST /sessions/{id}/clear` that deletes the session's
+chat_messages + pending_actions in place (keep session_id/meeting_id) and purges the LangGraph
+checkpoint thread (`adelete_thread`, best-effort). 3 TDD tasks, adds tests, suite stays green.
+
+## ALSO PENDING — create_task reject-terminal (option 3)
 
 **Plan:** `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md`. Make the
 `agent_execute` reject branch terminal (route to `save_reply` with a canned reply) instead of
