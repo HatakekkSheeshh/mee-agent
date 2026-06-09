@@ -629,6 +629,22 @@ async def list_chat_messages(
     return (await session.execute(stmt)).scalars().all()
 
 
+async def clear_chat_session(
+    session: AsyncSession, session_id: uuid.UUID
+) -> None:
+    """Delete a session's messages + pending actions in place (keeps the session
+    row, its id, and meeting_id binding). Pending actions are deleted rather than
+    status-flagged — a cleared session has no live interrupt to track and the
+    status CHECK constraint has no 'cancelled' value."""
+    await session.execute(
+        delete(ChatMessage).where(ChatMessage.session_id == session_id)
+    )
+    await session.execute(
+        delete(PendingAction).where(PendingAction.session_id == session_id)
+    )
+    await session.flush()
+
+
 # ─── Pending Actions (HITL) ───────────────────────────────────────
 
 async def create_pending_action(
