@@ -25,16 +25,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from typing import Literal, Optional
 
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
-from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
+from meeting.graphs._chat_llm import _llm_client, _llm_model
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS, PM_MAX_ROUNDS
 from meeting.services import build_task_items, execute_tool, get_tool, list_tools
 from meeting.services.pm_agent_client import (
@@ -44,19 +43,6 @@ from meeting.services.pm_agent_client import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ─── LLM client ───────────────────────────────────────────────────
-
-def _llm_client() -> OpenAI:
-    return OpenAI(
-        api_key=os.getenv("LLM_API_KEY", ""),
-        base_url=os.getenv("LLM_BASE_URL", "https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1"),
-    )
-
-
-def _llm_model() -> str:
-    return os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 
 
 # ─── Meeting resolution ───────────────────────────────────────────
