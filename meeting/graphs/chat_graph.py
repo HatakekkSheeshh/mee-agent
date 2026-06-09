@@ -39,13 +39,19 @@ from meeting.graphs._chat_prompts import (
     _agent_system_prompt,
     _to_llm_messages,
 )
+from meeting.graphs._chat_serde import (
+    _decision_to_payload,
+    _json,
+    _last_assistant_text,
+    _parse_tool_args,
+    _reconcile_text,
+    _result_to_dict,
+    _seed_agent_messages,
+    _tc_to_dict,
+)
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS, PM_MAX_ROUNDS
 from meeting.services import build_task_items, execute_tool, get_tool, list_tools
-from meeting.services.pm_agent_client import (
-    PmAgentError,
-    PmAgentResult,
-    get_pm_agent_client,
-)
+from meeting.services.pm_agent_client import PmAgentError, get_pm_agent_client
 
 logger = logging.getLogger(__name__)
 
@@ -246,31 +252,6 @@ def _openai_tools() -> list[dict]:
     return out
 
 
-def _tc_to_dict(tc) -> dict:
-    """Serialize an OpenAI tool_call object into a checkpointable dict."""
-    return {
-        "id": tc.id,
-        "type": "function",
-        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-    }
-
-
-def _parse_tool_args(raw) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("[agent] could not parse tool arguments: %r", raw)
-        return {}
-
-
-def _json(obj) -> str:
-    return json.dumps(obj, ensure_ascii=False, default=str)
-
-
 def _inject_meeting(args: dict, name: str, resolved: Optional[str]) -> dict:
     """Inject the resolved meeting_id into a tool's args when the tool takes one
     and the model didn't supply it."""
@@ -281,21 +262,6 @@ def _inject_meeting(args: dict, name: str, resolved: Optional[str]) -> dict:
         if "meeting_id" in props:
             args["meeting_id"] = resolved
     return args
-
-
-def _reconcile_text(project: str, items: list[dict]) -> str:
-    """Phrase a reconcile request pm-agent's reconcile_check_info can parse:
-    a target project + a numbered list of items."""
-    header = f"Đối chiếu và tạo/cập nhật các công việc sau trên dự án {project or '(chưa rõ)'}:"
-    lines = [header]
-    for i, it in enumerate(items, 1):
-        parts = [it.get("subject", "")]
-        if it.get("assignee"):
-            parts.append(f"phụ trách {it['assignee']}")
-        if it.get("due_date"):
-            parts.append(f"hạn {it['due_date']}")
-        lines.append(f"{i}. " + " — ".join(p for p in parts if p))
-    return "\n".join(lines)
 
 
 async def _build_reconcile_template(
@@ -334,28 +300,6 @@ async def _build_reconcile_template(
     else:
         items = []
     return {"project": project, "items": items}
-
-
-def _last_assistant_text(messages: list[dict]) -> str:
-    for m in reversed(messages):
-        if m.get("role") == "assistant" and m.get("content"):
-            return m["content"]
-    return ""
-
-
-def _seed_agent_messages(state: ChatState) -> list[dict]:
-    """Build the initial OpenAI message list from recent history + this turn."""
-    msgs: list[dict] = []
-    for m in (state.get("recent_messages") or [])[-6:]:
-        content = (m.get("content") or {}).get("text", "")
-        if not content:
-            continue
-        if m.get("role") == "user":
-            msgs.append({"role": "user", "content": content})
-        elif m.get("role") == "agent":
-            msgs.append({"role": "assistant", "content": content})
-    msgs.append({"role": "user", "content": state.get("user_message", "")})
-    return msgs
 
 
 def make_agent(llm=None):
@@ -578,50 +522,6 @@ def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call"]:
 # interrupt(). pm_await is the ONLY node that interrupts — it performs no send.
 # So each pm_call invocation sends exactly once, and resuming re-runs only
 # pm_await (recomputing its idempotent pending payload), never re-sending.
-
-
-def _result_to_dict(result: PmAgentResult) -> dict:
-    return {
-        "task_id": result.task_id,
-        "state": result.state,
-        "text": result.text,
-        "need_approval": result.need_approval,
-        "issues": result.issues,
-        "context_id": result.context_id,
-    }
-
-
-def _decision_to_payload(decision: Optional[dict]) -> dict:
-    """Map a resume decision (from the API/FE) → the next pm_call payload."""
-    decision = decision or {}
-
-    # Explicit pm-agent approval verb wins.
-    action = decision.get("approval_action")
-    if action in ("approve", "edit", "reject"):
-        return {
-            "kind": "approval",
-            "approval_action": action,
-            "approval_input": decision.get("approval_input") or decision.get("text") or "",
-        }
-
-    # Generic local-tool style decision (approved/rejected) → approval verb.
-    act = decision.get("action")
-    if act == "approved":
-        return {
-            "kind": "approval",
-            "approval_action": "approve",
-            "approval_input": decision.get("approval_input") or decision.get("text") or "",
-        }
-    if act == "rejected":
-        return {
-            "kind": "approval",
-            "approval_action": "reject",
-            "approval_input": decision.get("reason") or "",
-        }
-
-    # Otherwise: free-text answer to a need_more_info prompt.
-    text = decision.get("text") or decision.get("approval_input") or ""
-    return {"kind": "text", "text": text}
 
 
 def make_pm_call(pm_client):
