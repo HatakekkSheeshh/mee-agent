@@ -130,40 +130,43 @@ def make_load_context(session: AsyncSession):
     return load_context
 
 
-async def classify_intent(state: ChatState) -> dict:
-    """Binary router: 'pm_task' (Redmine via pm-agent) vs 'agent' (everything else).
+def make_classify_intent(llm=None):
+    async def classify_intent(state: ChatState) -> dict:
+        """Binary router: 'pm_task' (Redmine via pm-agent) vs 'agent' (everything else).
 
-    The unified tool-calling agent handles all meeting Q&A + local tools, so the
-    only split left is whether to hand off to the separate pm-agent A2A branch.
-    """
-    msg = state["user_message"]
-    try:
-        client = _llm_client()
-        resp = client.chat.completions.create(
-            model=_llm_model(),
-            messages=[
-                {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Tin nhắn user: {msg}"},
-            ],
-            max_tokens=64,
-            timeout=60,
-        )
-        raw = resp.choices[0].message.content.strip()
-        # Strip code fences if any
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        parsed = json.loads(raw)
-        intent = parsed.get("intent")
-        if intent not in ("pm_task", "agent"):
-            intent = "agent"
-        logger.info(f"[Node classify_intent] intent={intent!r}")
-        return {"intent": intent}
-    except Exception as e:
-        logger.exception("classify_intent failed")
-        return {"intent": "agent", "error": f"classify failed: {e}"}
+        The unified tool-calling agent handles all meeting Q&A + local tools, so the
+        only split left is whether to hand off to the separate pm-agent A2A branch.
+        """
+        msg = state["user_message"]
+        try:
+            client = llm or _llm_client()
+            resp = client.chat.completions.create(
+                model=_llm_model(),
+                messages=[
+                    {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Tin nhắn user: {msg}"},
+                ],
+                max_tokens=64,
+                timeout=60,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip code fences if any
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            parsed = json.loads(raw)
+            intent = parsed.get("intent")
+            if intent not in ("pm_task", "agent"):
+                intent = "agent"
+            logger.info(f"[Node classify_intent] intent={intent!r}")
+            return {"intent": intent}
+        except Exception as e:
+            logger.exception("classify_intent failed")
+            return {"intent": "agent", "error": f"classify failed: {e}"}
+
+    return classify_intent
 
 
 def route_entry(state: ChatState) -> Literal["pm_call", "agent"]:
@@ -711,7 +714,7 @@ def build_chat_graph(
     g = StateGraph(ChatState)
 
     g.add_node("load_context", make_load_context(session))
-    g.add_node("classify_intent", classify_intent)
+    g.add_node("classify_intent", make_classify_intent(agent_llm))
     # Unified tool-calling agent (question + local tools). agent_llm + tools are
     # injected in tests; in production they default to _llm_client() / meeting.services.
     g.add_node("agent", make_agent(agent_llm, tools=tools))
