@@ -21,8 +21,8 @@ from langgraph.graph import END, StateGraph
 from meeting.graphs.chat_graph import (
     ChatState,
     _initial_turn_state,
-    agent_approve,
     make_agent,
+    make_agent_approve,
     make_agent_execute,
     make_agent_tools,
     route_after_agent,
@@ -52,7 +52,7 @@ def _build(llm):
     g = StateGraph(ChatState)
     g.add_node("agent", make_agent(llm))
     g.add_node("agent_tools", make_agent_tools(object()))
-    g.add_node("agent_approve", agent_approve)
+    g.add_node("agent_approve", make_agent_approve())
     g.add_node("agent_execute", make_agent_execute(object()))
     g.add_node("save_reply", lambda s: {})
     g.set_entry_point("agent")

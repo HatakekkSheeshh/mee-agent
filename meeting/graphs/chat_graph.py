@@ -50,7 +50,7 @@ from meeting.graphs._chat_serde import (
     _tc_to_dict,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS, PM_MAX_ROUNDS
-from meeting.services import build_task_items, execute_tool, get_tool, list_tools
+import meeting.services as _services  # default toolset bundle (DI seam)
 from meeting.services.pm_agent_client import PmAgentError, get_pm_agent_client
 
 logger = logging.getLogger(__name__)
@@ -226,11 +226,11 @@ def make_save_reply(session: AsyncSession):
 #   agent ─ no tool ─► (finish) ─► save_reply
 
 
-def _openai_tools() -> list[dict]:
+def _openai_tools(*, tools=_services) -> list[dict]:
     """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent
     never supplies it; we inject resolved_meeting_id server-side)."""
     out = []
-    for s in list_tools():
+    for s in tools.list_tools():
         schema = json.loads(json.dumps(s.get("schema") or {"type": "object", "properties": {}}))
         props = schema.get("properties") or {}
         props.pop("meeting_id", None)
@@ -252,12 +252,12 @@ def _openai_tools() -> list[dict]:
     return out
 
 
-def _inject_meeting(args: dict, name: str, resolved: Optional[str]) -> dict:
+def _inject_meeting(args: dict, name: str, resolved: Optional[str], *, tools=_services) -> dict:
     """Inject the resolved meeting_id into a tool's args when the tool takes one
     and the model didn't supply it."""
     args = dict(args or {})
     if resolved and "meeting_id" not in args:
-        spec = get_tool(name) or {}
+        spec = tools.get_tool(name) or {}
         props = (spec.get("schema") or {}).get("properties") or {}
         if "meeting_id" in props:
             args["meeting_id"] = resolved
@@ -269,6 +269,8 @@ async def _build_reconcile_template(
     args: dict,
     meeting_ctx: dict,
     resolved_meeting_id: Optional[str],
+    *,
+    tools=_services,
 ) -> dict:
     """Build the reconcile template {project, items} for a create_task handoff.
 
@@ -288,7 +290,7 @@ async def _build_reconcile_template(
         action_items = await repo.get_mom_action_items(
             session, uuid.UUID(resolved_meeting_id)
         )
-        items = build_task_items(action_items)
+        items = tools.build_task_items(action_items)
         # "tạo task cho <người>" → keep the {project, items} shape but narrow to
         # that person's action items (matched on assignee/pic, case-insensitive).
         assignee = (args.get("assignee") or "").strip()
@@ -302,7 +304,9 @@ async def _build_reconcile_template(
     return {"project": project, "items": items}
 
 
-def make_agent(llm=None):
+def make_agent(llm=None, *, tools=None):
+    ts = tools or _services
+
     async def agent(state: ChatState) -> dict:
         """One LLM tool-calling turn. Never interrupts (replay-safe)."""
         rounds = state.get("agent_rounds", 0)
@@ -322,7 +326,7 @@ def make_agent(llm=None):
             resp = client.chat.completions.create(
                 model=_llm_model(),
                 messages=_to_llm_messages(state, messages),
-                tools=_openai_tools(),
+                tools=_openai_tools(tools=ts),
                 tool_choice="auto",
                 max_tokens=1024,
                 timeout=60,
@@ -365,7 +369,9 @@ def make_agent(llm=None):
     return agent
 
 
-def make_agent_tools(session: AsyncSession):
+def make_agent_tools(session: AsyncSession, *, tools=None):
+    ts = tools or _services
+
     async def agent_tools(state: ChatState) -> dict:
         """Run the assistant's tool_calls. Read tools execute now (idempotent);
         the first side-effect tool is deferred to agent_approve. No interrupt."""
@@ -379,13 +385,16 @@ def make_agent_tools(session: AsyncSession):
         switched = None
         for tc in tool_calls:
             name = tc["function"]["name"]
-            args = _inject_meeting(_parse_tool_args(tc["function"]["arguments"]), name, resolved)
-            spec = get_tool(name)
+            args = _inject_meeting(
+                _parse_tool_args(tc["function"]["arguments"]), name, resolved, tools=ts
+            )
+            spec = ts.get_tool(name)
             if spec and spec.get("side_effect"):
                 if pending is None:
                     if name == "create_task":
                         template = await _build_reconcile_template(
-                            session, args, state.get("meeting_context") or {}, resolved
+                            session, args, state.get("meeting_context") or {}, resolved,
+                            tools=ts,
                         )
                         pending = {"id": tc["id"], "name": name, "args": template}
                     else:
@@ -403,7 +412,7 @@ def make_agent_tools(session: AsyncSession):
             if not spec:
                 result = {"error": f"unknown tool: {name}"}
             else:
-                result = await execute_tool(name, args, session=session, user_id=user_id)
+                result = await ts.execute_tool(name, args, session=session, user_id=user_id)
             if name == "switch_meeting" and isinstance(result, dict) and result.get("meeting_id"):
                 switched = result["meeting_id"]
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _json(result)})
@@ -421,26 +430,33 @@ def make_agent_tools(session: AsyncSession):
     return agent_tools
 
 
-async def agent_approve(state: ChatState) -> dict:
-    """The ONLY interrupt in the agent branch. No side effects (replay-safe).
+def make_agent_approve(*, tools=None):
+    ts = tools or _services
 
-    Surfaces the pending side-effect tool as a local-tool pending action
-    ({tool, args, rationale, description}) — the existing api/chat.py machinery
-    persists it and approve/reject resume with {action: approved|rejected, ...}.
-    """
-    pending = state.get("pending_tool") or {}
-    spec = get_tool(pending.get("name", "")) or {}
-    decision = interrupt({
-        "tool": pending.get("name"),
-        "args": pending.get("args") or {},
-        "rationale": _last_assistant_text(state.get("agent_messages") or []),
-        "description": spec.get("description", ""),
-    })
-    logger.info(f"[Node agent_approve] RESUMED decision={decision}")
-    return {"user_decision": decision}
+    async def agent_approve(state: ChatState) -> dict:
+        """The ONLY interrupt in the agent branch. No side effects (replay-safe).
+
+        Surfaces the pending side-effect tool as a local-tool pending action
+        ({tool, args, rationale, description}) — the existing api/chat.py machinery
+        persists it and approve/reject resume with {action: approved|rejected, ...}.
+        """
+        pending = state.get("pending_tool") or {}
+        spec = ts.get_tool(pending.get("name", "")) or {}
+        decision = interrupt({
+            "tool": pending.get("name"),
+            "args": pending.get("args") or {},
+            "rationale": _last_assistant_text(state.get("agent_messages") or []),
+            "description": spec.get("description", ""),
+        })
+        logger.info(f"[Node agent_approve] RESUMED decision={decision}")
+        return {"user_decision": decision}
+
+    return agent_approve
 
 
-def make_agent_execute(session: AsyncSession):
+def make_agent_execute(session: AsyncSession, *, tools=None):
+    ts = tools or _services
+
     async def agent_execute(state: ChatState) -> dict:
         """Run the approved side-effect tool (or record rejection), append its
         result to the message list, then loop back to the agent."""
@@ -481,9 +497,9 @@ def make_agent_execute(session: AsyncSession):
         if action == "approved":
             if decision.get("edited_args"):
                 args = _inject_meeting(
-                    decision["edited_args"], name, state.get("resolved_meeting_id")
+                    decision["edited_args"], name, state.get("resolved_meeting_id"), tools=ts
                 )
-            result = await execute_tool(name, args, session=session, user_id=user_id)
+            result = await ts.execute_tool(name, args, session=session, user_id=user_id)
         else:
             result = {"status": "rejected", "reason": decision.get("reason", "user rejected")}
 
@@ -689,17 +705,19 @@ def route_after_pm_error(state: ChatState) -> Literal["pm_call", "save_reply"]:
 
 # ─── Builder ──────────────────────────────────────────────────────
 
-def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_llm=None):
+def build_chat_graph(
+    session: AsyncSession, checkpointer, pm_client=None, agent_llm=None, *, tools=None
+):
     g = StateGraph(ChatState)
 
     g.add_node("load_context", make_load_context(session))
     g.add_node("classify_intent", classify_intent)
-    # Unified tool-calling agent (question + local tools). agent_llm is injected
-    # in tests; in production the agent node lazily resolves _llm_client().
-    g.add_node("agent", make_agent(agent_llm))
-    g.add_node("agent_tools", make_agent_tools(session))
-    g.add_node("agent_approve", agent_approve)
-    g.add_node("agent_execute", make_agent_execute(session))
+    # Unified tool-calling agent (question + local tools). agent_llm + tools are
+    # injected in tests; in production they default to _llm_client() / meeting.services.
+    g.add_node("agent", make_agent(agent_llm, tools=tools))
+    g.add_node("agent_tools", make_agent_tools(session, tools=tools))
+    g.add_node("agent_approve", make_agent_approve(tools=tools))
+    g.add_node("agent_execute", make_agent_execute(session, tools=tools))
     # pm-agent branch. pm_client is injected in tests; in production the
     # pm_call node lazily resolves get_pm_agent_client() on first use, so
     # non-PM chats never require PM_AGENT_* to be configured.

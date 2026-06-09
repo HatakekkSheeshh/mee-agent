@@ -21,12 +21,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
-from meeting.graphs import chat_graph
 from meeting.graphs.chat_graph import (
     ChatState,
     MAX_AGENT_ROUNDS,
-    agent_approve,
     make_agent,
+    make_agent_approve,
     make_agent_execute,
     make_agent_tools,
     route_after_agent,
@@ -116,22 +115,45 @@ class FakeTools:
         return self.results.get(name, {"status": "ok"})
 
 
-def _install(monkeypatch, exec_results=None) -> FakeTools:
-    monkeypatch.setattr(chat_graph, "list_tools", lambda: list(_SPECS.values()))
-    monkeypatch.setattr(chat_graph, "get_tool", lambda n: _SPECS.get(n))
-    ft = FakeTools(exec_results)
-    monkeypatch.setattr(chat_graph, "execute_tool", ft)
-    return ft
+class FakeToolset:
+    """Injected tool bundle (DI seam) — replaces patching chat_graph globals."""
+
+    def __init__(self, specs, exec_results=None):
+        self._specs = specs
+        self.exec = FakeTools(exec_results)
+
+    @property
+    def calls(self):
+        return self.exec.calls
+
+    def list_tools(self):
+        return list(self._specs.values())
+
+    def get_tool(self, n):
+        return self._specs.get(n)
+
+    async def execute_tool(self, name, args, *, session, user_id):
+        return await self.exec(name, args, session=session, user_id=user_id)
+
+    def build_task_items(self, items):
+        from meeting.services import build_task_items as real
+        return real(items)
+
+
+def _install(monkeypatch=None, exec_results=None) -> FakeToolset:
+    """Build a fake toolset to inject via `tools=`. (monkeypatch kept for
+    call-site compatibility; nothing is patched anymore.)"""
+    return FakeToolset(_SPECS, exec_results)
 
 
 # ─── minimal graph from the real agent nodes ─────────────────────────
 
-def _build(llm, checkpointer):
+def _build(llm, checkpointer, tools):
     g = StateGraph(ChatState)
-    g.add_node("agent", make_agent(llm))
-    g.add_node("agent_tools", make_agent_tools(SESSION))
-    g.add_node("agent_approve", agent_approve)
-    g.add_node("agent_execute", make_agent_execute(SESSION))
+    g.add_node("agent", make_agent(llm, tools=tools))
+    g.add_node("agent_tools", make_agent_tools(SESSION, tools=tools))
+    g.add_node("agent_approve", make_agent_approve(tools=tools))
+    g.add_node("agent_execute", make_agent_execute(SESSION, tools=tools))
     g.add_node("save_reply", lambda state: {})
     g.set_entry_point("agent")
     g.add_conditional_edges(
@@ -176,9 +198,9 @@ async def _interrupt_value(graph, config):
 # ─── tests ───────────────────────────────────────────────────────────
 
 async def test_agent_answer_only(monkeypatch):
-    _install(monkeypatch)
+    ts = _install(monkeypatch)
     llm = FakeLLM([text("Mình là Mee, trợ lý cuộc họp.")])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ts)
     cfg = _config("answer-only")
 
     result = await graph.ainvoke(_initial("Bạn là ai?"), cfg)
@@ -194,7 +216,7 @@ async def test_agent_auto_retrieve_then_answer(monkeypatch):
         tool([{"id": "c1", "name": "retrieve", "arguments": '{"query": "deploy v1"}'}]),
         text("Cuộc họp quyết định deploy v1 vào thứ 6."),
     ])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ft)
     cfg = _config("auto-retrieve")
 
     result = await graph.ainvoke(_initial("deploy v1 thế nào?"), cfg)
@@ -214,7 +236,7 @@ async def test_agent_side_effect_interrupts_then_executes(monkeypatch):
         tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
         text("Đã gửi email."),
     ])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ft)
     cfg = _config("side-effect")
 
     await graph.ainvoke(_initial("gửi email"), cfg)
@@ -241,7 +263,7 @@ async def test_agent_side_effect_rejected(monkeypatch):
         tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
         text("OK, mình không gửi nữa."),
     ])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ft)
     cfg = _config("rejected")
 
     await graph.ainvoke(_initial("gửi email"), cfg)
@@ -256,12 +278,12 @@ async def test_agent_side_effect_rejected(monkeypatch):
 
 
 async def test_agent_max_rounds_cap(monkeypatch):
-    _install(monkeypatch, {"retrieve": {"status": "ok", "chunks": []}})
+    ts = _install(monkeypatch, {"retrieve": {"status": "ok", "chunks": []}})
     llm = FakeLLM(
         [tool([{"id": "cN", "name": "retrieve", "arguments": '{"query": "x"}'}])],
         repeat_last=True,
     )
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ts)
     cfg = _config("max-rounds")
 
     result = await graph.ainvoke(_initial("loop forever"), cfg)
@@ -283,7 +305,7 @@ async def test_agent_switch_meeting_rescopes_retrieval(monkeypatch):
         tool([{"id": "c2", "name": "retrieve", "arguments": '{"query": "trạng thái"}'}]),
         text("Dự án Khác đang ở giai đoạn 2."),
     ])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ft)
     cfg = _config("switch")
 
     result = await graph.ainvoke(_initial("dự án khác sao rồi"), cfg)

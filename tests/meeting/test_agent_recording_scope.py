@@ -14,14 +14,13 @@ from types import SimpleNamespace
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from meeting.graphs import chat_graph
 from meeting.graphs.chat_graph import (
     ChatState,
     _agent_system_prompt,
     make_agent,
+    make_agent_approve,
     make_agent_execute,
     make_agent_tools,
-    agent_approve,
     route_after_agent,
     route_after_agent_tools,
 )
@@ -88,20 +87,42 @@ class FakeTools:
         return self.results.get(name, {"status": "ok"})
 
 
+class FakeToolset:
+    """Injected tool bundle (DI seam) — replaces patching chat_graph globals."""
+
+    def __init__(self, specs, results):
+        self._specs = specs
+        self.exec = FakeTools(results)
+
+    @property
+    def calls(self):
+        return self.exec.calls
+
+    def list_tools(self):
+        return list(self._specs.values())
+
+    def get_tool(self, n):
+        return self._specs.get(n)
+
+    async def execute_tool(self, name, args, *, session, user_id):
+        return await self.exec(name, args, session=session, user_id=user_id)
+
+    def build_task_items(self, items):
+        from meeting.services import build_task_items as real
+        return real(items)
+
+
 def _install(monkeypatch, results):
-    monkeypatch.setattr(chat_graph, "list_tools", lambda: list(_SPECS.values()))
-    monkeypatch.setattr(chat_graph, "get_tool", lambda n: _SPECS.get(n))
-    ft = FakeTools(results)
-    monkeypatch.setattr(chat_graph, "execute_tool", ft)
-    return ft
+    """Build a fake toolset to inject via `tools=` (nothing is patched anymore)."""
+    return FakeToolset(_SPECS, results)
 
 
-def _build(llm, checkpointer):
+def _build(llm, checkpointer, tools):
     g = StateGraph(ChatState)
-    g.add_node("agent", make_agent(llm))
-    g.add_node("agent_tools", make_agent_tools(SESSION))
-    g.add_node("agent_approve", agent_approve)
-    g.add_node("agent_execute", make_agent_execute(SESSION))
+    g.add_node("agent", make_agent(llm, tools=tools))
+    g.add_node("agent_tools", make_agent_tools(SESSION, tools=tools))
+    g.add_node("agent_approve", make_agent_approve(tools=tools))
+    g.add_node("agent_execute", make_agent_execute(SESSION, tools=tools))
     g.add_node("save_reply", lambda state: {})
     g.set_entry_point("agent")
     g.add_conditional_edges("agent", route_after_agent,
@@ -158,7 +179,7 @@ async def test_recording_scoped_flow(monkeypatch):
                 "arguments": f'{{"recording_id": "{RID}"}}'}]),
         _text("Trong Meeting 1, Hiếu cần viết migration."),
     ])
-    graph = _build(llm, MemorySaver())
+    graph = _build(llm, MemorySaver(), ft)
     cfg = {"configurable": {"thread_id": "rec-scope"}}
 
     result = await graph.ainvoke(_initial("việc của Hiếu trong Meeting 1"), cfg)

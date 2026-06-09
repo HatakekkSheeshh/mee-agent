@@ -90,8 +90,8 @@ from langgraph.types import Command
 
 from meeting.graphs.chat_graph import (
     ChatState,
-    agent_approve,
     make_agent,
+    make_agent_approve,
     make_agent_execute,
     make_agent_tools,
     make_pm_call,
@@ -157,12 +157,39 @@ class _FakeExec:
         self.calls.append({"name": name, "args": args}); return {"status": "ok"}
 
 
-def _build_full(llm, pm_client, checkpointer):
+class FakeToolset:
+    """Injected tool bundle (DI seam) — replaces patching chat_graph globals.
+    build_task_items is the REAL one so _build_reconcile_template converts MoM
+    action_items exactly as in production."""
+
+    def __init__(self, specs):
+        self._specs = specs
+        self.exec = _FakeExec()
+
+    def list_tools(self):
+        return list(self._specs.values())
+
+    def get_tool(self, n):
+        return self._specs.get(n)
+
+    async def execute_tool(self, name, args, *, session, user_id):
+        return await self.exec(name, args, session=session, user_id=user_id)
+
+    def build_task_items(self, items):
+        from meeting.services import build_task_items as real
+        return real(items)
+
+
+def _toolset_b():
+    return FakeToolset({"create_task": CREATE_SPEC_B})
+
+
+def _build_full(llm, pm_client, checkpointer, tools):
     g = StateGraph(ChatState)
-    g.add_node("agent", make_agent(llm))
-    g.add_node("agent_tools", make_agent_tools(SESSION))
-    g.add_node("agent_approve", agent_approve)
-    g.add_node("agent_execute", make_agent_execute(SESSION))
+    g.add_node("agent", make_agent(llm, tools=tools))
+    g.add_node("agent_tools", make_agent_tools(SESSION, tools=tools))
+    g.add_node("agent_approve", make_agent_approve(tools=tools))
+    g.add_node("agent_execute", make_agent_execute(SESSION, tools=tools))
     g.add_node("pm_call", make_pm_call(pm_client))
     g.add_node("pm_await", pm_await)
     g.add_node("pm_reply", pm_reply)
@@ -204,9 +231,7 @@ async def _interrupt_val_b(graph, cfg):
 
 
 async def test_full_bridge_create_task_to_reconcile(monkeypatch):
-    monkeypatch.setattr(chat_graph, "list_tools", lambda: [CREATE_SPEC_B])
-    monkeypatch.setattr(chat_graph, "get_tool", lambda n: CREATE_SPEC_B if n == "create_task" else None)
-    monkeypatch.setattr(chat_graph, "execute_tool", _FakeExec())
+    ts = _toolset_b()
 
     async def fake_items(session, mid):
         return [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}]
@@ -220,7 +245,7 @@ async def test_full_bridge_create_task_to_reconcile(monkeypatch):
                       [{"actions": "CREATE", "subject": "viết migration"}], context_id="ctx-1"),
         PmAgentResult("task-1", "completed", "Đã tạo issue trên Redmine.", False, None, context_id="ctx-1"),
     ])
-    graph = _build_full(llm, pm, MemorySaver())
+    graph = _build_full(llm, pm, MemorySaver(), ts)
     cfg = {"configurable": {"thread_id": "bridge"}}
 
     # Turn 1: agent calls create_task → GATE 1 (local) interrupt
@@ -252,9 +277,7 @@ async def test_full_bridge_create_task_to_reconcile(monkeypatch):
 
 
 async def test_bridge_reject_gate1_no_handoff(monkeypatch):
-    monkeypatch.setattr(chat_graph, "list_tools", lambda: [CREATE_SPEC_B])
-    monkeypatch.setattr(chat_graph, "get_tool", lambda n: CREATE_SPEC_B if n == "create_task" else None)
-    monkeypatch.setattr(chat_graph, "execute_tool", _FakeExec())
+    ts = _toolset_b()
 
     async def fake_items(session, mid):
         return [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}]
@@ -265,7 +288,7 @@ async def test_bridge_reject_gate1_no_handoff(monkeypatch):
         _resp_text("OK, mình không đồng bộ nữa."),
     ])
     pm = _FakePm([])
-    graph = _build_full(llm, pm, MemorySaver())
+    graph = _build_full(llm, pm, MemorySaver(), ts)
     cfg = {"configurable": {"thread_id": "bridge-reject"}}
 
     await graph.ainvoke(_initial_b("đồng bộ lên Redmine"), cfg)
