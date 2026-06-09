@@ -300,7 +300,7 @@ async def test_bridge_reject_gate1_no_handoff(monkeypatch):
     assert not await _interrupted_b(graph, cfg)
     assert pm.calls == []                       # never bridged to pm
     # GATE-1 reject ends the turn with the canned reply (no handoff, no 2nd LLM turn).
-    assert result["final_reply"] == "Đã hủy — mình không tạo task nữa."
+    assert result["final_reply"] == chat_graph.REJECT_REPLY
 
 
 def test_classify_prompt_routes_meeting_tasks_to_agent():

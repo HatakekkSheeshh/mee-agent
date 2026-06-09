@@ -24,6 +24,7 @@ from langgraph.types import Command
 from meeting.graphs.chat_graph import (
     ChatState,
     MAX_AGENT_ROUNDS,
+    REJECT_REPLY,
     make_agent,
     make_agent_approve,
     make_agent_execute,
@@ -278,7 +279,7 @@ async def test_agent_side_effect_rejected(monkeypatch):
     assert not await _interrupted(graph, cfg)
     assert ft.calls == []  # never executed
     # Reject ends the turn with the canned reply (no loop back to the LLM).
-    assert result["final_reply"] == "Đã hủy — mình không tạo task nữa."
+    assert result["final_reply"] == REJECT_REPLY
     assert len(llm.calls) == 1
 
 

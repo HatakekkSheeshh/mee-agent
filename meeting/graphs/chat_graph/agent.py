@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Canned acknowledgement for a rejected side-effect tool. The reject ends the turn
 # deterministically (route="finish") instead of looping back to the LLM, which would
 # re-read the standing user instruction from the checkpoint and re-attempt the action.
-REJECT_REPLY = "Đã hủy — mình không tạo task nữa."
+REJECT_REPLY = "Đã hủy. Tui hong tạo task nữa."
 
 def _openai_tools(*, tools=_services) -> list[dict]:
     """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent

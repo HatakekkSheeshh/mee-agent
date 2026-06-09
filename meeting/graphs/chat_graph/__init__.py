@@ -24,6 +24,7 @@ from meeting.graphs._chat_serde import (
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS, PM_MAX_ROUNDS
 from meeting.graphs.chat_graph.agent import (
+    REJECT_REPLY,
     _build_reconcile_template,
     _inject_meeting,
     _openai_tools,
