@@ -1,20 +1,71 @@
-# Session Handoff — pm-agent A2A chat + interactive ChatPane
+# Session Handoff — Mee meeting-agent (feat/backend-agents)
 
-**Branch:** `feat/backend-agents`  ·  **Last updated:** 2026-06-08
+**Branch:** `feat/backend-agents`  ·  **Last updated:** 2026-06-09
 
 Read this first when resuming. It captures state a fresh session can't infer from git alone.
 
 ## Kickoff message to paste into the new session
 
-> Continue the Mee meeting-agent work on branch `feat/backend-agents`. Read CLAUDE.md,
-> `docs/superpowers/plans/2026-06-08-unified-qa-tool-agent.md` (the current plan = Task #8),
-> `docs/superpowers/specs/2026-06-06-happy-path-retrieval-reconcile-design.md`,
-> `docs/superpowers/HANDOFF.md`, `docs/pm-agent-graph.md`.
-> Phase 2 (pm-agent A2A branch) is DONE and auth is verified LIVE; chat UX is polished;
-> all committed, 26 tests green. NEXT = Task #8: unify `question` + `tool` into one
-> tool-calling (ReAct) agent that auto-retrieves from the DB and runs side-effect tools
-> with HITL — keep `pm_task` a SEPARATE branch. Start with the LLM tool-calling probe
-> (Path A native vs Path B JSON loop), then TDD Tasks 1–5 in the plan.
+> Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md, `docs/superpowers/HANDOFF.md`,
+> and `docs/superpowers/plans/2026-06-09-chat-graph-reorg.md` (the current plan).
+> The create_task→pm reconcile bridge, the editable grouped create_task card, the pm-agent
+> transport-error RETRY (`pm_error` node), and the `meeting/services/tools/` package
+> (`@tool` auto-registration) are all DONE, committed, and **77 tests green**
+> (`venv/bin/python -m pytest tests/meeting -q`).
+> NEXT = execute **Phase 1** of the chat_graph reorg plan with `superpowers:executing-plans`:
+> extract `_chat_state.py` / `_chat_llm.py` / `_chat_prompts.py` / `_chat_serde.py` out of
+> `meeting/graphs/chat_graph.py` (pure code motion + re-imports; keep the suite at 77 green,
+> commit per task). Do NOT move the 5 monkeypatched seams (repo / execute_tool / list_tools /
+> get_tool / build_task_items) — the plan explains why. Phase 2 (node package split) is later.
+
+## DONE this session (2026-06-09) — bridge live, retry, card, tools package
+
+All committed on `feat/backend-agents` (unpushed); suite **77 passed**
+(`venv/bin/python -m pytest tests/meeting -q`).
+
+1. **create_task → pm reconcile bridge** (the 8-task plan below) — DONE & committed earlier
+   this branch. GATE 1 (local template) → bridge `kind="reconcile"` → GATE 2 (pm write approval).
+   Verified working live ("temporarily it successful").
+2. **`_build_reconcile_template` assignee filter** — "tạo task cho `<người>`" narrows MoM items
+   to that person (matches `assignee`/`pic`, case-insensitive); shape stays `{project, items}`.
+3. **Routing prompts** — `classify_intent` biases "tạo task template / đồng bộ lên Redmine" to the
+   **agent** branch (not pm_task); `_agent_system_prompt` now MANDATES calling `create_task`
+   (don't answer in text) and says: for meeting-derived tasks pass `assignee`, NOT `title`.
+4. **pm-agent transport-error RETRY** — new `pm_error` node: on `PmAgentError`, `pm_call` routes
+   to `pm_error` (interrupt, no send) instead of ending; resume "approve" re-sends the **preserved**
+   `pm_next_payload`, "reject" cancels. `route_after_pm_error`; `ChatState.pm_last_error`;
+   `pm_error` excluded from `_initial_turn_state` reset path. FE: `pm_error` card (Retry/Hủy).
+5. **Editable grouped create_task card** (`CreateTaskCard.tsx`) — parses `{project, items}`,
+   renders **project + groups-by-assignee**, each item editable (subject/due/description) with
+   **persistent labels** (was placeholder-only → looked unlabeled once filled), remove-item,
+   card-level `reason` note. Flattens back to `{project, items}` as `edited_args` on approve.
+   ⚠️ Known: `reason` is persisted on the pending-action row but **not** consumed downstream
+   (audit-only for approve); item `description` DOES flow to Redmine via reconcile items.
+6. **`meeting/services/tools/` package** — split `tools.py` into one module per tool + a local
+   **`@tool`** decorator (`_registry.py`) that auto-registers into `TOOLS`. Same contract
+   (`side_effect`, injected `session`/`user_id`, JSON-schema, `execute_tool` audit). Did NOT use
+   `langchain_core.@tool` (StructuredTool lacks side_effect / per-call DI / our schema). `__init__`
+   re-exports `repo`/`get_memory_service`/`build_task_items`; `retrieve` resolves
+   `get_memory_service` via the package at call time so the test monkeypatch works.
+
+### Open follow-ups noted (not done)
+- **Reconcile chunking** — a 23-item reconcile timed out: the agentbase-runtime **gateway**
+  disconnected mid-LLM-reconcile (`RemoteProtocolError`, NOT auth, NOT our 60s client timeout).
+  Fix = send one `message/send` **per assignee group** (chunk) so each call finishes under the
+  gateway timeout. Retry card helps transient blips but re-sending the same 23-item payload will
+  re-time-out. PARKED.
+- **`reason` field** on the create_task card is audit-only — consider removing it or wiring it
+  (append to `_reconcile_text` / item descriptions).
+- `.claude/settings.local.json` has a local GateGuard-off env (gitignored, not committed).
+
+## NEXT — chat_graph.py reorganization (planned, NOT started)
+
+`meeting/graphs/chat_graph.py` (~870 lines) mixes 6 concerns. **Plan:**
+`docs/superpowers/plans/2026-06-09-chat-graph-reorg.md`. Phase 1 = extract pure helpers
+(`_chat_state`/`_chat_llm`/`_chat_prompts`/`_chat_serde`) — low-risk code motion, suite stays
+77 green. **Hard rule:** do not move the 5 monkeypatched seams (repo / execute_tool / list_tools /
+get_tool / build_task_items) — see the plan's "hard constraint" section. Phase 2 (node package
+split + DI to kill the monkeypatch coupling) is a later session.
 
 ## Reference artifacts (all committed, self-contained)
 
