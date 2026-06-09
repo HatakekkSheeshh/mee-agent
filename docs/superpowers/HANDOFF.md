@@ -7,16 +7,17 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 ## Kickoff message to paste into the new session
 
 > Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md, `docs/superpowers/HANDOFF.md`,
-> and `docs/superpowers/plans/2026-06-09-chat-graph-reorg.md` (the current plan).
-> The create_task→pm reconcile bridge, the editable grouped create_task card, the pm-agent
-> transport-error RETRY (`pm_error` node), and the `meeting/services/tools/` package
-> (`@tool` auto-registration) are all DONE, committed, and **77 tests green**
-> (`venv/bin/python -m pytest tests/meeting -q`).
-> NEXT = execute **Phase 1** of the chat_graph reorg plan with `superpowers:executing-plans`:
-> extract `_chat_state.py` / `_chat_llm.py` / `_chat_prompts.py` / `_chat_serde.py` out of
-> `meeting/graphs/chat_graph.py` (pure code motion + re-imports; keep the suite at 77 green,
-> commit per task). Do NOT move the 5 monkeypatched seams (repo / execute_tool / list_tools /
-> get_tool / build_task_items) — the plan explains why. Phase 2 (node package split) is later.
+> and `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md` (the current plan).
+> The chat_graph reorg is fully DONE — Phase 1 (extract `_chat_*.py` helpers) and Phase 2
+> (DI seams + split into the `meeting/graphs/chat_graph/` package with a facade `__init__.py`)
+> are committed and **77 tests green** (`venv/bin/python -m pytest tests/meeting -q`).
+> NEXT = execute the **create_task reject-terminal** plan with `superpowers:executing-plans`
+> (option 3): when the user presses Từ chối on a create_task GATE-1 card, end the turn with a
+> canned reply instead of looping back to the agent (which makes gemma re-attempt the whole
+> list_recordings → recording_mom → create_task sequence). 4 tasks, ~3 prod edits + 1 test
+> expectation change, suite stays 77. Run with `ECC_GATEGUARD=off`. Do NOT fix the other
+> create_task findings (login↔name filter, recording scoping, summary date grounding) — they're
+> logged in HANDOFF as separate follow-ups.
 
 ## DONE this session (2026-06-09) — bridge live, retry, card, tools package
 
@@ -58,14 +59,52 @@ All committed on `feat/backend-agents` (unpushed); suite **77 passed**
   (append to `_reconcile_text` / item descriptions).
 - `.claude/settings.local.json` has a local GateGuard-off env (gitignored, not committed).
 
-## NEXT — chat_graph.py reorganization (planned, NOT started)
+## DONE this session (2026-06-09b) — chat_graph reorg (Phase 1 + 2) + 3 live findings
 
-`meeting/graphs/chat_graph.py` (~870 lines) mixes 6 concerns. **Plan:**
-`docs/superpowers/plans/2026-06-09-chat-graph-reorg.md`. Phase 1 = extract pure helpers
-(`_chat_state`/`_chat_llm`/`_chat_prompts`/`_chat_serde`) — low-risk code motion, suite stays
-77 green. **Hard rule:** do not move the 5 monkeypatched seams (repo / execute_tool / list_tools /
-get_tool / build_task_items) — see the plan's "hard constraint" section. Phase 2 (node package
-split + DI to kill the monkeypatch coupling) is a later session.
+All committed on `feat/backend-agents` (unpushed); suite **77 passed**.
+
+- **Phase 1** (`docs/superpowers/plans/2026-06-09-chat-graph-reorg.md`) — extracted the
+  seam-free helpers out of `chat_graph.py`: `_chat_state.py` (ChatState + PM_MAX_ROUNDS +
+  MAX_AGENT_ROUNDS), `_chat_llm.py` (`_llm_client`/`_llm_model`), `_chat_prompts.py`
+  (`CLASSIFY_SYSTEM_PROMPT` + `_agent_system_prompt` + `_to_llm_messages`), `_chat_serde.py`
+  (8 pure serde/payload helpers). Pure motion + re-imports. (One forced test retarget:
+  `test_classify_prompt_routes_meeting_tasks_to_agent` now inspects `CLASSIFY_SYSTEM_PROMPT`.)
+- **Phase 2** (`docs/superpowers/plans/2026-06-09-chat-graph-phase2-di-split.md`, approach B):
+  - **DI seams** — agent factories (`make_agent`/`make_agent_tools`/`make_agent_execute`) take a
+    keyword `tools` bundle (default `meeting.services`); `agent_approve` → `make_agent_approve`
+    factory; `classify_intent` → `make_classify_intent(llm)`. Tests inject a `FakeToolset` /
+    fake LLM instead of `monkeypatch.setattr(chat_graph, list_tools/get_tool/execute_tool/_llm_client)`.
+  - **`repo` deliberately NOT injected** — `chat_graph.repo.*` is a module-attribute patch
+    (shared state), which survives the package split; tests still patch it that way.
+  - **Package split** — `chat_graph.py` → `meeting/graphs/chat_graph/` package: `context.py`,
+    `classify.py`, `agent.py`, `pm.py`, `builder.py`, `runner.py`, and `__init__.py` is a
+    **facade** re-exporting every public name (incl. `repo`). `from meeting.graphs.chat_graph
+    import X` and `chat_graph.X` still resolve. The Phase-1 `_chat_*.py` files stay as
+    `graphs/` siblings. `docs/diagrams/chat_graph.mmd` refreshed (verified == live draw_mermaid).
+
+### 3 live findings (verified via run_meeting.py logs + biên bản) — NOT yet fixed
+1. **create_task reject re-attempt loop** — pressing Từ chối loops back to `agent`; gemma
+   re-runs `list_recordings → recording_mom → create_task` because the standing "tạo task"
+   instruction persists in `agent_messages`. **→ NEXT plan fixes this (option 3, terminal reject).**
+2. **create_task assignee filter is display-name only** — items carry `pic` = "Hiệu"; prompting
+   "tạo task cho **hieunq3**" (a Redmine login) matches nothing (`"hieunq3"` not a substring of
+   "hiệu"). Also create_task aggregates project-level `get_mom_action_items` and ignores a named
+   recording ("trong Meeting 1") — no `recording_id` scoping. Builds tasks from **action_items
+   only** (not decisions/commitments/blockers). FOLLOW-UP, not in the next plan.
+2b. The agent DOES call `list_recordings`/`recording_mom` in the create_task flow (proven by logs).
+3. **Summary date can be hallucinated + carried forward** — a per-recording summary reported a
+   wrong date (04/06 vs real 03/06), and a follow-up "tóm tắt cái đó" re-emitted the wrong date
+   from `recent_messages` (its own earlier answer) rather than re-grounding. FOLLOW-UP.
+
+## NEXT — create_task reject-terminal (option 3)
+
+**Plan:** `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md`. Make the
+`agent_execute` reject branch terminal (route to `save_reply` with a canned reply) instead of
+looping back to the LLM. 3 prod edits (`agent.py` reject branch + `route_after_agent_execute` +
+`builder.py` edge) + update `test_agent_side_effect_rejected` (and the reject assert in
+`test_reconcile_bridge`) to the no-2nd-LLM-turn behavior. Suite stays 77. **Verified scoping
+fact:** `agent_approve`/`agent_execute` are reached ONLY for side-effect tools, so this IS
+"side-effect rejects terminal" (option 3 == option 1 in practice).
 
 ## Reference artifacts (all committed, self-contained)
 
