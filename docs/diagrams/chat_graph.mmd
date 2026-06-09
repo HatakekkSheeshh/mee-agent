@@ -14,13 +14,15 @@ graph TD;
 	pm_call(pm_call)
 	pm_await(pm_await)
 	pm_reply(pm_reply)
+	pm_error(pm_error)
 	save_reply(save_reply)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_context;
 	agent -.-> agent_tools;
 	agent -.-> save_reply;
 	agent_approve --> agent_execute;
-	agent_execute --> agent;
+	agent_execute -.-> agent;
+	agent_execute -.-> pm_call;
 	agent_tools -.-> agent;
 	agent_tools -.-> agent_approve;
 	classify_intent -.-> agent;
@@ -28,8 +30,11 @@ graph TD;
 	load_context --> classify_intent;
 	pm_await --> pm_call;
 	pm_call -.-> pm_await;
+	pm_call -.-> pm_error;
 	pm_call -.-> pm_reply;
 	pm_call -.-> save_reply;
+	pm_error -.-> pm_call;
+	pm_error -.-> save_reply;
 	pm_reply --> save_reply;
 	save_reply --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
