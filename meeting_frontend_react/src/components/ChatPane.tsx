@@ -258,7 +258,7 @@ export function ChatPane() {
             <button
               className="icon-btn icon-btn-sm"
               type="button"
-              data-tip={t("chat.clear")}
+              title={t("chat.clear")}
               aria-label={t("chat.clear")}
               disabled={busy}
               onClick={() => void handleClear()}
