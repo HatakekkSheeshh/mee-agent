@@ -140,7 +140,7 @@ export function ChatPane() {
       message: t("chat.clearConfirm"),
       confirmLabel: t("chat.clear"),
       cancelLabel: t("confirm.cancel"),
-      danger: true,
+      accent: true,
     });
     if (!ok) return;
     const sid = sessionIdRef.current;

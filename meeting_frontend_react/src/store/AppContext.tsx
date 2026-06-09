@@ -240,6 +240,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         confirmLabel={confirmState?.confirmLabel}
         cancelLabel={confirmState?.cancelLabel}
         danger={confirmState?.danger}
+        accent={confirmState?.accent}
         onConfirm={() => {
           confirmState?.resolve(true);
           setConfirmState(null);
