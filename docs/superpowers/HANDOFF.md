@@ -19,9 +19,12 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 > messages but keep the session id). Spec:
 > `docs/superpowers/specs/2026-06-09-clear-chat-session-design.md`. 3 tasks, adds tests, suite
 > stays green. Run with `ECC_GATEGUARD=off`.
-> ALSO PENDING (separate plans, not started): `2026-06-09-create-task-reject-terminal.md`
-> (option 3 — make create_task reject terminal). Do NOT fix the other create_task findings
-> (login↔name filter, recording scoping) — logged below as follow-ups.
+> ⚠️ FIRST: the suite is currently **RED — 2 failed, 75 passed**. Option 3 (create_task
+> reject-terminal) was IMPLEMENTED in `agent.py`/builder (commit 9bf122a) but its Task 4 (update
+> the reject tests to the new terminal behavior) was never done. Fix `test_bridge_reject_gate1_no_handoff`
+> and `test_agent_side_effect_rejected` to expect: no 2nd LLM turn, `final_reply == agent.REJECT_REPLY`
+> ("Đã hủy. Tui hong tạo task nữa."), not interrupted. GET BACK TO GREEN before clear-chat.
+> Do NOT fix the other create_task findings (login↔name filter, recording scoping) — follow-ups below.
 
 ## DONE this session (2026-06-09) — bridge live, retry, card, tools package
 
@@ -118,7 +121,19 @@ for finding #3: a "Xóa hội thoại" button + `POST /sessions/{id}/clear` that
 chat_messages + pending_actions in place (keep session_id/meeting_id) and purges the LangGraph
 checkpoint thread (`adelete_thread`, best-effort). 3 TDD tasks, adds tests, suite stays green.
 
-## ALSO PENDING — create_task reject-terminal (option 3)
+## ⚠️ SUITE IS RED — create_task reject-terminal (option 3) implemented but tests not updated
+
+**Status:** production code DONE (commit `9bf122a`) — `agent_execute` reject branch returns
+`agent_route="finish"` + `REJECT_REPLY`; `route_after_agent_execute` + builder route it to
+`save_reply`. **But the plan's Task 4 (update reject tests) was skipped → 2 failing tests:**
+`tests/meeting/test_reconcile_bridge.py::test_bridge_reject_gate1_no_handoff` and (almost
+certainly) `test_agent_loop.py::test_agent_side_effect_rejected`. They still script a 2nd LLM turn
+and assert a model-produced reply. Fix them to the terminal behavior (no 2nd `llm.calls`,
+`final_reply == REJECT_REPLY`, not interrupted, `pm.calls == []`). Plan with the exact Task-4
+expectations: `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md`. **This must be
+green (back to 77) before starting clear-chat.**
+
+## (historical) create_task reject-terminal plan (option 3)
 
 **Plan:** `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md`. Make the
 `agent_execute` reject branch terminal (route to `save_reply` with a canned reply) instead of
