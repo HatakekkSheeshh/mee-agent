@@ -54,6 +54,25 @@ async def test_build_template_from_explicit_title():
     assert tpl["items"][0]["due_date"] == "06/06/2026"
 
 
+async def test_build_template_filters_by_assignee(monkeypatch):
+    async def fake_items(session, mid):
+        return [
+            {"pic": "Duy Anh", "deadline": "10/01", "item": "viết migration"},
+            {"pic": "Hiếu", "deadline": "11/01", "item": "POC caching"},
+            {"pic": "Duy Anh", "deadline": "12/01", "item": "review PR"},
+        ]
+
+    monkeypatch.setattr(chat_graph.repo, "get_mom_action_items", fake_items)
+
+    tpl = await chat_graph._build_reconcile_template(
+        object(), {"assignee": "duy anh"}, {"title": "GIP"}, MID
+    )
+    assert tpl["project"] == "GIP"
+    assert len(tpl["items"]) == 2  # only Duy Anh's items (case-insensitive)
+    assert {it["subject"] for it in tpl["items"]} == {"viết migration", "review PR"}
+    assert all(it["assignee"] == "Duy Anh" for it in tpl["items"])
+
+
 def test_route_after_agent_execute_reconcile_goes_to_pm():
     assert chat_graph.route_after_agent_execute({"agent_route": "reconcile"}) == "pm_call"
 

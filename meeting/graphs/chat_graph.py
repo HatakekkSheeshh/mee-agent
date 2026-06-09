@@ -95,7 +95,8 @@ class ChatState(TypedDict, total=False):
     pm_last: Optional[dict]        # last PmAgentResult, as a dict
     pm_pending: Optional[dict]     # payload handed to interrupt() for the FE
     pm_rounds: int                 # loop counter for PM_MAX_ROUNDS
-    pm_route: Optional[str]        # pm_call → router hint: "await" | "reply" | "end"
+    pm_route: Optional[str]        # pm_call → router hint: "await"|"reply"|"end"|"error"|"retry"
+    pm_last_error: Optional[str]   # last pm transport error (shown on the retry card)
 
     # Internal
     error: Optional[str]
@@ -207,8 +208,9 @@ async def classify_intent(state: ChatState) -> dict:
         "  • việc cần làm / action item RÚT RA TỪ cuộc họp — kể cả hỏi theo người "
         "(vd 'Hiếu cần làm gì?', 'việc của Mai trong buổi họp')\n"
         "  • tạo task nội bộ, gửi email, tìm trong transcript\n"
-        "  • đồng bộ / tạo task TỪ biên bản họp lên Redmine — agent tự dựng danh "
-        "sách việc từ MoM rồi chuyển cho pm-agent đối chiếu (KHÔNG tự route sang pm_task)\n\n"
+        "  • đồng bộ / tạo task / tạo task template / 'hỗ trợ tạo task template' lên "
+        "Redmine TỪ cuộc họp — agent tự dựng danh sách việc từ MoM rồi chuyển cho "
+        "pm-agent đối chiếu (KHÔNG tự route sang pm_task)\n\n"
         '"pm_task" — CHỈ khi user nói rõ về Redmine / issue tracker:\n'
         "  • có từ khoá rõ ràng: Redmine, issue, ticket, mã '#123', 'trên Redmine', "
         "'đồng bộ/sync issue'\n"
@@ -222,6 +224,8 @@ async def classify_intent(state: ChatState) -> dict:
         '  "tạo task cho Mai deploy v1" → agent\n'
         '  "đồng bộ các việc trong biên bản họp lên Redmine" → agent\n'
         '  "tạo issue trên Redmine cho từng action item của cuộc họp" → agent\n'
+        '  "hỗ trợ tạo task template lên Redmine" → agent\n'
+        '  "tạo task template lên Redmine từ cuộc họp này" → agent\n'
         '  "tạo issue trên Redmine cho việc deploy v1" → pm_task\n'
         '  "liệt kê issue overdue của tôi" → pm_task\n'
         '  "cập nhật trạng thái issue #123" → pm_task'
@@ -418,6 +422,14 @@ async def _build_reconcile_template(
             session, uuid.UUID(resolved_meeting_id)
         )
         items = build_task_items(action_items)
+        # "tạo task cho <người>" → keep the {project, items} shape but narrow to
+        # that person's action items (matched on assignee/pic, case-insensitive).
+        assignee = (args.get("assignee") or "").strip()
+        if assignee:
+            items = [
+                it for it in items
+                if assignee.lower() in (it.get("assignee") or "").lower()
+            ]
     else:
         items = []
     return {"project": project, "items": items}
@@ -461,10 +473,22 @@ def _agent_system_prompt(state: ChatState) -> str:
         "- CHỈ gán một thông tin cho recording mà bạn ĐÃ đọc bằng `recording_mom`; "
         "nêu rõ thông tin đến từ phiên nào. TUYỆT ĐỐI không gán nhầm dữ liệu sang "
         "một recording khác. Dùng `retrieve` cho câu hỏi xuyên nhiều phiên.\n"
+        "- Khi user muốn TẠO TASK / tạo 'task template' / lập danh sách việc / "
+        "đồng bộ action item lên Redmine (vd 'tạo task template cho Duy Anh trong "
+        "phiên Meeting 2', 'đồng bộ việc lên Redmine'): BẮT BUỘC GỌI tool "
+        "`create_task` — KHÔNG tự liệt kê bằng văn bản, KHÔNG trả lời suông. Hệ thống "
+        "sẽ dựng danh sách việc từ MoM và hỏi người dùng duyệt (rồi chuyển pm-agent "
+        "đối chiếu lên Redmine). Nếu cần biết nội dung phiên trước, cứ GỌI "
+        "`recording_mom` để đọc, NHƯNG vẫn phải kết thúc bằng `create_task`.\n"
+        "- QUAN TRỌNG khi gọi `create_task` cho việc TỪ cuộc họp: ĐỪNG truyền `title` "
+        "(để hệ thống tự dựng danh sách việc theo từng người từ MoM). CHỈ truyền `title` "
+        "khi user đọc rõ MỘT task mới hoàn toàn. Nếu user chỉ định một người (vd 'cho "
+        "Duy Anh'), truyền `assignee` = tên người đó để lọc đúng việc của họ.\n"
         "- Tool có side-effect (create_task, send_email) cần người dùng DUYỆT; "
         "cứ gọi khi phù hợp, hệ thống sẽ tự hỏi duyệt.\n"
         "- KHÔNG cần truyền meeting_id — hệ thống tự gắn cuộc họp hiện tại.\n"
-        "- Khi đã đủ thông tin, trả lời trực tiếp (KHÔNG gọi tool)."
+        "- Với câu hỏi THÔNG TIN (hỏi-đáp), khi đã đủ dữ liệu thì trả lời trực tiếp "
+        "(KHÔNG gọi tool). Quy tắc này KHÔNG áp dụng cho yêu cầu tạo task/đồng bộ ở trên."
     )
 
 
@@ -791,11 +815,13 @@ def make_pm_call(pm_client):
                 )
         except PmAgentError as e:
             logger.exception("[Node pm_call] pm-agent call failed")
+            # Don't end the turn: route to pm_error, which interrupts for a
+            # retry. pm_next_payload is left untouched (preserved in the
+            # checkpoint), so a retry re-runs pm_call with the same request.
             return {
                 "pm_rounds": rounds,
-                "pm_route": "end",
-                "final_reply": f"Xin lỗi, không kết nối được pm-agent: {e}",
-                "tool_result": {"error": str(e), "via": "pm_agent"},
+                "pm_route": "error",
+                "pm_last_error": str(e),
             }
 
         route = "await" if result.state == "input_required" else "reply"
@@ -814,10 +840,14 @@ def make_pm_call(pm_client):
     return pm_call
 
 
-def route_after_pm_call(state: ChatState) -> Literal["pm_await", "pm_reply", "save_reply"]:
+def route_after_pm_call(
+    state: ChatState,
+) -> Literal["pm_await", "pm_reply", "pm_error", "save_reply"]:
     route = state.get("pm_route")
     if route == "await":
         return "pm_await"
+    if route == "error":
+        return "pm_error"
     if route == "end":
         return "save_reply"
     return "pm_reply"
@@ -862,6 +892,39 @@ async def pm_reply(state: ChatState) -> dict:
     }
 
 
+async def pm_error(state: ChatState) -> dict:
+    """Interrupt after a transient pm-agent transport error, offering a retry.
+
+    Performs NO A2A send (replay-safe). `pm_next_payload` is preserved from the
+    failed pm_call, so resuming with a retry re-sends the identical request.
+    Resume decision: approve / {action:"retry"} → re-send; anything else → give up.
+    """
+    err = state.get("pm_last_error") or "lỗi không xác định"
+    pending = {
+        "kind": "pm_error",
+        "prompt": f"Mất kết nối với pm-agent: {err}\n\nThử gửi lại yêu cầu?",
+        "task_id": state.get("pm_task_id"),
+    }
+    logger.info("[Node pm_error] INTERRUPT (retry?) err=%r", err)
+    decision = interrupt(pending)
+    logger.info("[Node pm_error] RESUMED decision=%s", decision)
+    d = decision or {}
+    retry = d.get("action") == "retry" or d.get("approval_action") == "approve"
+    if retry:
+        return {"pm_pending": pending, "pm_route": "retry"}
+    return {
+        "pm_pending": pending,
+        "pm_route": "end",
+        "final_reply": "Đã hủy đồng bộ với pm-agent.",
+        "tool_result": {"status": "cancelled", "via": "pm_agent"},
+    }
+
+
+def route_after_pm_error(state: ChatState) -> Literal["pm_call", "save_reply"]:
+    """Retry → re-run pm_call (re-sends the preserved payload); else end."""
+    return "pm_call" if state.get("pm_route") == "retry" else "save_reply"
+
+
 # ─── Builder ──────────────────────────────────────────────────────
 
 def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_llm=None):
@@ -881,6 +944,7 @@ def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_
     g.add_node("pm_call", make_pm_call(pm_client))
     g.add_node("pm_await", pm_await)
     g.add_node("pm_reply", pm_reply)
+    g.add_node("pm_error", pm_error)
     g.add_node("save_reply", make_save_reply(session))
 
     g.set_entry_point("load_context")
@@ -911,9 +975,19 @@ def build_chat_graph(session: AsyncSession, checkpointer, pm_client=None, agent_
     g.add_conditional_edges(
         "pm_call",
         route_after_pm_call,
-        {"pm_await": "pm_await", "pm_reply": "pm_reply", "save_reply": "save_reply"},
+        {
+            "pm_await": "pm_await",
+            "pm_reply": "pm_reply",
+            "pm_error": "pm_error",
+            "save_reply": "save_reply",
+        },
     )
     g.add_edge("pm_await", "pm_call")
+    g.add_conditional_edges(
+        "pm_error",
+        route_after_pm_error,
+        {"pm_call": "pm_call", "save_reply": "save_reply"},
+    )
     g.add_edge("pm_reply", "save_reply")
     g.add_edge("save_reply", END)
 
@@ -983,6 +1057,7 @@ def _initial_turn_state(
         "pm_last": None,
         "pm_pending": None,
         "pm_route": None,
+        "pm_last_error": None,
         "pm_task_id": None,
         "pm_context_id": None,
         # reset shared per-turn outputs

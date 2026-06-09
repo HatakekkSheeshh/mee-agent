@@ -19,8 +19,10 @@ from meeting.graphs.chat_graph import (
     PM_MAX_ROUNDS,
     make_pm_call,
     pm_await,
+    pm_error,
     pm_reply,
     route_after_pm_call,
+    route_after_pm_error,
 )
 from meeting.services.pm_agent_client import PmAgentError, PmAgentResult
 
@@ -82,14 +84,25 @@ def _build(pm_client, checkpointer):
     g.add_node("pm_call", make_pm_call(pm_client))
     g.add_node("pm_await", pm_await)
     g.add_node("pm_reply", pm_reply)
+    g.add_node("pm_error", pm_error)
     g.add_node("save_reply", lambda state: {})  # stand-in for the DB save node
     g.set_entry_point("pm_call")
     g.add_conditional_edges(
         "pm_call",
         route_after_pm_call,
-        {"pm_await": "pm_await", "pm_reply": "pm_reply", "save_reply": "save_reply"},
+        {
+            "pm_await": "pm_await",
+            "pm_reply": "pm_reply",
+            "pm_error": "pm_error",
+            "save_reply": "save_reply",
+        },
     )
     g.add_edge("pm_await", "pm_call")
+    g.add_conditional_edges(
+        "pm_error",
+        route_after_pm_error,
+        {"pm_call": "pm_call", "save_reply": "save_reply"},
+    )
     g.add_edge("pm_reply", "save_reply")
     g.add_edge("save_reply", END)
     return g.compile(checkpointer=checkpointer)
@@ -204,17 +217,71 @@ async def test_need_more_info_then_approval_then_done():
     assert client.calls[2]["data_part"]["approval_action"] == "approve"
 
 
-async def test_pm_error_graceful_reply():
-    client = RaisingClient()
+async def test_pm_error_interrupts_for_retry_then_cancel():
+    client = RaisingClient()  # always raises
     graph = _build(client, MemorySaver())
     cfg = _config("t-error")
 
-    result = await graph.ainvoke({"user_message": "tạo issue"}, cfg)
+    await graph.ainvoke({"user_message": "tạo issue"}, cfg)
 
+    # Transport error now pauses with a retry card instead of ending.
+    assert await _interrupted(graph, cfg)
+    pending = await _interrupt_value(graph, cfg)
+    assert pending["kind"] == "pm_error"
+    assert len(client.calls) == 1
+
+    # Cancel → ends, no re-send.
+    result = await graph.ainvoke(Command(resume={"approval_action": "reject"}), cfg)
     assert not await _interrupted(graph, cfg)
     assert result.get("final_reply")
-    assert result.get("tool_result", {}).get("error")
     assert len(client.calls) == 1
+
+
+class RaiseThenOk:
+    """Raises a transport error on the first send, returns `result` thereafter."""
+
+    def __init__(self, result):
+        self._result = result
+        self.calls: list[dict] = []
+
+    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None):
+        self.calls.append(
+            {"text": text, "task_id": task_id, "context_id": context_id, "data_part": data_part}
+        )
+        if len(self.calls) == 1:
+            raise PmAgentError("Server disconnected without sending a response")
+        return self._result
+
+    async def cancel(self, task_id):
+        pass
+
+
+async def test_pm_error_retry_resends_same_payload_and_completes():
+    client = RaiseThenOk(completed("Đã đối chiếu."))
+    graph = _build(client, MemorySaver())
+    cfg = _config("t-retry")
+
+    items = [{"subject": "viết migration", "assignee": "Hiếu", "due_date": "10/01"}]
+    state = {
+        "user_message": "đồng bộ task",
+        "pm_next_payload": {
+            "kind": "reconcile", "project": "GIP", "items": items,
+            "text": "Đối chiếu ... trên dự án GIP:\n1. viết migration",
+        },
+    }
+    await graph.ainvoke(state, cfg)
+    assert await _interrupted(graph, cfg)
+    assert (await _interrupt_value(graph, cfg))["kind"] == "pm_error"
+    assert len(client.calls) == 1
+
+    # Retry (approve) → re-sends the SAME reconcile payload → completes.
+    result = await graph.ainvoke(Command(resume={"approval_action": "approve"}), cfg)
+    assert not await _interrupted(graph, cfg)
+    assert result["final_reply"] == "Đã đối chiếu."
+    assert len(client.calls) == 2
+    assert "GIP" in client.calls[1]["text"]
+    assert client.calls[1]["data_part"]["kind"] == "reconcile_items"
+    assert client.calls[1]["data_part"]["items"] == items
 
 
 async def test_pm_call_reconcile_sends_text_and_datapart():
