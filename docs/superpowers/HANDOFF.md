@@ -6,25 +6,17 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 
 ## Kickoff message to paste into the new session
 
-> Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md, `docs/superpowers/HANDOFF.md`,
-> and `docs/superpowers/plans/2026-06-09-clear-chat-session.md` (the current plan).
-> The chat_graph reorg is fully DONE (Phase 1 + 2: `_chat_*.py` helpers, DI seams, split into the
-> `meeting/graphs/chat_graph/` package with a facade) — committed, **77 tests green**
-> (`venv/bin/python -m pytest tests/meeting -q`).
-> NEXT = execute the **clear-chat-session** plan with `superpowers:executing-plans`, inline, TDD:
-> a `POST /api/chat/sessions/{id}/clear` endpoint + `repo.clear_chat_session` that deletes the
-> session's chat_messages + pending_actions IN PLACE (keep session_id/meeting_id) and best-effort
-> purges the LangGraph checkpoint thread (`get_checkpointer().adelete_thread(str(id))`), plus a
-> "Xóa hội thoại" button in ChatPane (confirm → empty thread + re-show welcome, clear localStorage
-> messages but keep the session id). Spec:
-> `docs/superpowers/specs/2026-06-09-clear-chat-session-design.md`. 3 tasks, adds tests, suite
-> stays green. Run with `ECC_GATEGUARD=off`.
-> ⚠️ FIRST: the suite is currently **RED — 2 failed, 75 passed**. Option 3 (create_task
-> reject-terminal) was IMPLEMENTED in `agent.py`/builder (commit 9bf122a) but its Task 4 (update
-> the reject tests to the new terminal behavior) was never done. Fix `test_bridge_reject_gate1_no_handoff`
-> and `test_agent_side_effect_rejected` to expect: no 2nd LLM turn, `final_reply == agent.REJECT_REPLY`
-> ("Đã hủy. Tui hong tạo task nữa."), not interrupted. GET BACK TO GREEN before clear-chat.
-> Do NOT fix the other create_task findings (login↔name filter, recording scoping) — follow-ups below.
+> Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md and `docs/superpowers/HANDOFF.md`.
+> The chat_graph reorg is DONE (Phase 1 + 2), the create_task reject is terminal (option 3), and
+> the **clear-chat-session feature is DONE** — suite is **82 tests green**
+> (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`), FE builds clean
+> (`cd meeting_frontend_react && npm run build`). All committed on `feat/backend-agents` (unpushed).
+> NEXT candidates (none started): (a) the deeper **force-grounding** fix for recording-scoped
+> questions — tighten `_agent_system_prompt` / set `tool_choice` so the answer-directly hatch can't
+> skip `list_recordings`/`recording_mom` (clear-chat is only the user-facing mitigation); (b) the
+> create_task **login↔display-name assignee filter** + **recording-scoping** finding; (c) reconcile
+> **per-assignee chunking** (23-item reconcile timed out the gateway). All logged below.
+> Run implementation bursts with `ECC_GATEGUARD=off`.
 
 ## DONE this session (2026-06-09) — bridge live, retry, card, tools package
 
@@ -113,25 +105,34 @@ All committed on `feat/backend-agents` (unpushed); suite **77 passed**.
    — tighten the prompt or set `tool_choice` so the answer-directly hatch can't skip
    `list_recordings`/`recording_mom`.
 
-## NEXT — clear chat session (in-place)
+## DONE this session (2026-06-09c) — suite back to green + clear-chat-session
 
-**Plan:** `docs/superpowers/plans/2026-06-09-clear-chat-session.md` ·
-**Spec:** `docs/superpowers/specs/2026-06-09-clear-chat-session-design.md`. User-facing mitigation
-for finding #3: a "Xóa hội thoại" button + `POST /sessions/{id}/clear` that deletes the session's
-chat_messages + pending_actions in place (keep session_id/meeting_id) and purges the LangGraph
-checkpoint thread (`adelete_thread`, best-effort). 3 TDD tasks, adds tests, suite stays green.
+All committed on `feat/backend-agents` (unpushed); suite **82 passed**
+(`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`), FE `npm run build` clean.
 
-## ⚠️ SUITE IS RED — create_task reject-terminal (option 3) implemented but tests not updated
-
-**Status:** production code DONE (commit `9bf122a`) — `agent_execute` reject branch returns
-`agent_route="finish"` + `REJECT_REPLY`; `route_after_agent_execute` + builder route it to
-`save_reply`. **But the plan's Task 4 (update reject tests) was skipped → 2 failing tests:**
-`tests/meeting/test_reconcile_bridge.py::test_bridge_reject_gate1_no_handoff` and (almost
-certainly) `test_agent_loop.py::test_agent_side_effect_rejected`. They still script a 2nd LLM turn
-and assert a model-produced reply. Fix them to the terminal behavior (no 2nd `llm.calls`,
-`final_reply == REJECT_REPLY`, not interrupted, `pm.calls == []`). Plan with the exact Task-4
-expectations: `docs/superpowers/plans/2026-06-09-create-task-reject-terminal.md`. **This must be
-green (back to 77) before starting clear-chat.**
+1. **Reject-terminal tests fixed (option 3 Task 4)** — commit `f41aa00`. The production code was
+   already terminal (commit `9bf122a`) and `REJECT_REPLY` had been re-worded to
+   `"Đã hủy. Tui hong tạo task nữa."` (uncommitted); the two reject tests still asserted the old
+   string. Fixed `test_bridge_reject_gate1_no_handoff` + `test_agent_side_effect_rejected` to assert
+   `== chat_graph.REJECT_REPLY` (now re-exported from the facade), and committed the
+   `REJECT_REPLY` wording + the `agent_execute -.-> save_reply` edge in `docs/diagrams/chat_graph.mmd`.
+2. **clear-chat-session (the whole plan)** — `docs/superpowers/plans/2026-06-09-clear-chat-session.md`,
+   TDD, 3 commits:
+   - `2f8c4c1` `repo.clear_chat_session(session, session_id)` — deletes the session's
+     `chat_messages` + `pending_actions` in place (keeps the session row + meeting_id binding).
+   - `134aa19` `POST /api/chat/sessions/{id}/clear` — 404 if missing → `repo.clear_chat_session`
+     → best-effort `get_checkpointer().adelete_thread(str(id))` (logged, non-fatal) →
+     `{"status":"cleared","session_id":…}`.
+   - `a1c380f` FE: `api.chat.clear(sessionId)` + a trash **icon-btn** ("Xóa hội thoại") in the
+     ChatPane header (shown when there are messages/pending) → `window.confirm` → on success
+     `setMessages([])` + `setPending(null)`; the existing save-effect re-persists the cleared
+     thread with the **session id kept**. i18n `chat.clear`/`clearConfirm`/`cleared` (VI + EN).
+   - ⚠️ **Test-env note:** the shared DB is unavailable here, so (matching `test_repo_recordings`
+     / `test_chat_api_pm`) `tests/meeting/test_clear_session.py` uses a fake session that records
+     the issued DELETEs and calls the endpoint fn directly with a mocked checkpointer — NOT a live
+     TestClient. The plan's "assert `list_chat_messages` → []" was adapted to "assert two DELETEs
+     against `chat_messages`+`pending_actions` scoped to session_id, none against `chat_sessions`".
+   - Still only **unit-verified** — not exercised live through `run_meeting.py` (live blockers below).
 
 ## (historical) create_task reject-terminal plan (option 3)
 
