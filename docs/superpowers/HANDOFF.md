@@ -79,14 +79,19 @@ a `tool_calls` line appears before the final answer and the date/content match t
 
 ## ⚠️ Live blockers / gotchas (will bite the next session)
 
-1. **psycopg / libpq missing** — backend crashes on startup: `ImportError: no pq wrapper available`.
-   Fix: `venv/bin/pip install "psycopg[binary]"` (or `sudo apt-get install -y libpq5`). The
-   LangGraph checkpointer uses psycopg3.
-2. **DB migration mismatch** — the shared remote DB (`180.93.182.45`, db `agents`, user `anhvd6`)
-   is stamped at Alembic **`0015`**, but this repo only has **`0001–0007`**. `0008–0015` exist in no
-   branch. Alembic errors `Can't locate revision '0015'`. Either get those `.py` files, or point
-   `.env` `DATABASE_URL` at a local DB at head `0007` (`docker compose --profile local up -d` →
-   `localhost:5435`).
+1. **psycopg / libpq — RESOLVED (2026-06-10).** `psycopg 3.3.4` + `psycopg2` are installed; the pq
+   wrapper loads `libpq 18`. No longer a blocker. (If it recurs on a fresh env:
+   `venv/bin/pip install "psycopg[binary]"`.)
+2. **DB migration drift — narrowed (2026-06-10).** The repo NOW carries `0001–0015` (clean linear
+   chain, head `0015`) — the old "0008–0015 exist in no branch" note is obsolete. BUT the shared
+   remote DB (`180.93.182.45`, db `agents`, user `anhvd6`) is now stamped **`0016`**, one ahead of
+   the repo, so `alembic current`/`upgrade` fail `Can't locate revision '0016'`. The drift is
+   recurring (someone keeps advancing the shared DB). **To RUN the backend you don't need Alembic** —
+   the app connects via asyncpg + ORM; a DB that's *ahead* is fine to run against if `0016` is
+   additive (0008–0015 all are). So: `venv/bin/python run_meeting.py` WITHOUT `alembic upgrade head`.
+   Proper fix = get `alembic/versions/0016_*.py` from the DB owner. Isolated fallback = local DB at
+   head `0015` (`docker compose --profile local up -d` → `localhost:5435`), but it's empty (no real
+   recordings to smoke-test against).
 3. **DB unavailable in this env** → `tests/meeting` use **fake sessions / direct endpoint calls**,
    not a live TestClient (see `test_clear_session.py`, `test_chat_api_pm.py`, `test_repo_recordings`).
    New DB-touching tests must follow that convention.
