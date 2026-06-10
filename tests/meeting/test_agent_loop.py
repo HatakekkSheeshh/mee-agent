@@ -300,6 +300,56 @@ async def test_agent_max_rounds_cap(monkeypatch):
     assert len(llm.calls) == MAX_AGENT_ROUNDS
 
 
+async def test_agent_forces_tool_on_round0_when_grounding_required(monkeypatch):
+    """grounding='required' → round 0 LLM call uses tool_choice='required', and the
+    post-tool turn drops back to 'auto' so the loop can finish."""
+    ft = _install(monkeypatch, {"retrieve": {"status": "ok", "chunks": [{"text": "03/06"}]}})
+    llm = FakeLLM([
+        tool([{"id": "c1", "name": "retrieve", "arguments": '{"query": "phiên 1"}'}]),
+        text("Phiên 1 họp ngày 03/06."),
+    ])
+    graph = _build(llm, MemorySaver(), ft)
+    cfg = _config("grounded")
+
+    init = _initial("tóm tắt phiên 1")
+    init["grounding"] = "required"
+    result = await graph.ainvoke(init, cfg)
+
+    assert not await _interrupted(graph, cfg)
+    # round 0 forced, round 1 back to auto
+    assert llm.calls[0]["tool_choice"] == "required"
+    assert llm.calls[1]["tool_choice"] == "auto"
+    # a read tool actually ran before the final reply (the whole point of grounding)
+    assert ft.calls[0]["name"] == "retrieve"
+    assert "03/06" in result["final_reply"]
+
+
+async def test_agent_auto_grounding_never_forces(monkeypatch):
+    """grounding='auto' → tool_choice stays 'auto' on round 0 (current behavior)."""
+    ts = _install(monkeypatch)
+    llm = FakeLLM([text("Mình là Mee.")])
+    graph = _build(llm, MemorySaver(), ts)
+    cfg = _config("auto-grounding")
+
+    init = _initial("bạn là ai?")
+    init["grounding"] = "auto"
+    await graph.ainvoke(init, cfg)
+
+    assert llm.calls[0]["tool_choice"] == "auto"
+
+
+async def test_agent_missing_grounding_defaults_to_auto(monkeypatch):
+    """No grounding key in state → tool_choice='auto' (no accidental forcing)."""
+    ts = _install(monkeypatch)
+    llm = FakeLLM([text("Chào bạn.")])
+    graph = _build(llm, MemorySaver(), ts)
+    cfg = _config("no-grounding")
+
+    await graph.ainvoke(_initial("chào"), cfg)  # _initial sets no grounding
+
+    assert llm.calls[0]["tool_choice"] == "auto"
+
+
 async def test_agent_switch_meeting_rescopes_retrieval(monkeypatch):
     ft = _install(monkeypatch, {
         "switch_meeting": {"status": "ok", "meeting_id": "other-mid",

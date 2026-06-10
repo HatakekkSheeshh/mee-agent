@@ -128,13 +128,24 @@ def make_agent(llm=None, *, tools=None):
                 or "Mình đã thử nhiều bước nhưng chưa hoàn tất được, bạn thử lại nhé.",
             }
 
+        # Force grounding: on the FIRST turn of a content/recording question
+        # (grounding="required"), use tool_choice="required" so gemma MUST emit a
+        # tool call instead of regurgitating a stale summary from recent_messages.
+        # Only round 0 is forced — round ≥1 stays "auto" so the post-tool answer
+        # turn can finish and the loop terminates. Verified Task 0: the MaaS gemma
+        # endpoint honors tool_choice="required".
+        tool_choice = (
+            "required"
+            if state.get("grounding") == "required" and rounds == 0
+            else "auto"
+        )
         client = llm or _llm_client()
         try:
             resp = client.chat.completions.create(
                 model=_llm_model(),
                 messages=_to_llm_messages(state, messages),
                 tools=_openai_tools(tools=ts),
-                tool_choice="auto",
+                tool_choice=tool_choice,
                 max_tokens=1024,
                 timeout=60,
             )
