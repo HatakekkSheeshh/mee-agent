@@ -88,21 +88,22 @@ pm-agent key, NOT a Graph cred; findMeetingTimes + `/me/onlineMeetings` are dele
 all four needed delegated scopes are user-consentable (no admin) IF the user can register an
 Azure app — unverified.
 
+## DONE — the 3 parked follow-ups ✅ (2026-06-10, commit `b5ddcde`, suite 115 green)
+
+- **create_task assignee filter + recording scoping**: `assignee_matches` (create_task.py) bridges
+  login↔display-name ("hieunq3" ↔ pic "Hiếu"; case/diacritic-insensitive substring both ways);
+  new `recording_id` arg on create_task scopes the template to one recording's MoM. Still builds
+  from `action_items` only (decisions/commitments/blockers expansion remains future work).
+- **Reconcile chunking**: `_reconcile_payloads` splits per assignee group (sub-chunk at
+  `MAX_RECONCILE_ITEMS=8`); `pm_queue`/`pm_replies` in ChatState; `pm_reply` drains the queue with
+  a FRESH pm task per group (`route_after_pm_reply`), replies joined into one final_reply. UX note:
+  each group raises its own GATE-2 card sequentially. Rejecting/erroring-out one group abandons the
+  rest of the queue (documented behavior). Needs a live multi-assignee smoke.
+- **`reason`** is appended to each reconcile text as "Ghi chú của người duyệt: …".
+- (Modal blur fix also applied — see chat-UX section above.)
+
 ## Parked follow-ups (NOT in the next plan)
 
-- **create_task assignee filter is display-name only** — items carry `pic="Hiếu"`; "tạo task cho
-  **hieunq3**" (a Redmine login) matches nothing. create_task also aggregates **project-level**
-  `get_mom_action_items` and ignores a named recording ("trong Meeting 1") — no `recording_id`
-  scoping; builds from `action_items` only (not decisions/commitments/blockers).
-- **Reconcile chunking** — a 23-item reconcile timed out: the agentbase **gateway** dropped the
-  connection mid-LLM-reconcile (`RemoteProtocolError`; NOT auth, NOT our 60s client timeout). Fix =
-  one `message/send` **per assignee group**. The retry card won't help (same 23-item payload
-  re-times-out).
-- **`reason` field** on the create_task card is audit-only (persisted, not consumed downstream) —
-  wire it into `_reconcile_text`/item descriptions, or remove it.
-- **Modal `backdrop-filter` blur perf** — `.mee-modal-backdrop { backdrop-filter: blur(3px) }`
-  re-rasterizes every frame while anything animates behind it; removing the blur (or pausing
-  background animations while a modal is open) fixes the jank. One-line change, un-applied.
 - **pm_task lifecycle deltas (PARKED):** edit affordance on need_approval cards; clear cached
   `pm_task_id`/`pm_context_id` on terminal; bump `PM_MAX_ROUNDS`; `transcript_segments` injection
   (spec §5, seam in `pm_call`).
