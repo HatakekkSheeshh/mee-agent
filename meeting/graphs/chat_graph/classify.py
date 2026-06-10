@@ -41,11 +41,19 @@ def make_classify_intent(llm=None):
             intent = parsed.get("intent")
             if intent not in ("pm_task", "agent"):
                 intent = "agent"
-            logger.info(f"[Node classify_intent] intent={intent!r}")
-            return {"intent": intent}
+            # grounding="required" forces a tool call on the agent's first turn
+            # (content/recording questions); default "auto" when absent/invalid so
+            # a model that omits the field never accidentally forces grounding.
+            grounding = parsed.get("grounding")
+            if grounding not in ("required", "auto"):
+                grounding = "auto"
+            logger.info(
+                f"[Node classify_intent] intent={intent!r} grounding={grounding!r}"
+            )
+            return {"intent": intent, "grounding": grounding}
         except Exception as e:
             logger.exception("classify_intent failed")
-            return {"intent": "agent", "error": f"classify failed: {e}"}
+            return {"intent": "agent", "grounding": "auto", "error": f"classify failed: {e}"}
 
     return classify_intent
 

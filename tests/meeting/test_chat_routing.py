@@ -63,3 +63,64 @@ async def test_classify_unknown_label_falls_back_to_agent():
 
     out = await classify_intent({"user_message": "???", "meeting_context": {}})
     assert out["intent"] == "agent"
+
+
+# ─── grounding flag (force-grounding plan, Task 1) ───────────────────
+
+async def test_classify_emits_grounding_required():
+    """Content/recording question → classify carries grounding == 'required'."""
+    fake = _fake_llm_returning('{"intent": "agent", "grounding": "required"}')
+    classify_intent = make_classify_intent(fake)
+
+    out = await classify_intent(
+        {"user_message": "tóm tắt phiên 1", "meeting_context": {}}
+    )
+    assert out["intent"] == "agent"
+    assert out["grounding"] == "required"
+
+
+async def test_classify_grounding_auto_for_chitchat():
+    fake = _fake_llm_returning('{"intent": "agent", "grounding": "auto"}')
+    classify_intent = make_classify_intent(fake)
+
+    out = await classify_intent(
+        {"user_message": "chào bạn", "meeting_context": {}}
+    )
+    assert out["grounding"] == "auto"
+
+
+async def test_classify_grounding_defaults_to_auto_when_absent():
+    """Model omitted grounding → parser defaults it to 'auto' (no forcing)."""
+    fake = _fake_llm_returning('{"intent": "agent"}')
+    classify_intent = make_classify_intent(fake)
+
+    out = await classify_intent(
+        {"user_message": "gì đó", "meeting_context": {}}
+    )
+    assert out["grounding"] == "auto"
+
+
+async def test_classify_grounding_invalid_falls_back_to_auto():
+    fake = _fake_llm_returning('{"intent": "agent", "grounding": "banana"}')
+    classify_intent = make_classify_intent(fake)
+
+    out = await classify_intent({"user_message": "???", "meeting_context": {}})
+    assert out["grounding"] == "auto"
+
+
+async def test_classify_grounding_auto_on_error():
+    """Exception path returns intent=agent + grounding=auto (no forcing on failure)."""
+    fake = _fake_llm_returning("not json at all {{{")
+    classify_intent = make_classify_intent(fake)
+
+    out = await classify_intent({"user_message": "x", "meeting_context": {}})
+    assert out["intent"] == "agent"
+    assert out["grounding"] == "auto"
+
+
+def test_classify_prompt_asks_for_grounding_flag():
+    """The classify prompt must instruct the model to emit the grounding field."""
+    from meeting.graphs.chat_graph import CLASSIFY_SYSTEM_PROMPT
+
+    assert "grounding" in CLASSIFY_SYSTEM_PROMPT
+    assert "required" in CLASSIFY_SYSTEM_PROMPT

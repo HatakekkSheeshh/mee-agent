@@ -8,11 +8,19 @@ from meeting.graphs._chat_state import ChatState
 
 # System prompt for classify_intent's binary router (pm_task vs agent).
 CLASSIFY_SYSTEM_PROMPT = (
-    "Bạn là bộ định tuyến cho trợ lý cuộc họp Mee. Phân loại tin nhắn user thành "
-    'đúng MỘT nhãn, trả về CHỈ JSON {"intent": "pm_task" | "agent"} '
+    "Bạn là bộ định tuyến cho trợ lý cuộc họp Mee. Phân loại tin nhắn user và "
+    'trả về CHỈ JSON {"intent": "pm_task" | "agent", "grounding": "required" | "auto"} '
     "(không markdown, không giải thích).\n\n"
     'MẶC ĐỊNH là "agent". CHỈ chọn "pm_task" khi user nói RÕ RÀNG về hệ thống '
     "quản lý issue Redmine. Nếu phân vân → chọn \"agent\".\n\n"
+    'TRƯỜNG "grounding" — bắt agent đọc dữ liệu thật trước khi trả lời:\n'
+    '  • "required" khi user hỏi về NỘI DUNG / DỮ LIỆU CUỘC HỌP có thật: tóm tắt '
+    "một phiên/Meeting N, biên bản (MoM), quyết định, blocker, ai nói gì, việc/"
+    "action item của một người, liệt kê recording/phiên — tức là câu trả lời PHẢI "
+    "lấy từ dữ liệu cuộc họp (không được bịa từ trí nhớ).\n"
+    '  • "auto" cho chào hỏi/chit-chat, câu hỏi chung về Mee, hoặc yêu cầu hành '
+    "động (tạo task, gửi email, thao tác Redmine) — những việc không cần đọc nội "
+    'dung trước. Nếu phân vân giữa hai → chọn "auto".\n\n'
     '"agent" — mọi thứ liên quan tới NỘI DUNG / DỮ LIỆU CUỘC HỌP:\n'
     "  • nội dung, tóm tắt, biên bản (MoM), ai nói gì, quyết định, blocker của cuộc họp\n"
     "  • danh sách recording/phiên họp, recording_id, transcript của một dự án/cuộc họp\n"
@@ -28,18 +36,21 @@ CLASSIFY_SYSTEM_PROMPT = (
     "  • tạo/cập nhật/đóng issue trên Redmine; liệt kê issue overdue/stale/sắp đến hạn; "
     "workload hoặc issue được giao TRÊN HỆ THỐNG\n\n"
     "Ví dụ:\n"
-    '  "List the recorded_id in AI Innovation Project" → agent\n'
-    '  "what tasks does Hieu need to do?" → agent\n'
-    '  "tóm tắt cuộc họp tuần trước" → agent\n'
-    '  "liệt kê các phiên họp của dự án X" → agent\n'
-    '  "tạo task cho Mai deploy v1" → agent\n'
-    '  "đồng bộ các việc trong biên bản họp lên Redmine" → agent\n'
-    '  "tạo issue trên Redmine cho từng action item của cuộc họp" → agent\n'
-    '  "hỗ trợ tạo task template lên Redmine" → agent\n'
-    '  "tạo task template lên Redmine từ cuộc họp này" → agent\n'
-    '  "tạo issue trên Redmine cho việc deploy v1" → pm_task\n'
-    '  "liệt kê issue overdue của tôi" → pm_task\n'
-    '  "cập nhật trạng thái issue #123" → pm_task'
+    '  "List the recorded_id in AI Innovation Project" → {"intent":"agent","grounding":"required"}\n'
+    '  "what tasks does Hieu need to do?" → {"intent":"agent","grounding":"required"}\n'
+    '  "tóm tắt cuộc họp tuần trước" → {"intent":"agent","grounding":"required"}\n'
+    '  "tóm tắt phiên 1 / Meeting 2" → {"intent":"agent","grounding":"required"}\n'
+    '  "liệt kê các phiên họp của dự án X" → {"intent":"agent","grounding":"required"}\n'
+    '  "Hiếu cần làm gì trong Meeting 2?" → {"intent":"agent","grounding":"required"}\n'
+    '  "chào bạn / bạn là ai?" → {"intent":"agent","grounding":"auto"}\n'
+    '  "tạo task cho Mai deploy v1" → {"intent":"agent","grounding":"auto"}\n'
+    '  "đồng bộ các việc trong biên bản họp lên Redmine" → {"intent":"agent","grounding":"auto"}\n'
+    '  "tạo issue trên Redmine cho từng action item của cuộc họp" → {"intent":"agent","grounding":"auto"}\n'
+    '  "hỗ trợ tạo task template lên Redmine" → {"intent":"agent","grounding":"auto"}\n'
+    '  "tạo task template lên Redmine từ cuộc họp này" → {"intent":"agent","grounding":"auto"}\n'
+    '  "tạo issue trên Redmine cho việc deploy v1" → {"intent":"pm_task","grounding":"auto"}\n'
+    '  "liệt kê issue overdue của tôi" → {"intent":"pm_task","grounding":"auto"}\n'
+    '  "cập nhật trạng thái issue #123" → {"intent":"pm_task","grounding":"auto"}'
 )
 
 

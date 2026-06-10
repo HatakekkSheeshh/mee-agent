@@ -30,6 +30,10 @@ class ChatState(TypedDict, total=False):
 
     # Filled by classify_intent (binary router: agent vs pm_task)
     intent: Literal["agent", "pm_task"]
+    # Force-grounding signal (also from classify): "required" makes the agent's
+    # first turn use tool_choice="required" so it must read real data before
+    # answering content/recording questions; "auto" = normal. Defaults to "auto".
+    grounding: Literal["required", "auto"]
 
     # Filled after interrupt + resume
     user_decision: Optional[dict]  # {action: 'approved'|'rejected', edited_args?, reason?}
