@@ -42,9 +42,11 @@ def _parse_tool_args(raw) -> dict:
         return {}
 
 
-def _reconcile_text(project: str, items: list[dict]) -> str:
+def _reconcile_text(project: str, items: list[dict], note: str = "") -> str:
     """Phrase a reconcile request pm-agent's reconcile_check_info can parse:
-    a target project + a numbered list of items."""
+    a target project + a numbered list of items. `note` is the user's approval
+    note from the create_task card — appended so pm-agent's LLM reconcile sees
+    it (was previously persisted for audit only and consumed nowhere)."""
     header = f"Đối chiếu và tạo/cập nhật các công việc sau trên dự án {project or '(chưa rõ)'}:"
     lines = [header]
     for i, it in enumerate(items, 1):
@@ -54,7 +56,41 @@ def _reconcile_text(project: str, items: list[dict]) -> str:
         if it.get("due_date"):
             parts.append(f"hạn {it['due_date']}")
         lines.append(f"{i}. " + " — ".join(p for p in parts if p))
+    if note:
+        lines.append(f"Ghi chú của người duyệt: {note}")
     return "\n".join(lines)
+
+
+# A 23-item reconcile in one message/send timed out at the agentbase gateway
+# mid-LLM-reconcile (HANDOFF: RemoteProtocolError — not auth, not our client
+# timeout). Cap the items per send; groups larger than this are sub-chunked.
+MAX_RECONCILE_ITEMS = 8
+
+
+def _reconcile_payloads(project: str, items: list[dict], note: str = "") -> list[dict]:
+    """Split one reconcile template into one pm_call payload per assignee group
+    (sub-chunked at MAX_RECONCILE_ITEMS), so no single message/send carries a
+    payload big enough to hit the gateway timeout. Always returns ≥1 payload
+    (a single small/empty template stays one send — identical to the old shape).
+    """
+    groups: dict[str, list[dict]] = {}
+    for it in items:
+        groups.setdefault((it.get("assignee") or "").strip().lower(), []).append(it)
+
+    chunks: list[list[dict]] = []
+    for group in groups.values() or [[]]:
+        for i in range(0, max(len(group), 1), MAX_RECONCILE_ITEMS):
+            chunks.append(group[i:i + MAX_RECONCILE_ITEMS])
+
+    return [
+        {
+            "kind": "reconcile",
+            "project": project,
+            "items": chunk,
+            "text": _reconcile_text(project, chunk, note=note),
+        }
+        for chunk in chunks
+    ]
 
 
 def _last_assistant_text(messages: list[dict]) -> str:

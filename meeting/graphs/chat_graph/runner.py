@@ -69,6 +69,8 @@ def _initial_turn_state(
         # reset pm-agent branch state (new message = new pm request)
         "pm_rounds": 0,
         "pm_next_payload": None,
+        "pm_queue": [],
+        "pm_replies": [],
         "pm_last": None,
         "pm_pending": None,
         "pm_route": None,

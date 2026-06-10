@@ -23,6 +23,7 @@ from meeting.graphs.chat_graph.pm import (
     pm_reply,
     route_after_pm_call,
     route_after_pm_error,
+    route_after_pm_reply,
 )
 
 def build_chat_graph(
@@ -88,7 +89,12 @@ def build_chat_graph(
         route_after_pm_error,
         {"pm_call": "pm_call", "save_reply": "save_reply"},
     )
-    g.add_edge("pm_reply", "save_reply")
+    # Chunked reconcile: pm_reply loops back to pm_call while groups remain.
+    g.add_conditional_edges(
+        "pm_reply",
+        route_after_pm_reply,
+        {"pm_call": "pm_call", "save_reply": "save_reply"},
+    )
     g.add_edge("save_reply", END)
 
     return g.compile(checkpointer=checkpointer)
