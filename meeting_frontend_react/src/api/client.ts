@@ -9,6 +9,7 @@ import type {
   CleanResponse,
   MoMJson,
   ProjectSummary,
+  ChatStreamStep,
   ChatTurnResult,
   Voiceprint,
 } from "../types/api";
@@ -231,6 +232,66 @@ export const api = {
       http<ChatTurnResult>(
         "POST", `/api/chat/sessions/${sessionId}/messages`, { text },
       ),
+    // Streaming variant: SSE frames over a POST body. `onStep` fires per
+    // progress event; resolves with the terminal frame mapped to the same
+    // ChatTurnResult envelope as `send` (so callers can share applyResult).
+    sendStream: async (
+      sessionId: string,
+      text: string,
+      onStep: (ev: ChatStreamStep) => void,
+      signal?: AbortSignal,
+    ): Promise<ChatTurnResult> => {
+      const r = await fetch(`/api/chat/sessions/${sessionId}/messages/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+        signal,
+      });
+      if (!r.ok || !r.body) {
+        throw new ApiError(r.status, r.statusText || "stream failed");
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let terminal: ChatTurnResult | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          } catch {
+            continue; // skip malformed frame rather than killing the turn
+          }
+          if (ev.type === "step") {
+            onStep(ev as unknown as ChatStreamStep);
+          } else if (ev.type === "error") {
+            throw new ApiError(500, String(ev.detail ?? "stream error"));
+          } else if (ev.type === "complete") {
+            terminal = {
+              status: "complete",
+              reply: String(ev.reply ?? ""),
+              intent: ev.intent as string | undefined,
+              tool_result: ev.tool_result,
+            };
+          } else if (ev.type === "interrupted") {
+            terminal = ev as unknown as Extract<
+              ChatTurnResult,
+              { status: "interrupted" }
+            >;
+          }
+        }
+      }
+      if (!terminal) throw new ApiError(500, "stream ended without a result");
+      return terminal;
+    },
     // HITL resume hits /pending-actions/{id}/approve|reject (there is no /resume route).
     approve: (
       actionId: string,
