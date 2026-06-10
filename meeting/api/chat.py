@@ -12,19 +12,27 @@ Endpoints:
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import get_session
 from meeting.db import repositories as repo
+from meeting.db.base import AsyncSessionLocal
 from meeting.db.models import PendingAction
-from meeting.graphs import get_checkpointer, run_chat_turn, resume_chat_turn
+from meeting.graphs import (
+    get_checkpointer,
+    resume_chat_turn,
+    run_chat_turn,
+    stream_chat_turn,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -285,6 +293,75 @@ async def send_message(
         "intent": result.get("intent"),
         "tool_result": result.get("tool_result"),
     }
+
+
+def _sse(obj: dict) -> str:
+    """One SSE frame. ensure_ascii=False keeps Vietnamese readable in transit."""
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@router.post("/sessions/{session_id}/messages/stream")
+async def send_message_stream(session_id: str, req: MessageSend):
+    """
+    Streaming variant of POST /messages (SSE).
+
+    Frames (each `data: <json>`):
+        {type:"step", step:"context"|"classify"|"tool_call"|"tool_done"|"pm", ...}
+        {type:"interrupted", pending_action_id, pending_action}   — terminal
+        {type:"complete", reply, intent, tool_result}             — terminal
+        {type:"error", detail}                                    — terminal
+
+    The blocking /messages endpoint stays as-is (tests + fallback transport).
+    """
+    sid = _parse_uuid(session_id)
+
+    async def gen():
+        # Own session: a Depends(get_session) session is torn down BEFORE a
+        # StreamingResponse body runs, so the graph would hit a closed session.
+        # Mirror get_session's commit/rollback contract manually.
+        async with AsyncSessionLocal() as session:
+            try:
+                chat = await repo.get_chat_session(session, sid)
+                if not chat:
+                    yield _sse({"type": "error", "detail": "Session not found"})
+                    return
+                user = await repo.get_or_create_dev_user(session)
+                checkpointer = get_checkpointer()
+
+                async for ev in stream_chat_turn(
+                    session_id=session_id,
+                    user_id=str(user.id),
+                    user_message=req.text,
+                    meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
+                    session=session,
+                    checkpointer=checkpointer,
+                ):
+                    if ev.get("type") != "result":
+                        yield _sse(ev)
+                        continue
+                    result = ev["result"]
+                    if result["status"] == "interrupted":
+                        payload = await _persist_interrupt(session, sid, user, result)
+                        await session.commit()
+                        yield _sse({"type": "interrupted", **payload})
+                    else:
+                        await session.commit()
+                        yield _sse({
+                            "type": "complete",
+                            "reply": result["reply"],
+                            "intent": result.get("intent"),
+                            "tool_result": result.get("tool_result"),
+                        })
+            except Exception as e:
+                logger.exception("stream turn failed for session %s", session_id)
+                await session.rollback()
+                yield _sse({"type": "error", "detail": str(e)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ─── Pending actions (HITL) ───────────────────────────────────────

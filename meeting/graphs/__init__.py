@@ -9,6 +9,7 @@ from meeting.graphs.chat_graph import (
     build_chat_graph,
     run_chat_turn,
     resume_chat_turn,
+    stream_chat_turn,
 )
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "build_chat_graph",
     "run_chat_turn",
     "resume_chat_turn",
+    "stream_chat_turn",
     "get_checkpointer",
     "init_checkpointer",
     "close_checkpointer",
