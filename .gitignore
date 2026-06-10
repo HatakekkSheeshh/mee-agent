@@ -9,3 +9,4 @@ venv
 temp
 .claude/
 .pytest_cache/
+cache/
