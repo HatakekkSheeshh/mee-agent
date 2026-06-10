@@ -158,6 +158,17 @@ def test_system_prompt_steers_recording_scoped_lookup():
     assert "recording" in prompt.lower()
 
 
+def test_system_prompt_forbids_answer_direct_for_recording_scoped():
+    """The answer-direct escape hatch must carve out recording-scoped questions:
+    for 'tóm tắt một phiên / Meeting N / nội dung một recording' the agent MUST
+    read via the tools even if context seems sufficient (force-grounding Task 4)."""
+    prompt = _agent_system_prompt(_initial("tóm tắt Meeting 1"))
+    assert "Meeting N" in prompt
+    # the carve-out names the read tools as mandatory for these questions
+    lower = prompt.lower()
+    assert "tóm tắt một phiên" in lower or "tóm tắt phiên" in lower
+
+
 # ─── loop ─────────────────────────────────────────────────────────────
 
 async def test_recording_scoped_flow(monkeypatch):

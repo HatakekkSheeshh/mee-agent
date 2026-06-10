@@ -84,8 +84,13 @@ def _agent_system_prompt(state: ChatState) -> str:
         "- Tool có side-effect (create_task, send_email) cần người dùng DUYỆT; "
         "cứ gọi khi phù hợp, hệ thống sẽ tự hỏi duyệt.\n"
         "- KHÔNG cần truyền meeting_id — hệ thống tự gắn cuộc họp hiện tại.\n"
-        "- Với câu hỏi THÔNG TIN (hỏi-đáp), khi đã đủ dữ liệu thì trả lời trực tiếp "
-        "(KHÔNG gọi tool). Quy tắc này KHÔNG áp dụng cho yêu cầu tạo task/đồng bộ ở trên."
+        "- Với câu hỏi THÔNG TIN (hỏi-đáp) CHUNG, khi đã đủ dữ liệu thì trả lời "
+        "trực tiếp (KHÔNG gọi tool). NGOẠI LỆ — KHÔNG áp dụng quy tắc trả lời trực "
+        "tiếp này cho: (a) yêu cầu tạo task/đồng bộ ở trên; và (b) câu hỏi gắn với "
+        "MỘT phiên/recording cụ thể (tóm tắt một phiên / Meeting N / hỏi nội dung, "
+        "việc, quyết định của một recording). Với (b) BẮT BUỘC GỌI `list_recordings` "
+        "rồi `recording_mom` để đọc đúng biên bản TRƯỚC khi trả lời — kể cả khi "
+        "ngữ cảnh có sẵn trông như đã đủ; TUYỆT ĐỐI không trả lời từ trí nhớ/tóm tắt cũ."
     )
 
 
