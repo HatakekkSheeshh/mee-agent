@@ -1,26 +1,23 @@
 # Session Handoff — Mee meeting-agent (feat/backend-agents)
 
-**Branch:** `feat/backend-agents` · **Last updated:** 2026-06-10 · **Head:** `b604182`
+**Branch:** `feat/backend-agents` · **Last updated:** 2026-06-10 · **Head:** `908bd5d`
 
 Read this first when resuming. It captures state a fresh session can't infer from git alone.
 
 ## Kickoff message to paste into the new session
 
 > Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md and `docs/superpowers/HANDOFF.md`.
-> Everything through the chat-UI polish is DONE and committed (unpushed): suite **82 green**
+> Everything through the **force-grounding fix** is DONE and committed (unpushed): suite **92 green**
 > (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`), FE builds clean
 > (`cd meeting_frontend_react && npm run build`).
-> NEXT = the **force-grounding fix** for recording-scoped questions —
-> `docs/superpowers/plans/2026-06-10-force-grounding-recording-scoped.md`. This is the *deeper* fix
-> for the confirmed stale-summary bug (clear-chat was only the mitigation). Execute with
-> `superpowers:executing-plans`, inline, TDD, `ECC_GATEGUARD=off`; keep the suite green.
-> Other parked follow-ups (NOT in that plan): create_task **login↔display-name assignee filter** +
-> **recording scoping**; reconcile **per-assignee chunking** (gateway timeout); the un-applied
-> **modal `backdrop-filter` blur** perf fix. All logged below.
+> No active plan. Pick from the parked follow-ups below, or do the live smoke once the blockers
+> clear. Parked: create_task **login↔display-name assignee filter** + **recording scoping**;
+> reconcile **per-assignee chunking** (gateway timeout); the un-applied **modal `backdrop-filter`
+> blur** perf fix; pm_task lifecycle deltas. All logged below.
 
 ## Current state (what's true right now)
 
-- **Suite:** 82 passed (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`). FE
+- **Suite:** 92 passed (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`). FE
   `npm run build` clean.
 - **Backend chat = unified native tool-calling agent** (Path A, gemma). Flow:
   `load_context → classify_intent (binary pm_task|agent) → agent ⇄ agent_tools →
@@ -38,16 +35,28 @@ Read this first when resuming. It captures state a fresh session can't infer fro
 - **Still only unit-tested — never run live through `run_meeting.py`** (psycopg + DB-revision
   blockers, see below). The whole agent/clear-chat path needs a live smoke once unblocked.
 
-## NEXT (planned, not started) — force grounding for recording-scoped questions
+## DONE — force grounding for recording-scoped questions ✅
 
-**Plan:** `docs/superpowers/plans/2026-06-10-force-grounding-recording-scoped.md`.
+**Plan:** `docs/superpowers/plans/2026-06-10-force-grounding-recording-scoped.md` (executed in full).
+Commits `838b28c` → `b9391b2` (+ probe `908bd5d`). The confirmed stale-summary bug (finding below)
+is now fixed at two layers:
 
-The confirmed root-cause bug (finding below): for "tóm tắt phiên/Meeting N" the agent sometimes
-answers with **zero tool calls**, regurgitating a stale prior summary from `recent_messages`,
-because `_agent_system_prompt`'s escape hatch ("khi đã đủ dữ liệu thì trả lời trực tiếp") lets it.
-clear-chat only empties the history; the deeper fix forces a grounding tool call. The plan uses
-`tool_choice="required"` on the first agent turn for recording-scoped/informational questions
-(with a probe that gemma honors it; prompt-only fallback otherwise).
+- **Task 0 (probe):** the MaaS gemma endpoint **honors `tool_choice="required"`** (returns a
+  `tool_calls` message with empty content). Verified by `scripts/probe_tool_choice_required.py`. So
+  the mechanical force shipped as written — no fallback needed.
+- **Task 1/2 — `classify_intent` emits a `grounding` flag** (`"required"|"auto"`, threaded through
+  `ChatState`, defaults `"auto"` when the model omits/garbles it). Content/recording questions →
+  `"required"`; chit-chat / action / pm → `"auto"`.
+- **Task 3 — agent forces a tool on round 0** when `grounding=="required"`: `tool_choice="required"`
+  on the FIRST turn only, `"auto"` thereafter (so the post-tool answer turn finishes → loop still
+  terminates). So gemma MUST read real data before it can answer.
+- **Task 4 — prompt hardening** (`_agent_system_prompt`): narrowed the answer-direct escape hatch to
+  explicitly EXCLUDE recording-scoped questions ("tóm tắt một phiên / Meeting N / nội dung một
+  recording") — MUST call `list_recordings`/`recording_mom` first even if context looks sufficient.
+
+**Residual risk:** still **unit-only** (92 green); never run live through `run_meeting.py` (psycopg +
+DB-revision blockers below). Add a live smoke of "tóm tắt Meeting N" once the backend runs — confirm
+a `tool_calls` line appears before the final answer and the date/content match the real recording.
 
 ## Parked follow-ups (NOT in the next plan)
 
@@ -137,6 +146,9 @@ trả lời trực tiếp (KHÔNG gọi tool)"*. A fresh session grounds correct
 7. Chat-UI polish: branded green clear-confirm dialog; dropped tool-description bubble on interrupt;
    native-title tooltip fix; "action items" → "Việc cần làm"/"To-dos"; welcome-banner refactor
    (copy + icon-chip layout + data-driven + a11y); removed banner pulsing dot.
+8. Force-grounding fix (plan 2026-06-10): probe confirmed gemma honors `tool_choice="required"`;
+   classify emits a `grounding` flag; agent forces a tool on round 0 for recording-scoped questions;
+   prompt escape-hatch narrowed. Suite 82 → 92.
 
 ## Reference artifacts (committed, self-contained)
 
