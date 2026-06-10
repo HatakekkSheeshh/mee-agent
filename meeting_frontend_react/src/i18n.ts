@@ -62,7 +62,7 @@ export const STRINGS = {
     "agent.feat1Title": "Hỏi & tóm tắt",
     "agent.feat1Desc": "Biên bản, quyết định và việc cần làm của cuộc họp.",
     "agent.feat2Title": "Quản lý công việc",
-    "agent.feat2Desc": "Tạo và đối chiếu issue trên Redmine qua pm-agent.",
+    "agent.feat2Desc": "Tạo và đối chiếu issue trên Redmine qua PM Agent.",
     "agent.feat3Title": "Thao tác",
     "agent.feat3Desc": "Gửi email hoặc tạo task ngay trong hội thoại.",
     "agent.bannerNote": "Mọi thao tác làm thay đổi dữ liệu sẽ xin bạn duyệt trước khi thực hiện.",
