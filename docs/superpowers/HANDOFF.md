@@ -58,6 +58,36 @@ is now fixed at two layers:
 DB-revision blockers below). Add a live smoke of "tóm tắt Meeting N" once the backend runs — confirm
 a `tool_calls` line appears before the final answer and the date/content match the real recording.
 
+## DONE — chat UX streaming + HITL card polish ✅ (2026-06-10, branch feat/mail-tool)
+
+Spec: `specs/2026-06-10-chat-ux-streaming-design.md`. Commits `3e17f4f…85c7a50`. Suite **101
+green**, FE build clean.
+
+- **SSE streaming turn**: `POST /api/chat/sessions/{id}/messages/stream` streams step events
+  (`runner.stream_chat_turn` + pure `update_to_events` mapper — 9 unit tests) then the same
+  complete/interrupted envelope. The endpoint opens its OWN `AsyncSessionLocal` (a
+  `Depends(get_session)` session is torn down before a StreamingResponse body runs). Blocking
+  `/messages` unchanged; FE falls back to it on 404/405.
+- **FE**: live activity trace while busy (i18n `chat.step.*` + `tool.*` labels), trace collapses
+  into the reply as `<details>`; stop button (AbortController); `ActionArgsCard` = generic
+  editable card for local side-effect tools (edits → `edited_args`; send_email/schedule_meeting
+  ready); reject/stop note lines; copy button on agent replies; modal backdrop blur removed.
+- **Needs live SSE smoke** once the backend runs (same blocker list below): confirm step frames
+  arrive incrementally (not buffered) through the Vite proxy, and stop button mid-turn.
+
+## NEXT (designed, not built) — Microsoft Graph tool suite
+
+Design conversation done this session (spec not yet written): one shared `meeting/services/graph/`
+layer (thin httpx client; NO msgraph-sdk) + two seams — `GraphTokenProvider` (Dev → logs would-be
+request now; Delegated device-code once an Azure app exists; O365 web later) and
+`RecipientResolver` (placeholder now; `transcript-flow-improvements` will supply name→email).
+Tools: real `send_email` + new `schedule_meeting` (findMeetingTimes + create event with Teams
+link; room = manually-edited placeholder on the card — avoids admin-gated `Place.Read.All`).
+Key facts: VNG tenant id `7c112a6e-10e2-4e09-afc4-2e37bc60d821`; `TOKEN_AUTHEN_PM_AGENT` is the
+pm-agent key, NOT a Graph cred; findMeetingTimes + `/me/onlineMeetings` are delegated-only;
+all four needed delegated scopes are user-consentable (no admin) IF the user can register an
+Azure app — unverified.
+
 ## Parked follow-ups (NOT in the next plan)
 
 - **create_task assignee filter is display-name only** — items carry `pic="Hiếu"`; "tạo task cho
