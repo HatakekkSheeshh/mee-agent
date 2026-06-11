@@ -64,7 +64,7 @@ def _existing_hash(project_id: str) -> str | None:
 
 
 async def sync_project(
-    session: AsyncSession, meeting_id, *, dry_run: bool = False
+    session: AsyncSession, meeting_id, *, dry_run: bool = False, force: bool = False
 ) -> dict:
     """Sync ONE project. Returns {"action", "hash"?, "text"?}.
 
@@ -103,6 +103,10 @@ async def sync_project(
     def upsert(project_id, text, source_hash):
         return upsert_project_record(project_id, text, source_hash, title=title)
 
+    # force → treat as never-synced so it always re-distills (e.g. after a prompt
+    # tweak that doesn't bump PROJECTION_VERSION).
+    get_existing_hash = (lambda _pid: None) if force else _existing_hash
+
     # sync_one_project is pure-sync but its injected seams do network + LLM I/O —
     # offload the whole thing to a thread to keep the caller's loop responsive.
     return await asyncio.to_thread(
@@ -110,7 +114,7 @@ async def sync_project(
         project_id=pid,
         project_summary=project_summary,
         moms=moms,
-        get_existing_hash=_existing_hash,
+        get_existing_hash=get_existing_hash,
         distill=distill,
         upsert_record=upsert,
         dry_run=dry_run,

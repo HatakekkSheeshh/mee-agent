@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("sync_memory")
 
 
-async def main(dry_run: bool) -> int:
+async def main(dry_run: bool, force: bool = False) -> int:
     counts: dict[str, int] = {}
 
     async with AsyncSessionLocal() as session:
@@ -46,12 +46,12 @@ async def main(dry_run: bool) -> int:
             select(Meeting.id, Meeting.title).where(Meeting.deleted_at.is_(None))
         )).all()
         logger.info(f"{len(rows)} non-deleted project(s) to consider"
-                    f"{' (DRY-RUN)' if dry_run else ''}")
+                    f"{' (DRY-RUN)' if dry_run else ''}{' (FORCE)' if force else ''}")
 
         for mid, title in rows:
             label = f"[{mid}] {title!r}"
             try:
-                result = await sync_project(session, mid, dry_run=dry_run)
+                result = await sync_project(session, mid, dry_run=dry_run, force=force)
             except Exception as e:  # noqa: BLE001 — one project must not abort the run
                 counts["error"] = counts.get("error", 0) + 1
                 logger.error(f"{label}: FAILED — {e}")
@@ -84,5 +84,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Sync Postgres project state → AgentBase Memory")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print distilled text + hash for changed projects; write nothing.")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-distill every project even if unchanged (ignores the stored hash).")
     args = ap.parse_args()
-    sys.exit(asyncio.run(main(args.dry_run)) or 0)
+    sys.exit(asyncio.run(main(args.dry_run, args.force)) or 0)

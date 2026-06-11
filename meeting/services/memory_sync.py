@@ -35,13 +35,21 @@ Dữ liệu nguồn (JSON):
 Trả về văn bản trạng thái thuần (không JSON, không markdown thừa)."""
 
 
+# Bump when the PROJECTION FORMAT changes (not the source data) — e.g. adding the
+# per-session bullets. Folded into the hash so every record re-syncs once on the
+# next run even though summary/moms are unchanged. History:
+#   1 = aggregate-only;  2 = aggregate + "Theo từng phiên" per-session bullets.
+PROJECTION_VERSION = 2
+
+
 def canonical_source_hash(project_summary: dict | None, moms: list[dict | None]) -> str:
-    """Stable sha256 hex of the distillation inputs.
+    """Stable sha256 hex of the distillation inputs + projection version.
 
     Key-order independent (sort_keys), None-safe. Two equal logical inputs hash
-    equal; any content change flips the hash → drives change detection.
+    equal; any source change OR a PROJECTION_VERSION bump flips the hash → drives
+    change detection (so a format change invalidates stale records automatically).
     """
-    payload = {"summary": project_summary, "moms": list(moms)}
+    payload = {"v": PROJECTION_VERSION, "summary": project_summary, "moms": list(moms)}
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
