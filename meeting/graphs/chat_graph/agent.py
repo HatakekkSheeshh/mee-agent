@@ -272,10 +272,20 @@ def make_agent_approve(*, tools=None):
         """
         pending = state.get("pending_tool") or {}
         spec = ts.get_tool(pending.get("name", "")) or {}
+        msgs = state.get("agent_messages") or []
+        # Text the model attaches to a tool_call is unreliable narration — gemma
+        # often claims the action is ALREADY done ("Đã gửi email ... rồi nhé!")
+        # before approval/execution. Never surface that as the card's rationale:
+        # only a standalone (non-tool-call) assistant message qualifies, else
+        # empty → the FE shows just the card, no redundant bubble.
+        last_assistant = next(
+            (m for m in reversed(msgs) if m.get("role") == "assistant"), {}
+        )
+        rationale = "" if last_assistant.get("tool_calls") else _last_assistant_text(msgs)
         decision = interrupt({
             "tool": pending.get("name"),
             "args": pending.get("args") or {},
-            "rationale": _last_assistant_text(state.get("agent_messages") or []),
+            "rationale": rationale,
             "description": spec.get("description", ""),
         })
         logger.info(f"[Node agent_approve] RESUMED decision={decision}")
