@@ -80,7 +80,10 @@ async def sync_project(
     if not meeting:
         return {"action": "missing"}
 
-    recordings = sorted((meeting.recordings or []), key=lambda r: str(r.started_at or ""))
+    # Same deterministic key list_recordings uses, so the memory roster and the
+    # live tool order sessions identically (started_at, then id as a stable
+    # tiebreak — recording_id is random and never implies order).
+    recordings = sorted((meeting.recordings or []), key=repo.recording_sort_key)
     moms = [r.mom_json for r in recordings]
     client, model = _llm_client()
     title = meeting.title

@@ -159,6 +159,8 @@ def test_system_prompt_steers_to_recording_crawl_tools():
     assert "list_recordings" in prompt
     assert "recording_mom" in prompt
     assert "retrieve" not in prompt
+    # the agent must not infer order/identity from label numbers or recording_id
+    assert "ngẫu nhiên" in prompt
 
 
 def test_system_prompt_keeps_action_tools_and_memory_grounding():

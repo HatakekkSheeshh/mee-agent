@@ -497,6 +497,19 @@ async def get_mom_action_items(
     return items
 
 
+def recording_sort_key(rec):
+    """Deterministic chronological order for a meeting's recordings.
+
+    `started_at` is the recency signal; `id` is only a STABLE TIEBREAKER so equal
+    or duplicate timestamps don't reorder between runs. recording_id is a random
+    UUID that does NOT encode order — it must never be the primary sort key, and
+    callers must never infer sequence/position from it or from label numbers.
+    Shared by list_recordings (live tool) and the memory-sync roster so both
+    present sessions in the SAME order.
+    """
+    return (rec.started_at or datetime.min, str(rec.id))
+
+
 async def list_recordings(
     session: AsyncSession, meeting_id: uuid.UUID
 ) -> list[dict]:
@@ -511,10 +524,7 @@ async def list_recordings(
     meeting = await get_meeting(session, meeting_id)
     if not meeting:
         return []
-    recordings = sorted(
-        (meeting.recordings or []),
-        key=lambda r: r.started_at or datetime.min,
-    )
+    recordings = sorted((meeting.recordings or []), key=recording_sort_key)
     out: list[dict] = []
     for rec in recordings:
         if rec.date:

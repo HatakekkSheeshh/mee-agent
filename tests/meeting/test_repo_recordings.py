@@ -50,6 +50,17 @@ async def test_list_recordings_maps_label_date_has_mom(monkeypatch):
     assert out[1]["date"] == "2026-01-05"
 
 
+def test_recording_sort_key_breaks_started_at_ties_by_id_deterministically():
+    # Equal started_at must NOT reorder between runs: id (random UUID) is a stable
+    # tiebreak only, never an order signal. Same input → same order regardless of
+    # the list's incoming arrangement.
+    ts = datetime(2026, 1, 2, 9, 0)
+    a = SimpleNamespace(id=uuid.UUID("00000000-0000-0000-0000-000000000001"), started_at=ts)
+    b = SimpleNamespace(id=uuid.UUID("00000000-0000-0000-0000-000000000002"), started_at=ts)
+    assert sorted([b, a], key=repo.recording_sort_key) == [a, b]
+    assert sorted([a, b], key=repo.recording_sort_key) == [a, b]
+
+
 async def test_list_recordings_no_meeting_returns_empty(monkeypatch):
     async def fake_get_meeting(session, mid):
         return None
