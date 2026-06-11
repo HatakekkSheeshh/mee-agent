@@ -300,14 +300,12 @@ async def test_agent_max_rounds_cap(monkeypatch):
     assert len(llm.calls) == MAX_AGENT_ROUNDS
 
 
-async def test_agent_forces_tool_on_round0_when_grounding_required(monkeypatch):
-    """grounding='required' → round 0 LLM call uses tool_choice='required', and the
-    post-tool turn drops back to 'auto' so the loop can finish."""
-    ft = _install(monkeypatch, {"retrieve": {"status": "ok", "chunks": [{"text": "03/06"}]}})
-    llm = FakeLLM([
-        tool([{"id": "c1", "name": "retrieve", "arguments": '{"query": "phiên 1"}'}]),
-        text("Phiên 1 họp ngày 03/06."),
-    ])
+async def test_agent_grounding_required_no_longer_forces_tool(monkeypatch):
+    """Postgres grounding tools are DETACHED — even grounding='required' must NOT
+    force a tool call (forcing would only hit the remaining action tools). The
+    agent grounds on injected project_memory and answers directly."""
+    ft = _install(monkeypatch)
+    llm = FakeLLM([text("Phiên 1 họp ngày 03/06.")])
     graph = _build(llm, MemorySaver(), ft)
     cfg = _config("grounded")
 
@@ -316,11 +314,7 @@ async def test_agent_forces_tool_on_round0_when_grounding_required(monkeypatch):
     result = await graph.ainvoke(init, cfg)
 
     assert not await _interrupted(graph, cfg)
-    # round 0 forced, round 1 back to auto
-    assert llm.calls[0]["tool_choice"] == "required"
-    assert llm.calls[1]["tool_choice"] == "auto"
-    # a read tool actually ran before the final reply (the whole point of grounding)
-    assert ft.calls[0]["name"] == "retrieve"
+    assert llm.calls[0]["tool_choice"] == "auto"   # never forced anymore
     assert "03/06" in result["final_reply"]
 
 

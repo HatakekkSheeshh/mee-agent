@@ -37,11 +37,22 @@ logger = logging.getLogger(__name__)
 # re-read the standing user instruction from the checkpoint and re-attempt the action.
 REJECT_REPLY = "Đã hủy. Tui hong tạo task nữa."
 
+# Postgres-backed meeting-data grounding tools, DETACHED from the agent's surface:
+# the agent grounds on the distilled AgentBase project_memory injected at
+# load_context, not live Postgres reads. The tool modules stay registered (still
+# callable / unit-tested); they're just not offered to the LLM. Re-attach by
+# clearing this set.
+DETACHED_TOOLS = frozenset({"retrieve", "list_recordings", "recording_mom", "search_transcript"})
+
+
 def _openai_tools(*, tools=_services) -> list[dict]:
     """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent
-    never supplies it; we inject resolved_meeting_id server-side)."""
+    never supplies it; we inject resolved_meeting_id server-side). Tools in
+    DETACHED_TOOLS are omitted so the LLM can't call them."""
     out = []
     for s in tools.list_tools():
+        if s["name"] in DETACHED_TOOLS:
+            continue
         schema = json.loads(json.dumps(s.get("schema") or {"type": "object", "properties": {}}))
         props = schema.get("properties") or {}
         props.pop("meeting_id", None)
@@ -142,17 +153,13 @@ def make_agent(llm=None, *, tools=None):
                 or "Mình đã thử nhiều bước nhưng chưa hoàn tất được, bạn thử lại nhé.",
             }
 
-        # Force grounding: on the FIRST turn of a content/recording question
-        # (grounding="required"), use tool_choice="required" so gemma MUST emit a
-        # tool call instead of regurgitating a stale summary from recent_messages.
-        # Only round 0 is forced — round ≥1 stays "auto" so the post-tool answer
-        # turn can finish and the loop terminates. Verified Task 0: the MaaS gemma
-        # endpoint honors tool_choice="required".
-        tool_choice = (
-            "required"
-            if state.get("grounding") == "required" and rounds == 0
-            else "auto"
-        )
+        # Grounding tools (retrieve/recording_mom/list_recordings) are detached —
+        # the agent grounds on the distilled project_memory injected at
+        # load_context. Never force a tool call (the only tools left are
+        # create_task/switch_meeting/send_email — forcing those would be wrong);
+        # always "auto" so the model answers from memory or calls an action tool
+        # when the user actually asks for one.
+        tool_choice = "auto"
         client = llm or _llm_client()
         try:
             resp = client.chat.completions.create(

@@ -33,10 +33,12 @@ def test_prompt_includes_project_memory_when_present():
         "meeting_context": {"title": "AI Innovation Project"},
         "project_memory": "Giai đoạn: tối ưu hóa. Blocker: API upload lỗi.",
     })
-    assert "Trạng thái project" in prompt          # orientation header
+    assert "Trạng thái project" in prompt          # grounding-source header
     assert "Blocker: API upload lỗi." in prompt    # the recalled content
-    # grounding rules must still be present — memory orients, doesn't replace tools
-    assert "recording_mom" in prompt
+    # project_memory is the grounding source; action tools remain available
+    assert "create_task" in prompt
+    # the detached Postgres grounding tools must NOT be referenced anymore
+    assert "recording_mom" not in prompt and "retrieve" not in prompt
 
 
 def test_prompt_omits_memory_block_when_absent():

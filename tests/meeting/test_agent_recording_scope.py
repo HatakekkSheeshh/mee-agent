@@ -150,23 +150,23 @@ async def _interrupted(graph, config):
 
 # ─── prompt ───────────────────────────────────────────────────────────
 
-def test_system_prompt_steers_recording_scoped_lookup():
+def test_system_prompt_no_longer_steers_to_detached_read_tools():
+    """The Postgres grounding tools are DETACHED — the prompt must not instruct
+    the agent to call them anymore (it grounds on project_memory instead)."""
     prompt = _agent_system_prompt(_initial("việc của Hiếu trong Meeting 1"))
-    assert "list_recordings" in prompt
-    assert "recording_mom" in prompt
-    # must warn against cross-recording mis-attribution (Option C mitigation)
-    assert "recording" in prompt.lower()
+    assert "list_recordings" not in prompt
+    assert "recording_mom" not in prompt
+    assert "retrieve" not in prompt
 
 
-def test_system_prompt_forbids_answer_direct_for_recording_scoped():
-    """The answer-direct escape hatch must carve out recording-scoped questions:
-    for 'tóm tắt một phiên / Meeting N / nội dung một recording' the agent MUST
-    read via the tools even if context seems sufficient (force-grounding Task 4)."""
-    prompt = _agent_system_prompt(_initial("tóm tắt Meeting 1"))
-    assert "Meeting N" in prompt
-    # the carve-out names the read tools as mandatory for these questions
-    lower = prompt.lower()
-    assert "tóm tắt một phiên" in lower or "tóm tắt phiên" in lower
+def test_system_prompt_keeps_action_tools_and_memory_grounding():
+    """Action tools survive; the agent grounds on the distilled project state."""
+    state = _initial("tóm tắt Meeting 1")
+    state["project_memory"] = "Giai đoạn: tối ưu. Blocker: API lỗi."
+    prompt = _agent_system_prompt(state)
+    assert "create_task" in prompt
+    assert "Trạng thái project" in prompt        # grounding source injected
+    assert "Blocker: API lỗi." in prompt
 
 
 # ─── loop ─────────────────────────────────────────────────────────────
