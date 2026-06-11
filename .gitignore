@@ -6,3 +6,4 @@ __pycache__/
 .agentbase/
 .dockerignore
 temp
+slides

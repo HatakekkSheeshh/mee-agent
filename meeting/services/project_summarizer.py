@@ -147,7 +147,11 @@ async def generate_project_summary(
         timeline_text=timeline_text,
     )
 
-    llm_out = _call_llm_json(prompt, max_tokens=600)
+    # Sync OpenAI SDK call → wrap in thread to keep FastAPI event loop free
+    # (otherwise project-summary generation blocks every other request for
+    # the duration of the LLM run — sidebar fetches pile up pending).
+    import asyncio as _aio
+    llm_out = await _aio.to_thread(_call_llm_json, prompt, 600)
     narrative = llm_out.get("narrative", "") if "error" not in llm_out else ""
     if "error" in llm_out:
         logger.warning(f"Narrative LLM failed: {llm_out['error']}. Returning timeline only.")

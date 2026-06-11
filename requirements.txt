@@ -1,3 +1,4 @@
+# numpy<2.0,>=1.26.4
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
@@ -18,3 +19,13 @@ alembic>=1.13.0
 langgraph>=0.2.50
 langgraph-checkpoint-postgres>=2.0.0
 pgvector
+
+# === Celery + RabbitMQ (background MoM gen) ===
+celery>=5.3
+# `librabbitmq` is the fast C-based AMQP client. Falls back to py-amqp on
+# platforms that don't compile (e.g. Alpine) — Celery handles transparently.
+celery[librabbitmq]>=5.3
+# Dev-time only: watchmedo (from watchdog) wraps the Celery worker in
+# run_meeting.py so it auto-restarts when meeting/*.py changes.
+# Celery doesn't pick up new @task definitions until the process restarts.
+watchdog>=4.0

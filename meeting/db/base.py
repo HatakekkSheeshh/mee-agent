@@ -10,12 +10,13 @@ Usage in FastAPI:
 import os
 from typing import AsyncIterator
 
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -69,3 +70,45 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+# ─── Sync engine (for Celery tasks) ─────────────────────────────────
+#
+# Celery workers run in a sync world. Using async SQLAlchemy from inside
+# Celery means wrapping every call in `asyncio.run()`, which creates a
+# fresh event loop per task. The async connection pool's connections
+# get bound to that loop and become unusable for the next task — leading
+# to the recurring "Future attached to a different event loop" errors.
+#
+# This sync engine sidesteps the issue entirely: psycopg2 is fully
+# sync, no event loop involvement, connections in the pool can be
+# reused freely across Celery tasks. FastAPI keeps using the async
+# engine above for HTTP concurrency.
+
+def _to_sync_url(url: str) -> str:
+    """Strip any async driver hint so SQLAlchemy picks psycopg2."""
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if url.startswith("postgresql+psycopg://"):
+        return url.replace("postgresql+psycopg://", "postgresql://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
+SYNC_DATABASE_URL = _to_sync_url(DATABASE_URL)
+
+sync_engine = create_engine(
+    SYNC_DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+)
+
+SyncSessionLocal = sessionmaker(
+    bind=sync_engine,
+    class_=Session,
+    expire_on_commit=False,
+    autoflush=False,
+)
