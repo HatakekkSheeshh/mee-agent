@@ -145,13 +145,19 @@ def save_meeting_events(session_id: str, notes: dict, transcript: str) -> None:
 
 # ── Pure helpers (network-free, unit-tested) ────────────────────────────────
 
-def build_project_record_text(project_id: str, source_hash: str, state_text: str) -> str:
+def build_project_record_text(
+    project_id: str, source_hash: str, state_text: str, *, title: str | None = None
+) -> str:
     """Embed the change-detection marker as the record's first line.
 
     AgentBase records have no metadata field, so the source_hash rides inside
-    the text. `parse_project_marker` is the inverse.
+    the text. `parse_project_marker` is the inverse. An optional `title` is added
+    as a deterministic header after the marker — the LLM echoes the project name
+    inconsistently, and a stable title materially improves semantic recall.
     """
-    return f"[{SYNC_MARKER} project={project_id} hash={source_hash}]\n{state_text}"
+    marker = f"[{SYNC_MARKER} project={project_id} hash={source_hash}]"
+    body = f"# {title}\n\n{state_text}" if title else state_text
+    return f"{marker}\n{body}"
 
 
 def parse_project_marker(memory_text: str | None) -> dict | None:
@@ -239,6 +245,7 @@ def upsert_project_record(
     text: str,
     source_hash: str,
     *,
+    title: str | None = None,
     memory_id: str | None = None,
     actor_id: str = DEFAULT_ACTOR_ID,
     token: str | None = None,
@@ -246,7 +253,8 @@ def upsert_project_record(
 ) -> object:
     """Insert one project-state record (insert-only; DELETE is denied for our SA).
 
-    The record text carries the marker line so the next sync can compare hashes.
+    The record text carries the marker line so the next sync can compare hashes,
+    and a deterministic `# {title}` header for recall.
     """
     memory_id = memory_id or os.getenv("MEMORY_ID", "")
     if not memory_id:
@@ -257,5 +265,5 @@ def upsert_project_record(
         f"{_MEMORY_BASE}/memories/{memory_id}/memory-records:insert-directly"
         f"?namespace={ns}"
     )
-    record_text = build_project_record_text(project_id, source_hash, text)
+    record_text = build_project_record_text(project_id, source_hash, text, title=title)
     return call("POST", url, {"memoryRecords": [record_text]}, token)

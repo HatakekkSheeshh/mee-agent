@@ -37,6 +37,14 @@ def test_parse_marker_returns_none_for_unmarked_text():
     assert parse_project_marker(None) is None
 
 
+def test_build_record_text_with_title_adds_header_without_breaking_marker():
+    text = build_project_record_text("p1", "h1", "state body", title="AI Innovation Project")
+    # deterministic title header improves recall
+    assert "# AI Innovation Project" in text
+    # marker line stays first and parseable (hash unaffected by the header)
+    assert parse_project_marker(text) == {"project_id": "p1", "hash": "h1"}
+
+
 # ── select latest (newest-wins) ──────────────────────────────────────────────
 
 def test_select_latest_picks_newest_matching_project():

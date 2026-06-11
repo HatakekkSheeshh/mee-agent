@@ -46,12 +46,17 @@ logger = logging.getLogger("sync_memory")
 
 
 def _llm_client():
-    """Per-service OpenAI client (CLAUDE.md: no shared singleton)."""
+    """Per-service OpenAI client (CLAUDE.md: no shared singleton).
+
+    Uses the general LLM_* config (same vars as note_generator / the chat agent).
+    The dedicated gemma-4-31b-it MaaS deployment 403s for our key, so distillation
+    runs on whatever the general LLM_BASE_URL/LLM_MODEL point at.
+    """
     client = OpenAI(
         api_key=os.getenv("LLM_API_KEY", ""),
         base_url=os.getenv("LLM_BASE_URL", "https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1"),
     )
-    model = os.getenv("LLM_MODEL", "Qwen/Qwen3-8B")
+    model = os.getenv("LLM_MODEL", "google/gemma-4-31b-it")
     return client, model
 
 
@@ -70,6 +75,15 @@ async def main(dry_run: bool) -> int:
     def distill(summary, moms):
         return distill_project_state(summary, moms, client=client, model=model)
 
+    # Per-project title is added deterministically to the record body (the LLM
+    # echoes the project name inconsistently). Map id→title for the upsert wrapper.
+    title_by_id: dict[str, str] = {}
+
+    def upsert(project_id, text, source_hash):
+        return upsert_project_record(
+            project_id, text, source_hash, title=title_by_id.get(project_id)
+        )
+
     counts = {"sync": 0, "skip": 0, "empty": 0, "error": 0}
 
     async with AsyncSessionLocal() as session:
@@ -83,6 +97,7 @@ async def main(dry_run: bool) -> int:
 
         for m in meetings:
             pid = str(m.id)
+            title_by_id[pid] = m.title
             recordings = sorted(
                 (m.recordings or []),
                 key=lambda r: str(r.started_at or ""),
@@ -95,7 +110,7 @@ async def main(dry_run: bool) -> int:
                     moms=moms,
                     get_existing_hash=_existing_hash,
                     distill=distill,
-                    upsert_record=upsert_project_record,
+                    upsert_record=upsert,
                     dry_run=dry_run,
                 )
             except Exception as e:  # noqa: BLE001 — one project must not abort the run
