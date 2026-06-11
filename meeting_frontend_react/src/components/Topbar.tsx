@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { Dropdown, useDropdown } from "./Dropdown";
 import { VoiceprintsModal } from "./VoiceprintsModal";
+import { api } from "../api/client";
 
 export function Topbar() {
   const { theme, setTheme, toggleChat, chatOpen, toggleSidebar, lang, setLang, t } = useApp();
@@ -213,12 +214,21 @@ export function Topbar() {
         <button
           className="dd-item danger"
           type="button"
-          onClick={() => {
+          onClick={async () => {
             avatar.close();
-            if (confirm(t("avatar.signOut") + "?")) {
-              localStorage.clear();
-              location.reload();
+            if (!confirm(t("avatar.signOut") + "?")) return;
+            // Clear server-side session cookie FIRST so the page below
+            // lands on /auth/me → 401 → landing. Without this we'd wipe
+            // localStorage but keep the cookie and bounce right back in.
+            try {
+              await api.auth.logout();
+            } catch {
+              /* ignore — best-effort; still clear local + redirect */
             }
+            localStorage.clear();
+            // Hard redirect (not Router) so AppProvider unmounts cleanly
+            // and the next mount hits /auth/me fresh from the server.
+            location.href = "/";
           }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

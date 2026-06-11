@@ -50,6 +50,11 @@ export interface Recording {
   segment_count: number;
   mom_json?: MoMJson | null;
   has_clean?: boolean;
+  /** Cluster ids that have a stored 3s voice sample on disk. Empty/missing
+   * means the recording was diarized before sample extraction or pyannote
+   * couldn't slice usable clips. SpeakerMapper shows a play button only
+   * for clusters present in this list. */
+  speaker_samples?: string[];
 }
 
 export interface MeetingDetail extends Meeting {
@@ -125,7 +130,10 @@ export interface RecordingTranscript {
 export interface CleanResponse {
   recording_id: string;
   cached: boolean;
-  clean_segments: { speaker?: string; text: string; tags?: string[] }[];
+  /** Populated only on cache hit (cached=true) OR inline fallback path
+   * (when RabbitMQ unreachable). When the cleaner is dispatched to Celery
+   * this is empty — FE polls `task_id` and re-fetches /clean on SUCCESS. */
+  clean_segments?: { speaker?: string; text: string; tags?: string[] }[];
   /** LLM-inferred cluster → name mapping. Verified entries (voice-matched)
    * are listed in `pre_mapped_clusters`. */
   cluster_mapping?: Record<string, string>;
@@ -137,6 +145,11 @@ export interface CleanResponse {
   /** User-edited HTML (TipTap output) if the user has touched this transcript. */
   edited_html?: string | null;
   edited_text?: string | null;
+  /** Set when the cleaner was dispatched to Celery. FE polls /api/tasks/{id}
+   * and re-calls /clean on SUCCESS (which then hits the DB cache). */
+  task_id?: string;
+  status?: "queued" | "running" | "done";
+  mode?: "celery" | "inline";
 }
 
 // ─── Voiceprints (zero-shot speaker ID) ───────────────────────────
