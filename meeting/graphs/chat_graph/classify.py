@@ -29,8 +29,17 @@ def make_classify_intent(llm=None):
                 ],
                 max_tokens=64,
                 timeout=60,
+                # Reasoning models (e.g. minimax-m2.5) otherwise burn max_tokens on
+                # <think> and return empty content — disable it for this tiny task.
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
-            raw = resp.choices[0].message.content.strip()
+            # content can be None (empty/refused/all-reasoning) — guard before strip.
+            raw = (resp.choices[0].message.content or "").strip()
+            if not raw:
+                logger.warning(
+                    "[Node classify_intent] empty content from model — defaulting to agent/auto"
+                )
+                return {"intent": "agent", "grounding": "auto"}
             # Strip code fences if any
             if "```" in raw:
                 raw = raw.split("```")[1]
