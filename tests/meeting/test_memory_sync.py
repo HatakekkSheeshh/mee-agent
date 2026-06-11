@@ -35,8 +35,18 @@ def test_session_bullets_formats_decisions_actions_blockers():
     assert "Blocker: thiếu API key (bởi An)" in out
 
 
-def test_session_bullets_skips_empty_sessions_and_returns_blank():
-    assert build_session_bullets([{"label": "X", "date": None, "mom": {}}]) == ""
+def test_session_bullets_lists_itemless_session_with_placeholder():
+    # Completeness: a session with no decisions/actions/blockers must still appear
+    # in the roster (header + placeholder) so the agent knows it EXISTS and can
+    # crawl it via recording_mom instead of denying it.
+    out = build_session_bullets([
+        {"label": "Meeting 3", "date": "2026-06-04T09:00:00+00:00", "mom": {}},
+    ])
+    assert "### Meeting 3 (2026-06-04)" in out
+    assert "chưa ghi nhận" in out
+
+
+def test_session_bullets_empty_list_returns_blank():
     assert build_session_bullets([]) == ""
 
 
@@ -64,11 +74,14 @@ def test_session_bullets_no_marker_when_within_window():
     assert out.count("###") == 3
 
 
-def test_session_bullets_window_counts_only_content_sessions():
-    # Empty sessions don't consume the window or trigger a (misleading) marker.
-    sessions = [{"label": "Trống", "date": None, "mom": {}}] + [_session(n) for n in (4, 5)]
+def test_session_bullets_window_counts_all_sessions_including_itemless():
+    # Itemless sessions are part of the roster and consume the recency window too,
+    # so the oldest (here "Trống") collapses into the marker.
+    sessions = [{"label": "Trống", "date": "2026-06-01T09:00:00+00:00", "mom": {}}] \
+        + [_session(n) for n in (4, 5)]
     out = build_session_bullets(sessions, window=2)
-    assert "phiên cũ hơn" not in out
+    assert "### Trống" not in out
+    assert "1 phiên cũ hơn" in out
     assert "### Phiên 4" in out and "### Phiên 5" in out
 
 

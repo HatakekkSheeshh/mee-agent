@@ -37,8 +37,8 @@ def test_prompt_includes_project_memory_when_present():
     assert "Blocker: API upload lỗi." in prompt    # the recalled content
     # project_memory is the grounding source; action tools remain available
     assert "create_task" in prompt
-    # the detached Postgres grounding tools must NOT be referenced anymore
-    assert "recording_mom" not in prompt and "retrieve" not in prompt
+    # retrieve (heavy RAG) stays detached — memory replaces it for Q&A grounding
+    assert "retrieve" not in prompt
 
 
 def test_prompt_omits_memory_block_when_absent():

@@ -39,8 +39,9 @@ Trả về văn bản trạng thái thuần (không JSON, không markdown thừa
 # per-session bullets. Folded into the hash so every record re-syncs once on the
 # next run even though summary/moms are unchanged. History:
 #   1 = aggregate-only;  2 = aggregate + "Theo từng phiên" per-session bullets;
-#   3 = bullets recency-windowed (only the most recent sessions, older collapsed).
-PROJECTION_VERSION = 3
+#   3 = bullets recency-windowed (only the most recent sessions, older collapsed);
+#   4 = roster complete — itemless sessions listed too (placeholder) so none vanish.
+PROJECTION_VERSION = 4
 
 # Recency guard: keep detailed bullets for only the most recent N sessions so the
 # record (re-injected into the agent prompt on EVERY chat turn) doesn't grow
@@ -94,8 +95,6 @@ def build_session_bullets(
         decisions = _mom_texts(mom.get("decisions"))
         blockers = _mom_texts(mom.get("blockers"))
         action_items = [ai for ai in (mom.get("action_items") or []) if isinstance(ai, dict) and ai.get("item")]
-        if not (decisions or blockers or action_items):
-            continue
         date = (s.get("date") or "")[:10]
         header = f"### {s.get('label') or 'Phiên họp'}" + (f" ({date})" if date else "")
         lines = [header]
@@ -110,6 +109,11 @@ def build_session_bullets(
             lines.append(seg)
         if blockers:
             lines.append("- Blocker: " + "; ".join(blockers))
+        if len(lines) == 1:
+            # No decisions/actions/blockers — still list the session (roster
+            # completeness) so the agent knows it exists and can crawl it via
+            # recording_mom instead of denying it.
+            lines.append("- (chưa ghi nhận quyết định/việc/blocker)")
         blocks.append("\n".join(lines))
     if not blocks:
         return ""

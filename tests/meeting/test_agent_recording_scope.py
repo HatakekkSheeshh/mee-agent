@@ -150,13 +150,14 @@ async def _interrupted(graph, config):
 
 # ─── prompt ───────────────────────────────────────────────────────────
 
-def test_system_prompt_steers_to_list_recordings_for_per_recording_scoping():
-    """list_recordings is RE-ATTACHED so create_task can target ONE recording
-    (the memory bullets carry no recording_id). The heavier grounding tools stay
-    detached — the agent still grounds Q&A on project_memory."""
+def test_system_prompt_steers_to_recording_crawl_tools():
+    """list_recordings + recording_mom are RE-ATTACHED as the agent's data-crawl
+    chain: resolve a session → read its exact MoM (for per-recording task scoping
+    and per-meeting task summaries the distilled memory can't serve). retrieve
+    (heavy RAG) stays detached — the agent still grounds Q&A on project_memory."""
     prompt = _agent_system_prompt(_initial("việc của Hiếu trong Meeting 1"))
-    assert "list_recordings" in prompt        # re-attached, for per-recording task scoping
-    assert "recording_mom" not in prompt
+    assert "list_recordings" in prompt
+    assert "recording_mom" in prompt
     assert "retrieve" not in prompt
 
 
