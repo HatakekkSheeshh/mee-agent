@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useApp } from "../store/AppContext";
 import { toolLabel as mapToolLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
@@ -29,6 +36,10 @@ export function ChatPane() {
   const abortRef = useRef<AbortController | null>(null);
   // Index of the agent message whose copy button just fired ("copied" flash).
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // Whether the current pending-action card is zoomed into the modal overlay.
+  // One flag suffices — at most one pending card exists at a time.
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => setZoomed(false), [pending?.id]);
 
   // The chat session id (LangGraph thread). Created lazily on first send and
   // re-created when the bound meeting changes. Kept in refs so it survives
@@ -438,6 +449,7 @@ export function ChatPane() {
         )}
 
         {pending && pending.kind === "need_more_info" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">{t("chat.needInfo")}</div>
             {/* {pending.task_id && (
@@ -467,18 +479,22 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
         {taskTemplate && (
-          <CreateTaskCard
-            template={taskTemplate}
-            busy={busy}
-            onApprove={(edited, reason) => void approveCreateTask(edited, reason)}
-            onReject={() => void decide(false)}
-          />
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
+            <CreateTaskCard
+              template={taskTemplate}
+              busy={busy}
+              onApprove={(edited, reason) => void approveCreateTask(edited, reason)}
+              onReject={() => void decide(false)}
+            />
+          </ZoomCard>
         )}
 
         {pending && pending.kind === "pm_error" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">{t("chat.pmError.title")}</div>
             {pending.prompt && <Markdown>{pending.prompt}</Markdown>}
@@ -491,22 +507,26 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
         {/* Local side-effect tool without a bespoke card → generic editable card. */}
         {pending && !pending.kind && !taskTemplate && (
-          <ActionArgsCard
-            key={pending.id}
-            tool={pending.tool}
-            args={pending.args}
-            busy={busy}
-            onApprove={(edited) => void approveGeneric(edited)}
-            onReject={() => void decide(false)}
-          />
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
+            <ActionArgsCard
+              key={pending.id}
+              tool={pending.tool}
+              args={pending.args}
+              busy={busy}
+              onApprove={(edited) => void approveGeneric(edited)}
+              onReject={() => void decide(false)}
+            />
+          </ZoomCard>
         )}
 
         {/* pm-agent need_approval — issues list straight from pm-agent. */}
         {pending && pending.kind === "need_approval" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">
               {t("chat.pending")}: <strong>{toolLabel(pending.tool)}</strong>
@@ -532,6 +552,7 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
         {busy && (
@@ -601,5 +622,60 @@ export function ChatPane() {
         )}
       </div>
     </section>
+  );
+}
+
+interface ZoomCardProps {
+  zoomed: boolean;
+  onZoom: (z: boolean) => void;
+  children: ReactNode;
+}
+
+/**
+ * Magnify wrapper for pending-action cards. Zoomed = the SAME card subtree is
+ * styled into a centered fixed overlay (CSS only — no portal/remount, so
+ * in-progress field edits survive toggling). Esc / backdrop click collapse.
+ */
+function ZoomCard({ zoomed, onZoom, children }: ZoomCardProps) {
+  const { t } = useApp();
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") onZoom(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed, onZoom]);
+
+  return (
+    <div className={zoomed ? "card-zoom card-zoom-open" : "card-zoom"}>
+      {zoomed && <div className="card-zoom-backdrop" onClick={() => onZoom(false)} />}
+      <div className="card-zoom-host">
+        <button
+          className="card-zoom-btn"
+          type="button"
+          title={zoomed ? t("chat.zoomOut") : t("chat.zoomIn")}
+          aria-label={zoomed ? t("chat.zoomOut") : t("chat.zoomIn")}
+          onClick={() => onZoom(!zoomed)}
+        >
+          {zoomed ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 14 10 14 10 20" />
+              <polyline points="20 10 14 10 14 4" />
+              <line x1="14" y1="10" x2="21" y2="3" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 3 21 3 21 9" />
+              <polyline points="9 21 3 21 3 15" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          )}
+        </button>
+        {children}
+      </div>
+    </div>
   );
 }

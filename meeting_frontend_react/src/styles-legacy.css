@@ -2311,3 +2311,48 @@ select.mee-modal-input {
 
 .action-args { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
 .action-arg-input { width: 100%; }
+
+/* ─── Pending-card magnify (zoom into a centered overlay) ─────────────── */
+.card-zoom { position: relative; }
+.card-zoom-host { position: relative; }
+.card-zoom-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    padding: 4px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-3, #8a8f98);
+    cursor: pointer;
+    z-index: 2;
+    transition: color 0.12s ease;
+}
+.card-zoom-btn:hover { color: var(--text, #e8eaed); }
+.card-zoom-btn svg { width: 100%; height: 100%; }
+/* No backdrop-filter here — same per-frame re-rasterization jank as the old
+   modal blur; the dim alone is enough. */
+.card-zoom-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    z-index: 980;
+}
+.card-zoom-open .card-zoom-host {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 990;
+    width: min(720px, 92vw);
+    max-height: 86vh;
+    display: flex;
+}
+.card-zoom-open .card-zoom-host > .msg {
+    width: 100%;
+    max-width: none;
+    max-height: 86vh;
+    overflow: auto;
+}
