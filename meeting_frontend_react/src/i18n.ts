@@ -117,6 +117,24 @@ export const STRINGS = {
     "tool.create_task": "Chuẩn bị danh sách task",
     "tool.send_email": "Soạn email",
     "tool.switch_meeting": "Chuyển dự án",
+    "arg.to": "Người nhận",
+    "arg.subject": "Tiêu đề",
+    "arg.body": "Nội dung",
+    "arg.attachments": "Tệp đính kèm",
+    "arg.title": "Tiêu đề",
+    "arg.assignee": "Phụ trách",
+    "arg.deadline": "Hạn",
+    "arg.due_date": "Hạn",
+    "arg.description": "Mô tả",
+    "arg.recording_id": "Phiên họp (id)",
+    "arg.meeting_id": "Dự án (id)",
+    "arg.project": "Dự án",
+    "arg.items": "Danh sách việc",
+    "arg.query": "Truy vấn",
+    "arg.room": "Phòng họp",
+    "arg.attendees": "Người tham dự",
+    "arg.date_window": "Khoảng thời gian",
+    "arg.duration_minutes": "Thời lượng (phút)",
     // Settings menu
     "menu.appearance": "Giao diện",
     "menu.theme": "Chủ đề",
@@ -347,6 +365,24 @@ export const STRINGS = {
     "tool.create_task": "Prepare task list",
     "tool.send_email": "Draft email",
     "tool.switch_meeting": "Switch project",
+    "arg.to": "To",
+    "arg.subject": "Subject",
+    "arg.body": "Body",
+    "arg.attachments": "Attachments",
+    "arg.title": "Title",
+    "arg.assignee": "Assignee",
+    "arg.deadline": "Due",
+    "arg.due_date": "Due",
+    "arg.description": "Description",
+    "arg.recording_id": "Recording (id)",
+    "arg.meeting_id": "Project (id)",
+    "arg.project": "Project",
+    "arg.items": "Items",
+    "arg.query": "Query",
+    "arg.room": "Room",
+    "arg.attendees": "Attendees",
+    "arg.date_window": "Date window",
+    "arg.duration_minutes": "Duration (min)",
     "menu.appearance": "Appearance",
     "menu.theme": "Theme",
     "menu.themeDark": "Dark",
@@ -465,3 +501,20 @@ export const STRINGS = {
 } as const;
 
 export type StringKey = keyof typeof STRINGS.vi;
+
+/** Tool name → friendly label via the `tool.<name>` keys; raw name fallback
+ * for tools without a label yet. Shared by every surface that shows a tool
+ * (activity trace, approval cards, reject notes). */
+export function toolLabel(t: (key: StringKey) => string, name: string): string {
+  const key = `tool.${name}` as StringKey;
+  const label = t(key);
+  return label === key ? name : label;
+}
+
+/** Tool-arg key → friendly field label via the `arg.<key>` keys; raw key
+ * fallback. Used by the generic editable action card. */
+export function argLabel(t: (key: StringKey) => string, name: string): string {
+  const key = `arg.${name}` as StringKey;
+  const label = t(key);
+  return label === key ? name : label;
+}

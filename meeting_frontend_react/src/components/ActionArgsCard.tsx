@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useApp } from "../store/AppContext";
+import { argLabel, toolLabel } from "../i18n";
 
 /** Arg keys always rendered as a textarea regardless of current length. */
 const LONG_KEYS = ["body", "description", "content", "text"];
@@ -30,13 +31,13 @@ export function ActionArgsCard({ tool, args, busy, onApprove, onReject }: Action
   return (
     <div className="msg msg-agent pending-action">
       <div className="pending-title">
-        {t("chat.pending")}: <strong>{tool}</strong>
+        {t("chat.pending")}: <strong>{toolLabel(t, tool)}</strong>
       </div>
       <div className="action-args">
         {Object.entries(draft).map(([key, value]) =>
           typeof value === "string" ? (
             <label key={key} className="task-field">
-              <span className="task-label">{key}</span>
+              <span className="task-label">{argLabel(t, key)}</span>
               {LONG_KEYS.includes(key) || value.length > LONG_VALUE_THRESHOLD ? (
                 <textarea
                   className="chat-input action-arg-input"
@@ -56,7 +57,7 @@ export function ActionArgsCard({ tool, args, busy, onApprove, onReject }: Action
             </label>
           ) : (
             <label key={key} className="task-field">
-              <span className="task-label">{key}</span>
+              <span className="task-label">{argLabel(t, key)}</span>
               <pre className="pending-args">{JSON.stringify(value, null, 2)}</pre>
             </label>
           ),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useApp } from "../store/AppContext";
-import type { StringKey } from "../i18n";
+import { toolLabel as mapToolLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
 import type { ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
@@ -105,7 +105,9 @@ export function ChatPane() {
   const applyResult = (res: ChatTurnResult, traceSteps?: string[]) => {
     if (res.status === "interrupted") {
       setPending(res.pending_action);
-      const hint = res.pending_action.rationale || res.pending_action.description;
+      // Only the LLM's own rationale is user-facing; the tool spec
+      // `description` is internal English prompt text — never show it.
+      const hint = res.pending_action.rationale;
       if (hint) pushAgent(hint);
     } else {
       setPending(null);
@@ -120,24 +122,25 @@ export function ChatPane() {
     }
   };
 
-  // SSE step event → localized trace label. Tool names map through `tool.<name>`
-  // i18n keys, falling back to the raw name for tools without a label yet.
+  // Tool name → localized label (shared i18n helper, bound to this t).
+  const toolLabel = useCallback(
+    (name: string): string => mapToolLabel(t, name),
+    [t],
+  );
+
+  // SSE step event → localized trace label.
   const stepLabel = useCallback(
     (ev: ChatStreamStep): string | null => {
       if (ev.step === "context") return t("chat.step.context");
       if (ev.step === "classify") return t("chat.step.classify");
       if (ev.step === "pm") return t("chat.step.pm");
       if (ev.step === "tool_call") {
-        const names = (ev.tools ?? []).map((n) => {
-          const key = `tool.${n}` as StringKey;
-          const label = t(key);
-          return label === key ? n : label;
-        });
+        const names = (ev.tools ?? []).map(toolLabel);
         return `${t("chat.step.tool")} ${names.join(", ")}`;
       }
       return null; // tool_done — completion shows on the next step/answer
     },
-    [t],
+    [t, toolLabel],
   );
 
   const errorText = (e: unknown) =>
@@ -233,7 +236,7 @@ export function ChatPane() {
       const toolName = pending.tool;
       setPending(null);
       // Leave a visible mark of the dismissed action in the thread.
-      if (!approve) pushNote(`✕ ${t("chat.rejectedNote")}: ${toolName}`);
+      if (!approve) pushNote(`✕ ${t("chat.rejectedNote")}: ${toolLabel(toolName)}`);
       setBusy(true);
       try {
         applyResult(approve ? await api.chat.approve(id) : await api.chat.reject(id));
@@ -243,7 +246,7 @@ export function ChatPane() {
         setBusy(false);
       }
     },
-    [pending, busy, t],
+    [pending, busy, t, toolLabel],
   );
 
   // Approve a generic local side-effect tool with the user's field edits
@@ -506,7 +509,7 @@ export function ChatPane() {
         {pending && pending.kind === "need_approval" && (
           <div className="msg msg-agent pending-action">
             <div className="pending-title">
-              {t("chat.pending")}: <strong>{pending.tool}</strong>
+              {t("chat.pending")}: <strong>{toolLabel(pending.tool)}</strong>
             </div>
             {pending.issues?.length ? (
               <ul className="pending-issues">
