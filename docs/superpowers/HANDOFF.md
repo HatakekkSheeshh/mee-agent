@@ -1,199 +1,141 @@
-# Session Handoff — Mee meeting-agent (feat/backend-agents)
+# Session Handoff — Mee meeting-agent
 
-**Branch:** `feat/backend-agents` · **Last updated:** 2026-06-10 · **Head:** `908bd5d`
+**Branch:** `feat/mail-tool` · **Last updated:** 2026-06-11 · **Head:** `047fa8d`
+**Suite:** 117 green (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`) · FE `npm run build` clean.
 
 Read this first when resuming. It captures state a fresh session can't infer from git alone.
 
 ## Kickoff message to paste into the new session
 
-> Continue Mee on branch `feat/backend-agents`. Read CLAUDE.md and `docs/superpowers/HANDOFF.md`.
-> Everything through the **force-grounding fix** is DONE and committed (unpushed): suite **92 green**
-> (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`), FE builds clean
-> (`cd meeting_frontend_react && npm run build`).
-> No active plan. Pick from the parked follow-ups below, or do the live smoke once the blockers
-> clear. Parked: create_task **login↔display-name assignee filter** + **recording scoping**;
-> reconcile **per-assignee chunking** (gateway timeout); the un-applied **modal `backdrop-filter`
-> blur** perf fix; pm_task lifecycle deltas. All logged below.
+> Continue Mee on branch `feat/mail-tool`. Read CLAUDE.md and `docs/superpowers/HANDOFF.md`.
+> Everything below "DONE" is committed: suite **117 green**, FE builds clean.
+> **NEXT PLAN: integrate agentbase Memory into the chat agent** (see the NEXT section —
+> a write-only client already exists in `meeting/memory_client.py`; design read+write
+> chat memory via brainstorming first). Also pending: live smoke of SSE/zoom/chunked
+> reconcile, the Microsoft Graph tool suite (designed, gated on Azure app registration),
+> and the gemma multi-turn prompt hardening (test in place, prompt fix not applied).
 
-## Current state (what's true right now)
+## NEXT PLAN — agentbase Memory for the chat agent
 
-- **Suite:** 92 passed (`ECC_GATEGUARD=off venv/bin/python -m pytest tests/meeting -q`). FE
-  `npm run build` clean.
-- **Backend chat = unified native tool-calling agent** (Path A, gemma). Flow:
-  `load_context → classify_intent (binary pm_task|agent) → agent ⇄ agent_tools →
-  (agent_approve interrupt → agent_execute) ↺ → save_reply`. Replay-safe (only `agent_approve`
-  interrupts; side-effect tools run exactly once). `create_task` bridges into the pm-agent
-  reconcile loop with two HITL gates (GATE 1 local template → GATE 2 pm Redmine-write). Reject of a
-  side-effect tool is **terminal** (canned `REJECT_REPLY`, no LLM re-loop).
-- **chat_graph is a package:** `meeting/graphs/chat_graph/` (`context/classify/agent/pm/builder/
-  runner.py` + `__init__.py` facade re-exporting every public name incl. `repo`). Pure helpers live
-  as `graphs/_chat_*.py` siblings. Tools are a package: `meeting/services/tools/` (one module per
-  tool + local `@tool` decorator → `TOOLS`). Diagram: `docs/diagrams/chat_graph.mmd` (== live draw).
-- **clear-chat-session** shipped: `repo.clear_chat_session`, `POST /api/chat/sessions/{id}/clear`
-  (deletes messages+pending in place, best-effort `adelete_thread`), + a branded green confirm
-  dialog in ChatPane. Only **unit-verified** (live blockers below).
-- **Still only unit-tested — never run live through `run_meeting.py`** (psycopg + DB-revision
-  blockers, see below). The whole agent/clear-chat path needs a live smoke once unblocked.
+**Objective:** give the chat agent persistent memory via the **AgentBase Memory Service**
+(`https://agentbase.api.vngcloud.vn/memory/...`) — recall user/project facts across chat
+sessions, not just within one LangGraph thread.
 
-## DONE — force grounding for recording-scoped questions ✅
+**What already exists (verified in repo):**
+- `meeting/memory_client.py` — a stdlib-only, WRITE-ONLY AgentBase client. Auth = GreenNode IAM
+  client-credentials (`GREENNODE_CLIENT_ID`/`GREENNODE_CLIENT_SECRET` env or `.greennode.json`
+  fallback; token POST to `iam.api.vngcloud.vn/accounts-api/v2/auth/token`, cached with JWT-exp).
+  Posts conversational events to
+  `POST /memory/memories/{MEMORY_ID}/actors/{actor_id}/sessions/{session_id}/events`
+  with payload `{"payload": {"type":"conversational","role","message"}}`. Hardcoded
+  `actor_id="mee-user"`; `MEMORY_ID` from env. Used ONLY by the legacy MoM flow
+  (`app.py:344`, background thread, failures swallowed).
+- `meeting/services/memory_service.py` — the LOCAL hybrid retrieval (pgvector + tsvector + RRF)
+  over `memory_events`; surfaced to the agent as the `retrieve` tool. Separate system — decide
+  the relationship explicitly.
 
-**Plan:** `docs/superpowers/plans/2026-06-10-force-grounding-recording-scoped.md` (executed in full).
-Commits `838b28c` → `b9391b2` (+ probe `908bd5d`). The confirmed stale-summary bug (finding below)
-is now fixed at two layers:
+**Open questions to resolve at kickoff (brainstorm before code):**
+1. **Read API** — memory_client has no retrieval call. Find the AgentBase Memory search/recall
+   endpoint (docs or probe; same Bearer token should work). Without read, "memory" is a black hole.
+2. **What to store from chat** — full turns? distilled facts (user preferences, recurring
+   assignees, project glossary)? Distillation needs an LLM step — where (save_reply? background)?
+3. **Where to hook** — natural seams: `load_context` (inject recalled memory into
+   `meeting_context`/system prompt), a new read tool (`recall_memory`) next to `retrieve`,
+   and `save_reply` (persist the turn). Replay-safety: writes must not live in interrupting nodes.
+4. **Identity** — `actor_id` is hardcoded "mee-user"; the app runs on `dev_user`. Per-user memory
+   needs a real actor key (ties into the future O365 login).
+5. **Local `memory_service` vs agentbase** — complement (agentbase = cross-session conversational,
+   local = meeting-content RAG) or migrate? Recommend complement first; no migration in v1.
 
-- **Task 0 (probe):** the MaaS gemma endpoint **honors `tool_choice="required"`** (returns a
-  `tool_calls` message with empty content). Verified by `scripts/probe_tool_choice_required.py`. So
-  the mechanical force shipped as written — no fallback needed.
-- **Task 1/2 — `classify_intent` emits a `grounding` flag** (`"required"|"auto"`, threaded through
-  `ChatState`, defaults `"auto"` when the model omits/garbles it). Content/recording questions →
-  `"required"`; chit-chat / action / pm → `"auto"`.
-- **Task 3 — agent forces a tool on round 0** when `grounding=="required"`: `tool_choice="required"`
-  on the FIRST turn only, `"auto"` thereafter (so the post-tool answer turn finishes → loop still
-  terminates). So gemma MUST read real data before it can answer.
-- **Task 4 — prompt hardening** (`_agent_system_prompt`): narrowed the answer-direct escape hatch to
-  explicitly EXCLUDE recording-scoped questions ("tóm tắt một phiên / Meeting N / nội dung một
-  recording") — MUST call `list_recordings`/`recording_mom` first even if context looks sufficient.
+**Suggested first steps:** probe the AgentBase Memory read API with the existing token flow
+(small script in `scripts/`, like `probe_pm_list_issues.py`); then brainstorming → spec → plan.
 
-**Residual risk:** still **unit-only** (92 green); never run live through `run_meeting.py` (psycopg +
-DB-revision blockers below). Add a live smoke of "tóm tắt Meeting N" once the backend runs — confirm
-a `tool_calls` line appears before the final answer and the date/content match the real recording.
+## DONE (all committed, chronological this branch)
 
-## DONE — chat UX streaming + HITL card polish ✅ (2026-06-10, branch feat/mail-tool)
+1. **Chat UX streaming** (`3e17f4f…85c7a50`, spec `specs/2026-06-10-chat-ux-streaming-design.md`):
+   SSE endpoint `POST /api/chat/sessions/{id}/messages/stream` (steps + terminal frame; own
+   `AsyncSessionLocal` — a Depends session dies before a StreamingResponse body runs; blocking
+   endpoint kept as fallback). FE: live activity trace → collapses into the reply (`<details>`),
+   stop button (AbortController), `ActionArgsCard` (generic editable HITL card, edits →
+   `edited_args`), reject/stop note lines, copy button, modal blur removed.
+2. **3 parked follow-ups** (`b5ddcde`): `assignee_matches` (login↔display-name, diacritic-
+   insensitive both-way substring); create_task `recording_id` scoping; **chunked reconcile**
+   (`_reconcile_payloads` per assignee group, sub-chunk at `MAX_RECONCILE_ITEMS=8`;
+   `pm_queue`/`pm_replies` state; `pm_reply` drains queue with a FRESH pm task per group via
+   `route_after_pm_reply`; replies joined with `---`; one GATE-2 card per group; reject/error
+   abandons the rest of the queue — documented); `reason` → "Ghi chú của người duyệt: …" in
+   reconcile text.
+3. **pm-agent routing probe** (`471dd1f`): "liệt kê issue trong project AI Innovation Project"
+   verified end-to-end OK (classify→pm_task stable ×2; pm-agent returns the correct
+   project-scoped list given verbatim text). `scripts/probe_pm_list_issues.py`.
+4. **No internal identifiers in UI** (`023bc1c`): `toolLabel`/`argLabel` helpers in `i18n.ts`
+   (`tool.*` ×7 = full registry coverage, `arg.*` incl. future schedule_meeting fields; raw-name
+   fallback). Interrupt hint no longer falls back to the internal English tool description.
+5. **Magnify cards** (`bbc14aa`): `ZoomCard` wrapper around all five pending-card branches —
+   CSS-only fixed overlay `min(720px,92vw)` (no portal → edits survive toggling), Esc/backdrop/
+   button collapse, auto-collapse on pending change. No backdrop-filter (blur-jank lesson).
+6. **Multi-turn context regression test** (`047fa8d`, `tests/meeting/test_multiturn_context.py`):
+   live bug "email đến andvd6" → supply subject/body next turn → agent re-prompts instead of
+   merging into send_email. Tests PASS ⇒ harness delivers turn-1 context to the LLM; **the loss
+   is gemma/prompt-side. Fix = `_agent_system_prompt` hardening ("khi user bổ sung thông tin còn
+   thiếu cho hành động đã bàn → gọi tool với thông tin gộp, KHÔNG hỏi lại") — NOT APPLIED yet.**
 
-Spec: `specs/2026-06-10-chat-ux-streaming-design.md`. Commits `3e17f4f…85c7a50`. Suite **101
-green**, FE build clean.
+## Parked / pending (not in the next plan)
 
-- **SSE streaming turn**: `POST /api/chat/sessions/{id}/messages/stream` streams step events
-  (`runner.stream_chat_turn` + pure `update_to_events` mapper — 9 unit tests) then the same
-  complete/interrupted envelope. The endpoint opens its OWN `AsyncSessionLocal` (a
-  `Depends(get_session)` session is torn down before a StreamingResponse body runs). Blocking
-  `/messages` unchanged; FE falls back to it on 404/405.
-- **FE**: live activity trace while busy (i18n `chat.step.*` + `tool.*` labels), trace collapses
-  into the reply as `<details>`; stop button (AbortController); `ActionArgsCard` = generic
-  editable card for local side-effect tools (edits → `edited_args`; send_email/schedule_meeting
-  ready); reject/stop note lines; copy button on agent replies; modal backdrop blur removed.
-- **Needs live SSE smoke** once the backend runs (same blocker list below): confirm step frames
-  arrive incrementally (not buffered) through the Vite proxy, and stop button mid-turn.
+- **Microsoft Graph tool suite — designed, not built.** One `meeting/services/graph/` layer
+  (thin httpx, NO msgraph-sdk) + two seams: `GraphTokenProvider` (Dev→logs would-be request;
+  Delegated device-code once an Azure app exists; O365 web later) and `RecipientResolver`
+  (placeholder now; `transcript-flow-improvements` branch will supply name→email). Tools: real
+  `send_email` (**currently still MOCK**, `tools/send_email.py`) + `schedule_meeting`
+  (findMeetingTimes + create event with Teams link; room = manually-edited card placeholder —
+  avoids admin-gated `Place.Read.All`). Facts: VNG tenant `7c112a6e-10e2-4e09-afc4-2e37bc60d821`;
+  `TOKEN_AUTHEN_PM_AGENT` is the pm-agent key, NOT a Graph cred; findMeetingTimes +
+  `/me/onlineMeetings` are delegated-only; all needed delegated scopes are user-consentable —
+  **gate = can the user register an Azure app? (unverified)**.
+- **Live smoke checklist** (first session with the backend running): SSE steps arrive
+  incrementally through the Vite proxy (not buffered) + stop button mid-turn; zoom cards
+  click-through; multi-assignee create_task → sequential GATE-2 cards + joined reply;
+  "tóm tắt Meeting N" force-grounding (tool_calls line before answer).
+- **pm_task lifecycle deltas:** edit affordance on need_approval cards; clear cached
+  `pm_task_id`/`pm_context_id` on terminal; bump `PM_MAX_ROUNDS`; `transcript_segments`
+  injection (spec §5, seam in `pm_call`).
+- create_task still builds from `action_items` only (not decisions/commitments/blockers).
 
-## NEXT (designed, not built) — Microsoft Graph tool suite
+## ⚠️ Live blockers / gotchas
 
-Design conversation done this session (spec not yet written): one shared `meeting/services/graph/`
-layer (thin httpx client; NO msgraph-sdk) + two seams — `GraphTokenProvider` (Dev → logs would-be
-request now; Delegated device-code once an Azure app exists; O365 web later) and
-`RecipientResolver` (placeholder now; `transcript-flow-improvements` will supply name→email).
-Tools: real `send_email` + new `schedule_meeting` (findMeetingTimes + create event with Teams
-link; room = manually-edited placeholder on the card — avoids admin-gated `Place.Read.All`).
-Key facts: VNG tenant id `7c112a6e-10e2-4e09-afc4-2e37bc60d821`; `TOKEN_AUTHEN_PM_AGENT` is the
-pm-agent key, NOT a Graph cred; findMeetingTimes + `/me/onlineMeetings` are delegated-only;
-all four needed delegated scopes are user-consentable (no admin) IF the user can register an
-Azure app — unverified.
-
-## DONE — the 3 parked follow-ups ✅ (2026-06-10, commit `b5ddcde`, suite 115 green)
-
-- **create_task assignee filter + recording scoping**: `assignee_matches` (create_task.py) bridges
-  login↔display-name ("hieunq3" ↔ pic "Hiếu"; case/diacritic-insensitive substring both ways);
-  new `recording_id` arg on create_task scopes the template to one recording's MoM. Still builds
-  from `action_items` only (decisions/commitments/blockers expansion remains future work).
-- **Reconcile chunking**: `_reconcile_payloads` splits per assignee group (sub-chunk at
-  `MAX_RECONCILE_ITEMS=8`); `pm_queue`/`pm_replies` in ChatState; `pm_reply` drains the queue with
-  a FRESH pm task per group (`route_after_pm_reply`), replies joined into one final_reply. UX note:
-  each group raises its own GATE-2 card sequentially. Rejecting/erroring-out one group abandons the
-  rest of the queue (documented behavior). Needs a live multi-assignee smoke.
-- **`reason`** is appended to each reconcile text as "Ghi chú của người duyệt: …".
-- (Modal blur fix also applied — see chat-UX section above.)
-
-## Parked follow-ups (NOT in the next plan)
-
-- **pm_task lifecycle deltas (PARKED):** edit affordance on need_approval cards; clear cached
-  `pm_task_id`/`pm_context_id` on terminal; bump `PM_MAX_ROUNDS`; `transcript_segments` injection
-  (spec §5, seam in `pm_call`).
-
-## ⚠️ Live blockers / gotchas (will bite the next session)
-
-1. **psycopg / libpq — RESOLVED (2026-06-10).** `psycopg 3.3.4` + `psycopg2` are installed; the pq
-   wrapper loads `libpq 18`. No longer a blocker. (If it recurs on a fresh env:
-   `venv/bin/pip install "psycopg[binary]"`.)
-2. **DB migration drift — narrowed (2026-06-10).** The repo NOW carries `0001–0015` (clean linear
-   chain, head `0015`) — the old "0008–0015 exist in no branch" note is obsolete. BUT the shared
-   remote DB (`180.93.182.45`, db `agents`, user `anhvd6`) is now stamped **`0016`**, one ahead of
-   the repo, so `alembic current`/`upgrade` fail `Can't locate revision '0016'`. The drift is
-   recurring (someone keeps advancing the shared DB). **To RUN the backend you don't need Alembic** —
-   the app connects via asyncpg + ORM; a DB that's *ahead* is fine to run against if `0016` is
-   additive (0008–0015 all are). So: `venv/bin/python run_meeting.py` WITHOUT `alembic upgrade head`.
-   Proper fix = get `alembic/versions/0016_*.py` from the DB owner. Isolated fallback = local DB at
-   head `0015` (`docker compose --profile local up -d` → `localhost:5435`), but it's empty (no real
-   recordings to smoke-test against).
-3. **DB unavailable in this env** → `tests/meeting` use **fake sessions / direct endpoint calls**,
-   not a live TestClient (see `test_clear_session.py`, `test_chat_api_pm.py`, `test_repo_recordings`).
-   New DB-touching tests must follow that convention.
-4. **Startup banner lies** — "Postgres ● stopped" only checks for a *local* container; ignore it
-   with a remote DB.
-5. **venv purged from git history** via `git filter-repo` (50 MB pack → HTTP 413). SHAs changed;
-   backup bundle at `../mee-meeting-agent-prepurge.bundle`. `venv/` is gitignored — never commit it.
-6. **GateGuard hook** fact-forces before each Bash/Edit/Write. Disable for a burst with
-   `ECC_GATEGUARD=off` (or add `pre:bash:gateguard-fact-force` + `pre:edit-write:gateguard-fact-force`
-   to `ECC_DISABLED_HOOKS`). `.claude/settings.local.json` has a local off env (gitignored).
-7. **Untracked `cache/`** in the repo root (generated PNGs + pycaches) — junk, not committed; leave
-   it or add to `.gitignore`.
+1. **DB migration drift:** repo head `0015`; shared remote DB (`180.93.182.45`, db `agents`) is
+   stamped `0016` (recurring drift). RUN the backend WITHOUT `alembic upgrade head` — app uses
+   asyncpg+ORM; ahead-DB is fine if `0016` is additive. Fix = get `0016_*.py` from the DB owner.
+2. **No DB in this dev env** → `tests/meeting` use fakes/direct endpoint calls (see
+   `test_clear_session.py`, `test_agent_loop.py`); new DB-touching tests follow that convention.
+   `tests/` root (`test_server.py` etc.) tests the legacy whisper_live system — ignore.
+3. **Startup banner lies** — "Postgres ● stopped" only checks a local container.
+4. **GateGuard hook** fact-forces Bash/Edit/Write — disable bursts with `ECC_GATEGUARD=off`.
+5. **venv purged from git history** (filter-repo; SHAs changed; backup bundle at
+   `../mee-meeting-agent-prepurge.bundle`). Never commit `venv/`.
+6. **A stash exists**: `stash@{0}` = accidental pre-SSE ChatPane revert (recovered 2026-06-11);
+   drop when confident. `docs/diagrams/chat_graph.mmd` has an uncommitted USER edit — don't revert.
 
 ## pm-agent integration — verified facts (live)
 
-- Auth = **per-user Microsoft OIDC** Bearer token, env `PM_AGENT_URL` + `TOKEN_AUTHEN_PM_AGENT`;
-  URL must end `/a2a/`. Client sends Bearer + X-API-KEY. **The token in `.env` is currently a UUID
-  API key and returns `401` — it's stale/wrong; refresh it + restart (singleton + dotenv load once
-  at startup).** A short curl probe in the git log of this session confirms 401.
-- Resume MUST echo **both `taskId` and `contextId`** (else `-32603` context mismatch); captured in
-  `PmAgentResult.context_id` / `ChatState.pm_context_id`.
-- pm-agent surfaces auth via a `need_more_info` `/auth?url=…`; ends a need_more_info thread on the
-  literal text `/cancel` (FE "Hủy" sends that).
+- Auth: Bearer (+X-API-KEY sent too), env `PM_AGENT_URL` (must end `/a2a/`) +
+  `TOKEN_AUTHEN_PM_AGENT`. Working as of 2026-06-11 (probe returned live issue lists).
+- Resume MUST echo both `taskId` + `contextId` (else `-32603`). need_more_info threads end on
+  literal `/cancel`. Reconcile = text + `data_part {kind:"reconcile_items", project, items}`.
 
-## Backend chat contract (what the FE expects)
+## Backend chat contract (FE-facing)
 
-- `POST /api/chat/sessions` `{meeting_id, title?}` → `{id, meeting_id, title, created_at}`
-- `POST /api/chat/sessions/{id}/messages` `{text}` → `{status:"complete", reply, ...}` OR
-  `{status:"interrupted", pending_action_id, pending_action:{id, tool, args, rationale?, description?}}`
-- `POST /api/chat/sessions/{id}/clear` → `{status:"cleared", session_id}` (404 if missing)
+- `POST /api/chat/sessions` `{meeting_id, title?}` → `{id, ...}`
+- `POST /api/chat/sessions/{id}/messages` `{text}` → `{status:"complete",...}` |
+  `{status:"interrupted", pending_action_id, pending_action}`
+- `POST /api/chat/sessions/{id}/messages/stream` — SSE: `{type:"step",...}`* then
+  `{type:"complete"|"interrupted"|"error", ...}` (same payloads as blocking)
+- `POST /api/chat/sessions/{id}/clear` → `{status:"cleared"}`
 - `POST /api/chat/pending-actions/{id}/approve` `{edited_args?, reason?, approval_action?, text?}`
-  → `{status:"executed", reply}` (may re-interrupt → fresh pending action)
-- `POST /api/chat/pending-actions/{id}/reject` `{reason?}` → `{status:"rejected", reply}`
+  → `{status:"executed", reply}` (may re-interrupt) · `/reject` `{reason?}` → `{status:"rejected"}`
 
-## Confirmed root-cause finding (the bug the next plan fixes)
+## Reference artifacts
 
-"tóm tắt phiên họp meeting 1" answered with the WRONG date (04/06 vs real 03/06) and content from a
-DIFFERENT meeting. Decisive log: `load_context (recent_msgs=10) → classify_intent →
-[Node agent] final answer` with **NO `tool_calls` line** — the agent called zero tools, so it never
-read the recording; it regurgitated a prior wrong summary sitting in `recent_messages` (seeded by
-`_seed_agent_messages`), enabled by the `_agent_system_prompt` escape hatch *"khi đã đủ dữ liệu thì
-trả lời trực tiếp (KHÔNG gọi tool)"*. A fresh session grounds correctly (empty history). clear-chat
-= mitigation; force-grounding = the fix.
-
-## Session timeline (chronological, all on feat/backend-agents)
-
-1. CLAUDE.md authored; pm-agent A2A design + Phase-1 interactive ChatPane + Phase-2 backend pm
-   branch (`pm_task`/`pm_call`/`pm_await`/`pm_reply`, `PmAgentClient`).
-2. pm-agent auth verified live; `-32603` contextId fix; chat UX (markdown, pending cards, welcome
-   banner, localStorage thread-per-meeting).
-3. Task #8 — unified native tool-calling agent (Path A; gemma, not Qwen3). Option B —
-   recording-scoped repo+tools (`list_recordings`/`recording_mom`).
-4. create_task → pm reconcile bridge (2 gates); transport-error retry (`pm_error` card); editable
-   grouped `CreateTaskCard`; `meeting/services/tools/` package.
-5. chat_graph reorg Phase 1 + 2 (helpers extracted, DI seams, package split, facade).
-6. Reject-terminal (option 3) + tests fixed → suite green. clear-chat-session (repo+endpoint+FE).
-7. Chat-UI polish: branded green clear-confirm dialog; dropped tool-description bubble on interrupt;
-   native-title tooltip fix; "action items" → "Việc cần làm"/"To-dos"; welcome-banner refactor
-   (copy + icon-chip layout + data-driven + a11y); removed banner pulsing dot.
-8. Force-grounding fix (plan 2026-06-10): probe confirmed gemma honors `tool_choice="required"`;
-   classify emits a `grounding` flag; agent forces a tool on round 0 for recording-scoped questions;
-   prompt escape-hatch narrowed. Suite 82 → 92.
-
-## Reference artifacts (committed, self-contained)
-
-- Plans: `plans/2026-06-10-force-grounding-recording-scoped.md` (NEXT),
-  `plans/2026-06-09-clear-chat-session.md` (done), `plans/2026-06-09-create-task-reject-terminal.md`
-  (done), `plans/2026-06-09-chat-graph-reorg.md` + `…-phase2-di-split.md` (done),
-  `plans/2026-06-08-create-task-reconcile-bridge.md` + `…-unified-qa-tool-agent.md` (done).
-- Specs: `specs/2026-06-09-clear-chat-session-design.md`,
-  `specs/2026-06-08-create-task-reconcile-bridge-design.md`,
-  `specs/2026-06-06-happy-path-retrieval-reconcile-design.md`,
-  `specs/2026-06-02-pm-agent-a2a-chat-design.md`.
-- `docs/pm-agent-graph.md` — pm-agent's full LangGraph. `CLAUDE.md` — repo architecture + gotchas.
+- Specs: `specs/2026-06-10-chat-ux-streaming-design.md` (+ all earlier specs/plans, all executed).
+- `docs/pm-agent-graph.md` — pm-agent's LangGraph. `docs/diagrams/chat_graph.mmd` — our graph
+  (user is mid-edit). `CLAUDE.md` — architecture + gotchas.
