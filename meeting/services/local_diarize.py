@@ -46,6 +46,15 @@ _pipeline = None
 _embedder = None
 _load_lock = threading.Lock()
 
+# Inference lock — pyannote pipeline + embedder internal state is NOT
+# thread-safe. Concurrent `pipeline(audio)` calls on the same instance
+# deadlock or corrupt model buffers. Serialize ALL inference here so
+# even if a caller spawns multiple threads (parallel_diarize), the actual
+# model forward passes run one at a time. Net effect: thread-parallel
+# code gets no speedup, but it doesn't hang. For real parallelism, use
+# multi-process (each process loads its own pipeline).
+_inference_lock = threading.Lock()
+
 
 def _ensure_loaded() -> tuple[object, object]:
     """First-call init of pyannote pipeline + embedder. Cached forever."""
@@ -77,6 +86,51 @@ def _ensure_loaded() -> tuple[object, object]:
     return _pipeline, _embedder
 
 
+def _diarize_remote(audio_bytes: bytes, remote_url: str) -> dict:
+    """Call a remote pyannote server (Kaggle GPU notebook) for diarization.
+
+    Wire-format: multipart upload of audio bytes, bearer-token auth via
+    PYANNOTE_REMOTE_TOKEN. Server returns the same shape as the local
+    impl — turns + cluster_embeddings + sample_audio_b64 — so callers
+    don't notice the swap.
+
+    Falls back to local pyannote when:
+      - remote is unreachable / 5xx / timeout
+      - remote returns 401 (token mismatch)
+      - response body is malformed
+    """
+    import requests
+    token = os.getenv("PYANNOTE_REMOTE_TOKEN", "")
+    try:
+        r = requests.post(
+            f"{remote_url.rstrip('/')}/diarize",
+            files={"file": ("audio.wav", audio_bytes, "audio/wav")},
+            headers={"Authorization": f"Bearer {token}"} if token else {},
+            # Generous timeout — file 1h on T4 ≈ 30-60s but allow upload
+            # overhead + cold-start of the Kaggle kernel if just woke up.
+            timeout=600,
+        )
+        if r.status_code == 401:
+            raise RuntimeError("PYANNOTE_REMOTE_TOKEN mismatch")
+        r.raise_for_status()
+        data = r.json()
+        if "turns" not in data or "cluster_embeddings" not in data:
+            raise RuntimeError(f"remote response missing keys: {list(data)}")
+        logger.info(
+            f"[diarize] remote pyannote OK — {len(data['turns'])} turns, "
+            f"{len(data.get('cluster_embeddings') or {})} clusters, "
+            f"{len(data.get('sample_audio_b64') or {})} samples"
+        )
+        # Ensure sample_audio_b64 key exists even if server didn't send it
+        data.setdefault("sample_audio_b64", {})
+        return data
+    except Exception as e:
+        logger.warning(
+            f"[diarize] remote pyannote failed ({e}); falling back to local CPU"
+        )
+        return None  # signal caller to use local path
+
+
 def diarize_audio(
     audio_bytes: bytes, sample_rate: Optional[int] = None
 ) -> dict:
@@ -89,10 +143,24 @@ def diarize_audio(
     Returns:
         {
           "turns": [{"start": float, "end": float, "speaker": "SPEAKER_00"}, ...],
-          "cluster_embeddings": {"SPEAKER_00": [...256...], "SPEAKER_01": [...]}
+          "cluster_embeddings": {"SPEAKER_00": [...256...], "SPEAKER_01": [...]},
+          "sample_audio_b64": {"SPEAKER_00": "<base64 wav>", ...}
         }
-    Returns {"turns": [], "cluster_embeddings": {}} on any error (logged).
+    Returns {"turns": [], "cluster_embeddings": {}, "sample_audio_b64": {}}
+    on any error (logged).
+
+    When PYANNOTE_REMOTE_URL is set (eg. a Kaggle GPU tunnel), tries the
+    remote server first; falls back to local CPU pyannote if the remote
+    is unreachable. Set PYANNOTE_REMOTE_TOKEN to match the server's
+    auth token.
     """
+    # ─── Remote path (Kaggle GPU / Modal / Replicate / self-host) ────
+    remote_url = os.getenv("PYANNOTE_REMOTE_URL", "").strip()
+    if remote_url:
+        result = _diarize_remote(audio_bytes, remote_url)
+        if result is not None:
+            return result
+        # else fall through to local
     try:
         pipeline, embedder = _ensure_loaded()
     except Exception as e:
@@ -126,7 +194,10 @@ def diarize_audio(
             f"[local_diarize] running pyannote diarization on "
             f"{waveform.shape[1] / sr:.1f}s audio…"
         )
-        output = pipeline(audio_input)
+        # Serialize inference — pipeline + embedder share internal state
+        # that isn't thread-safe. See _inference_lock comment above.
+        with _inference_lock:
+            output = pipeline(audio_input)
 
         # pyannote 4: pipeline() returns DiarizeOutput. The Annotation
         # (with itertracks) lives at .speaker_diarization. Older pyannote 3
@@ -185,7 +256,8 @@ def diarize_audio(
                 seg_start = best["start"]
                 seg_end = min(best["end"], best["start"] + 10.0)
                 try:
-                    emb = embedder.crop(audio_input, Segment(seg_start, seg_end))
+                    with _inference_lock:
+                        emb = embedder.crop(audio_input, Segment(seg_start, seg_end))
                     if hasattr(emb, "numpy"):
                         emb = emb.numpy()
                     cluster_embeddings[spk] = emb.flatten().tolist()
@@ -194,13 +266,59 @@ def diarize_audio(
                         f"[local_diarize] embedding {spk} failed: {e}"
                     )
 
+        # Per-speaker 3s sample clips — let user PLAY a representative
+        # snippet next to each cluster in SpeakerMapper before saving the
+        # name. Pick the midpoint of each speaker's longest turn (most
+        # reliable single voice, no overlap or trailing silence). Encode
+        # as 16kHz mono WAV → base64 so it can be shipped through the
+        # /api/transcribe → FE → /diarize-result pipeline as plain JSON.
+        sample_audio_b64: dict[str, str] = {}
+        try:
+            import io
+            import base64
+            import soundfile as sf
+
+            # Work from the already-loaded waveform/sr — no re-decode.
+            mono = audio_np[0] if audio_np.ndim == 2 else audio_np
+            total_samples = mono.shape[0]
+            sample_seconds = 3.0
+            half_window = sample_seconds / 2.0
+
+            for spk in set(t["speaker"] for t in turns):
+                spk_turns = [t for t in turns if t["speaker"] == spk]
+                if not spk_turns:
+                    continue
+                # Longest single contiguous turn — best chance of clean voice.
+                best = max(spk_turns, key=lambda t: t["end"] - t["start"])
+                mid = (best["start"] + best["end"]) / 2.0
+                start = max(0.0, mid - half_window)
+                end = min(best["end"], start + sample_seconds)
+                # If the longest turn itself is shorter than 3s, grab the
+                # whole turn — better short clip than nothing.
+                start_i = int(start * sr)
+                end_i = int(end * sr)
+                if end_i <= start_i:
+                    continue
+                clip = mono[start_i:end_i]
+                buf = io.BytesIO()
+                sf.write(buf, clip, sr, format="WAV", subtype="PCM_16")
+                sample_audio_b64[spk] = base64.b64encode(buf.getvalue()).decode("ascii")
+            if sample_audio_b64:
+                logger.info(
+                    f"[local_diarize] extracted {len(sample_audio_b64)} "
+                    f"speaker sample clips ({sample_seconds:.0f}s each)"
+                )
+        except Exception as e:
+            logger.warning(f"[local_diarize] sample extraction failed: {e}")
+
         return {
             "turns": turns,
             "cluster_embeddings": cluster_embeddings,
+            "sample_audio_b64": sample_audio_b64,
         }
     except Exception as e:
         logger.exception(f"[local_diarize] failed: {e}")
-        return {"turns": [], "cluster_embeddings": {}}
+        return {"turns": [], "cluster_embeddings": {}, "sample_audio_b64": {}}
     finally:
         try:
             os.unlink(tmp_path)

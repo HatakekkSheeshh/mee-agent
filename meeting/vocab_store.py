@@ -99,6 +99,84 @@ def bulk_add_corrections(mappings: list[dict]) -> int:
     return added
 
 
+def extract_corrections_from_edit(
+    original_text: str,
+    edited_text: str,
+    max_pairs: int = 30,
+) -> list[dict]:
+    """Diff LLM-cleaned vs user-edited text → list of single-word corrections.
+
+    Use case: every time a user saves a clean transcript edit (TipTap),
+    extract their fixes as a learning signal. Single-word substitutions
+    are the safe pattern — multi-word replacements (sentence rewrites)
+    are too noisy to feed back to Whisper.
+
+    Filters out:
+      - Pure case changes (Whisper output is lowercase-ish anyway)
+      - Punctuation-only changes
+      - Multi-word replacements (too risky)
+      - Short words < 3 chars (acronyms covered separately; common words
+        skipped to avoid polluting pool)
+      - Pairs where wrong == correct after normalisation
+
+    Returns list of {"wrong": "...", "correct": "..."} compatible with
+    bulk_add_corrections() — ready to persist into the pool.
+    """
+    import difflib
+    import re
+
+    if not original_text or not edited_text:
+        return []
+    if original_text.strip() == edited_text.strip():
+        return []
+
+    def _tokenize(t: str) -> list[str]:
+        # Keep words (incl. underscore + dash), drop punctuation. Unicode
+        # word class \w handles Vietnamese diacritics correctly.
+        return re.findall(r"[\w-]+", t, re.UNICODE)
+
+    a = _tokenize(original_text)
+    b = _tokenize(edited_text)
+    if not a or not b:
+        return []
+
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    seen: set[tuple[str, str]] = set()
+    pairs: list[dict] = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op != "replace":
+            continue
+        n_wrong = i2 - i1
+        n_correct = j2 - j1
+        # Allowed shapes:
+        #   1→1  ("Vannot" → "pyannote")
+        #   N→1  ("con vô lu sần" → "convolution") — common VN phonetic mishear
+        #   1→N  (rare; usually a hyphenated splice fix)
+        # Block N→M (multi-to-multi) — that's a paraphrase, too noisy.
+        if n_wrong > 5 or n_correct > 5:
+            continue
+        if n_wrong > 1 and n_correct > 1:
+            continue
+        wrong = " ".join(a[i1:i2]).strip()
+        correct = " ".join(b[j1:j2]).strip()
+        if not wrong or not correct:
+            continue
+        if len(correct) < 3 or len(wrong) < 3:
+            continue
+        if len(wrong) > 60 or len(correct) > 60:
+            continue  # avoid sentence-level edits
+        if wrong.lower() == correct.lower():
+            continue
+        key = (wrong.lower(), correct.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append({"wrong": wrong, "correct": correct})
+        if len(pairs) >= max_pairs:
+            break
+    return pairs
+
+
 def get_corrections_for_vocab(vocab: str) -> list[dict]:
     """Return phonetic mappings from the pool whose `correct` value appears
     in the current meeting's vocab list. Lets the cleaner LLM see only

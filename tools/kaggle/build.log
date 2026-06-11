@@ -1,0 +1,486 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 3.10kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+#2 DONE 1.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 40B done
+#4 DONE 0.0s
+
+#5 [1/6] FROM docker.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04@sha256:f4d8e1264366940438f0353da6f289c7bef069d993d111f8106086ccd18c4a30
+#5 resolve docker.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04@sha256:f4d8e1264366940438f0353da6f289c7bef069d993d111f8106086ccd18c4a30 done
+#5 DONE 0.0s
+
+#6 [2/6] RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends         python3.11 python3.11-distutils         ffmpeg ca-certificates curl     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11     && rm -rf /var/lib/apt/lists/*     && python3.11 -m pip --version
+#6 CACHED
+
+#7 [3/6] WORKDIR /app
+#7 CACHED
+
+#8 [4/6] RUN python3.11 -m pip install --no-cache-dir         torch==2.3.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121     && python3.11 -m pip install --no-cache-dir         "pyannote.audio>=3.1,<4.0"         "huggingface_hub<1.0"         "soundfile"         "numpy<2.0"         "fastapi>=0.110"         "uvicorn[standard]>=0.27"         "python-multipart"     && python3.11 -c "import pyannote.audio, huggingface_hub; print('pyannote.audio', pyannote.audio.__version__, '✓'); print('huggingface_hub', huggingface_hub.__version__, '✓')"
+#8 1.406 Looking in indexes: https://download.pytorch.org/whl/cu121
+#8 1.931 Collecting torch==2.3.0
+#8 2.340   Downloading torch-2.3.0%2Bcu121-cp311-cp311-linux_x86_64.whl (781.0 MB)
+#8 159.7      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 781.0/781.0 MB 5.0 MB/s  0:02:37
+#8 161.1 Collecting torchaudio==2.3.0
+#8 161.2   Downloading torchaudio-2.3.0%2Bcu121-cp311-cp311-linux_x86_64.whl (3.4 MB)
+#8 161.7      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 7.2 MB/s  0:00:00
+#8 162.7 Collecting filelock (from torch==2.3.0)
+#8 162.9   Downloading filelock-3.29.0-py3-none-any.whl.metadata (2.0 kB)
+#8 163.2 Collecting typing-extensions>=4.8.0 (from torch==2.3.0)
+#8 163.3   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+#8 163.8 Collecting sympy (from torch==2.3.0)
+#8 163.9   Downloading sympy-1.14.0-py3-none-any.whl.metadata (12 kB)
+#8 164.3 Collecting networkx (from torch==2.3.0)
+#8 164.3   Downloading networkx-3.6.1-py3-none-any.whl.metadata (6.8 kB)
+#8 164.7 Collecting jinja2 (from torch==2.3.0)
+#8 164.7   Downloading jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+#8 165.1 Collecting fsspec (from torch==2.3.0)
+#8 165.1   Downloading fsspec-2026.4.0-py3-none-any.whl.metadata (10 kB)
+#8 165.5 Collecting nvidia-cuda-nvrtc-cu12==12.1.105 (from torch==2.3.0)
+#8 165.6   Downloading nvidia_cuda_nvrtc_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (23.7 MB)
+#8 171.1      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 23.7/23.7 MB 4.3 MB/s  0:00:05
+#8 175.8 Collecting nvidia-cuda-runtime-cu12==12.1.105 (from torch==2.3.0)
+#8 175.9   Downloading nvidia_cuda_runtime_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (823 kB)
+#8 176.1      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 823.6/823.6 kB 4.5 MB/s  0:00:00
+#8 177.1 Collecting nvidia-cuda-cupti-cu12==12.1.105 (from torch==2.3.0)
+#8 177.1   Downloading nvidia_cuda_cupti_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (14.1 MB)
+#8 180.4      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 14.1/14.1 MB 4.4 MB/s  0:00:03
+#8 181.1 Collecting nvidia-cudnn-cu12==8.9.2.26 (from torch==2.3.0)
+#8 181.2   Downloading nvidia_cudnn_cu12-8.9.2.26-py3-none-manylinux1_x86_64.whl (731.7 MB)
+#8 354.4      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 731.7/731.7 MB 4.4 MB/s  0:02:53
+#8 355.5 Collecting nvidia-cublas-cu12==12.1.3.1 (from torch==2.3.0)
+#8 355.5   Downloading nvidia_cublas_cu12-12.1.3.1-py3-none-manylinux1_x86_64.whl (410.6 MB)
+#8 447.5      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 410.6/410.6 MB 4.9 MB/s  0:01:31
+#8 448.5 Collecting nvidia-cufft-cu12==11.0.2.54 (from torch==2.3.0)
+#8 448.6   Downloading nvidia_cufft_cu12-11.0.2.54-py3-none-manylinux1_x86_64.whl (121.6 MB)
+#8 477.6      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 121.6/121.6 MB 4.2 MB/s  0:00:29
+#8 478.7 Collecting nvidia-curand-cu12==10.3.2.106 (from torch==2.3.0)
+#8 478.7   Downloading nvidia_curand_cu12-10.3.2.106-py3-none-manylinux1_x86_64.whl (56.5 MB)
+#8 490.6      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.5/56.5 MB 4.8 MB/s  0:00:11
+#8 491.4 Collecting nvidia-cusolver-cu12==11.4.5.107 (from torch==2.3.0)
+#8 491.5   Downloading nvidia_cusolver_cu12-11.4.5.107-py3-none-manylinux1_x86_64.whl (124.2 MB)
+#8 518.5      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 124.2/124.2 MB 4.6 MB/s  0:00:26
+#8 518.9 Collecting nvidia-cusparse-cu12==12.1.0.106 (from torch==2.3.0)
+#8 518.9   Downloading nvidia_cusparse_cu12-12.1.0.106-py3-none-manylinux1_x86_64.whl (196.0 MB)
+#8 561.8      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 196.0/196.0 MB 4.6 MB/s  0:00:42
+#8 562.7 Collecting nvidia-nccl-cu12==2.20.5 (from torch==2.3.0)
+#8 562.8   Downloading nvidia_nccl_cu12-2.20.5-py3-none-manylinux2014_x86_64.whl (176.2 MB)
+#8 607.5      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 176.2/176.2 MB 3.7 MB/s  0:00:44
+#8 608.4 Collecting nvidia-nvtx-cu12==12.1.105 (from torch==2.3.0)
+#8 608.5   Downloading nvidia_nvtx_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (99 kB)
+#8 609.5 Collecting triton==2.3.0 (from torch==2.3.0)
+#8 611.2   Downloading triton-2.3.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (168.1 MB)
+#8 647.7      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 168.1/168.1 MB 4.8 MB/s  0:00:36
+#8 648.7 Collecting nvidia-nvjitlink-cu12 (from nvidia-cusolver-cu12==11.4.5.107->torch==2.3.0)
+#8 648.7   Downloading nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl.metadata (1.7 kB)
+#8 649.3 Collecting MarkupSafe>=2.0 (from jinja2->torch==2.3.0)
+#8 649.3   Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
+#8 649.6 Collecting mpmath<1.4,>=1.1.0 (from sympy->torch==2.3.0)
+#8 649.7   Downloading mpmath-1.3.0-py3-none-any.whl.metadata (8.6 kB)
+#8 649.8 Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+#8 650.1 Downloading filelock-3.29.0-py3-none-any.whl (39 kB)
+#8 650.3 Downloading fsspec-2026.4.0-py3-none-any.whl (203 kB)
+#8 650.5 Downloading jinja2-3.1.6-py3-none-any.whl (134 kB)
+#8 650.6 Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+#8 650.6 Downloading networkx-3.6.1-py3-none-any.whl (2.1 MB)
+#8 651.5    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 2.5 MB/s  0:00:00
+#8 651.5 Downloading nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl (39.7 MB)
+#8 659.1    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 39.7/39.7 MB 5.3 MB/s  0:00:07
+#8 659.1 Downloading sympy-1.14.0-py3-none-any.whl (6.3 MB)
+#8 661.0    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 3.3 MB/s  0:00:01
+#8 661.1 Downloading mpmath-1.3.0-py3-none-any.whl (536 kB)
+#8 661.5    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 536.2/536.2 kB 835.8 kB/s  0:00:00
+#8 661.7 Installing collected packages: mpmath, typing-extensions, sympy, nvidia-nvtx-cu12, nvidia-nvjitlink-cu12, nvidia-nccl-cu12, nvidia-curand-cu12, nvidia-cufft-cu12, nvidia-cuda-runtime-cu12, nvidia-cuda-nvrtc-cu12, nvidia-cuda-cupti-cu12, nvidia-cublas-cu12, networkx, MarkupSafe, fsspec, filelock, triton, nvidia-cusparse-cu12, nvidia-cudnn-cu12, jinja2, nvidia-cusolver-cu12, torch, torchaudio
+#8 707.1 
+#8 707.1 Successfully installed MarkupSafe-3.0.3 filelock-3.29.0 fsspec-2026.4.0 jinja2-3.1.6 mpmath-1.3.0 networkx-3.6.1 nvidia-cublas-cu12-12.1.3.1 nvidia-cuda-cupti-cu12-12.1.105 nvidia-cuda-nvrtc-cu12-12.1.105 nvidia-cuda-runtime-cu12-12.1.105 nvidia-cudnn-cu12-8.9.2.26 nvidia-cufft-cu12-11.0.2.54 nvidia-curand-cu12-10.3.2.106 nvidia-cusolver-cu12-11.4.5.107 nvidia-cusparse-cu12-12.1.0.106 nvidia-nccl-cu12-2.20.5 nvidia-nvjitlink-cu12-12.9.86 nvidia-nvtx-cu12-12.1.105 sympy-1.14.0 torch-2.3.0+cu121 torchaudio-2.3.0+cu121 triton-2.3.0 typing-extensions-4.15.0
+#8 707.1 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#8 709.3 Collecting pyannote.audio<4.0,>=3.1
+#8 709.6   Downloading pyannote_audio-3.4.0-py2.py3-none-any.whl.metadata (11 kB)
+#8 709.9 Collecting huggingface_hub<1.0
+#8 709.9   Downloading huggingface_hub-0.36.2-py3-none-any.whl.metadata (15 kB)
+#8 710.0 Collecting soundfile
+#8 710.1   Downloading soundfile-0.14.0-py2.py3-none-manylinux_2_28_x86_64.whl.metadata (18 kB)
+#8 710.6 Collecting numpy<2.0
+#8 710.7   Downloading numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (61 kB)
+#8 710.9 Collecting fastapi>=0.110
+#8 710.9   Downloading fastapi-0.136.3-py3-none-any.whl.metadata (27 kB)
+#8 711.0 Collecting uvicorn>=0.27 (from uvicorn[standard]>=0.27)
+#8 711.1   Downloading uvicorn-0.49.0-py3-none-any.whl.metadata (6.7 kB)
+#8 711.2 Collecting python-multipart
+#8 711.3   Downloading python_multipart-0.0.32-py3-none-any.whl.metadata (2.1 kB)
+#8 711.4 Collecting asteroid-filterbanks>=0.4 (from pyannote.audio<4.0,>=3.1)
+#8 711.5   Downloading asteroid_filterbanks-0.4.0-py3-none-any.whl.metadata (3.3 kB)
+#8 711.6 Collecting einops>=0.6.0 (from pyannote.audio<4.0,>=3.1)
+#8 711.6   Downloading einops-0.8.2-py3-none-any.whl.metadata (13 kB)
+#8 711.8 Collecting lightning>=2.0.1 (from pyannote.audio<4.0,>=3.1)
+#8 711.8   Downloading lightning-2.6.5-py3-none-any.whl.metadata (44 kB)
+#8 712.0 Collecting omegaconf<3.0,>=2.1 (from pyannote.audio<4.0,>=3.1)
+#8 712.1   Downloading omegaconf-2.3.0-py3-none-any.whl.metadata (3.9 kB)
+#8 712.2 Collecting pyannote.core<6.0,>=5.0.0 (from pyannote.audio<4.0,>=3.1)
+#8 712.2   Downloading pyannote.core-5.0.0-py3-none-any.whl.metadata (1.4 kB)
+#8 712.3 Collecting pyannote.database<6.0,>=5.0.1 (from pyannote.audio<4.0,>=3.1)
+#8 712.4   Downloading pyannote.database-5.1.3-py3-none-any.whl.metadata (1.1 kB)
+#8 712.5 Collecting pyannote.metrics<4.0,>=3.2 (from pyannote.audio<4.0,>=3.1)
+#8 712.6   Downloading pyannote.metrics-3.2.1-py3-none-any.whl.metadata (1.3 kB)
+#8 712.7 Collecting pyannote.pipeline<4.0,>=3.0.1 (from pyannote.audio<4.0,>=3.1)
+#8 712.7   Downloading pyannote.pipeline-3.0.1-py3-none-any.whl.metadata (897 bytes)
+#8 712.9 Collecting pytorch_metric_learning>=2.1.0 (from pyannote.audio<4.0,>=3.1)
+#8 713.0   Downloading pytorch_metric_learning-2.9.0-py3-none-any.whl.metadata (18 kB)
+#8 713.1 Collecting rich>=12.0.0 (from pyannote.audio<4.0,>=3.1)
+#8 713.2   Downloading rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+#8 713.4 Collecting semver>=3.0.0 (from pyannote.audio<4.0,>=3.1)
+#8 713.5   Downloading semver-3.0.4-py3-none-any.whl.metadata (6.8 kB)
+#8 713.8 Collecting speechbrain>=1.0.0 (from pyannote.audio<4.0,>=3.1)
+#8 713.9   Downloading speechbrain-1.1.0-py3-none-any.whl.metadata (24 kB)
+#8 714.0 Collecting tensorboardX>=2.6 (from pyannote.audio<4.0,>=3.1)
+#8 714.3   Downloading tensorboardx-2.6.5-py3-none-any.whl.metadata (6.6 kB)
+#8 714.3 Requirement already satisfied: torch>=2.0.0 in /usr/local/lib/python3.11/dist-packages (from pyannote.audio<4.0,>=3.1) (2.3.0+cu121)
+#8 714.5 Collecting torch_audiomentations>=0.11.0 (from pyannote.audio<4.0,>=3.1)
+#8 714.6   Downloading torch_audiomentations-0.12.0-py3-none-any.whl.metadata (15 kB)
+#8 714.6 Requirement already satisfied: torchaudio>=2.2.0 in /usr/local/lib/python3.11/dist-packages (from pyannote.audio<4.0,>=3.1) (2.3.0+cu121)
+#8 714.7 Collecting torchmetrics>=0.11.0 (from pyannote.audio<4.0,>=3.1)
+#8 714.8   Downloading torchmetrics-1.9.0-py3-none-any.whl.metadata (23 kB)
+#8 714.8 Requirement already satisfied: filelock in /usr/local/lib/python3.11/dist-packages (from huggingface_hub<1.0) (3.29.0)
+#8 714.8 Requirement already satisfied: fsspec>=2023.5.0 in /usr/local/lib/python3.11/dist-packages (from huggingface_hub<1.0) (2026.4.0)
+#8 715.0 Collecting hf-xet<2.0.0,>=1.1.3 (from huggingface_hub<1.0)
+#8 715.0   Downloading hf_xet-1.5.1-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (4.9 kB)
+#8 715.0 Requirement already satisfied: packaging>=20.9 in /usr/local/lib/python3.11/dist-packages (from huggingface_hub<1.0) (26.2)
+#8 715.1 Collecting pyyaml>=5.1 (from huggingface_hub<1.0)
+#8 715.2   Downloading pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+#8 715.3 Collecting requests (from huggingface_hub<1.0)
+#8 715.4   Downloading requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+#8 715.5 Collecting tqdm>=4.42.1 (from huggingface_hub<1.0)
+#8 715.6   Downloading tqdm-4.68.2-py3-none-any.whl.metadata (58 kB)
+#8 715.6 Requirement already satisfied: typing-extensions>=3.7.4.3 in /usr/local/lib/python3.11/dist-packages (from huggingface_hub<1.0) (4.15.0)
+#8 715.7 Collecting antlr4-python3-runtime==4.9.* (from omegaconf<3.0,>=2.1->pyannote.audio<4.0,>=3.1)
+#8 715.8   Downloading antlr4-python3-runtime-4.9.3.tar.gz (117 kB)
+#8 715.9   Installing build dependencies: started
+#8 716.9   Installing build dependencies: finished with status 'done'
+#8 716.9   Getting requirements to build wheel: started
+#8 717.6   Getting requirements to build wheel: finished with status 'done'
+#8 717.6   Preparing metadata (pyproject.toml): started
+#8 718.6   Preparing metadata (pyproject.toml): finished with status 'done'
+#8 718.7 Collecting sortedcontainers>=2.0.4 (from pyannote.core<6.0,>=5.0.0->pyannote.audio<4.0,>=3.1)
+#8 718.8   Downloading sortedcontainers-2.4.0-py2.py3-none-any.whl.metadata (10 kB)
+#8 719.0 Collecting scipy>=1.1 (from pyannote.core<6.0,>=5.0.0->pyannote.audio<4.0,>=3.1)
+#8 719.1   Downloading scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (62 kB)
+#8 719.4 Collecting pandas>=0.19 (from pyannote.database<6.0,>=5.0.1->pyannote.audio<4.0,>=3.1)
+#8 719.4   Downloading pandas-3.0.3-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (79 kB)
+#8 719.6 Collecting typer>=0.12.1 (from pyannote.database<6.0,>=5.0.1->pyannote.audio<4.0,>=3.1)
+#8 719.7   Downloading typer-0.26.7-py3-none-any.whl.metadata (16 kB)
+#8 719.9 Collecting scikit-learn>=0.17.1 (from pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 719.9   Downloading scikit_learn-1.9.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (11 kB)
+#8 720.0 Collecting docopt>=0.6.2 (from pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 720.1   Downloading docopt-0.6.2.tar.gz (25 kB)
+#8 720.1   Installing build dependencies: started
+#8 721.0   Installing build dependencies: finished with status 'done'
+#8 721.0   Getting requirements to build wheel: started
+#8 721.3   Getting requirements to build wheel: finished with status 'done'
+#8 721.3   Preparing metadata (pyproject.toml): started
+#8 721.5   Preparing metadata (pyproject.toml): finished with status 'done'
+#8 721.5 Collecting tabulate>=0.7.7 (from pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 721.6   Downloading tabulate-0.10.0-py3-none-any.whl.metadata (40 kB)
+#8 721.9 Collecting matplotlib>=2.0.0 (from pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 722.0   Downloading matplotlib-3.10.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (52 kB)
+#8 722.0 Requirement already satisfied: sympy>=1.1 in /usr/local/lib/python3.11/dist-packages (from pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1) (1.14.0)
+#8 722.1 Collecting optuna>=3.1 (from pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 722.2   Downloading optuna-4.9.0-py3-none-any.whl.metadata (15 kB)
+#8 722.4 Collecting cffi>=1.0 (from soundfile)
+#8 722.5   Downloading cffi-2.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
+#8 722.6 Collecting starlette>=0.46.0 (from fastapi>=0.110)
+#8 722.6   Downloading starlette-1.2.1-py3-none-any.whl.metadata (6.3 kB)
+#8 722.9 Collecting pydantic>=2.9.0 (from fastapi>=0.110)
+#8 723.0   Downloading pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+#8 723.1 Collecting typing-inspection>=0.4.2 (from fastapi>=0.110)
+#8 723.2   Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+#8 723.3 Collecting annotated-doc>=0.0.2 (from fastapi>=0.110)
+#8 723.3   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
+#8 723.4 Collecting click>=7.0 (from uvicorn>=0.27->uvicorn[standard]>=0.27)
+#8 723.5   Downloading click-8.4.1-py3-none-any.whl.metadata (2.6 kB)
+#8 723.6 Collecting h11>=0.8 (from uvicorn>=0.27->uvicorn[standard]>=0.27)
+#8 723.7   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+#8 723.8 Collecting pycparser (from cffi>=1.0->soundfile)
+#8 723.8   Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+#8 723.9 Collecting lightning-utilities<2.0,>=0.10.0 (from lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 724.0   Downloading lightning_utilities-0.15.3-py3-none-any.whl.metadata (5.5 kB)
+#8 724.1 Collecting pytorch-lightning (from lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 724.2   Downloading pytorch_lightning-2.6.5-py3-none-any.whl.metadata (21 kB)
+#8 725.2 Collecting aiohttp!=4.0.0a0,!=4.0.0a1 (from fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 725.2   Downloading aiohttp-3.14.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.3 kB)
+#8 725.3 Requirement already satisfied: networkx in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (3.6.1)
+#8 725.3 Requirement already satisfied: jinja2 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (3.1.6)
+#8 725.3 Requirement already satisfied: nvidia-cuda-nvrtc-cu12==12.1.105 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.105)
+#8 725.3 Requirement already satisfied: nvidia-cuda-runtime-cu12==12.1.105 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.105)
+#8 725.3 Requirement already satisfied: nvidia-cuda-cupti-cu12==12.1.105 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.105)
+#8 725.3 Requirement already satisfied: nvidia-cudnn-cu12==8.9.2.26 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (8.9.2.26)
+#8 725.3 Requirement already satisfied: nvidia-cublas-cu12==12.1.3.1 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.3.1)
+#8 725.3 Requirement already satisfied: nvidia-cufft-cu12==11.0.2.54 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (11.0.2.54)
+#8 725.3 Requirement already satisfied: nvidia-curand-cu12==10.3.2.106 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (10.3.2.106)
+#8 725.3 Requirement already satisfied: nvidia-cusolver-cu12==11.4.5.107 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (11.4.5.107)
+#8 725.3 Requirement already satisfied: nvidia-cusparse-cu12==12.1.0.106 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.0.106)
+#8 725.3 Requirement already satisfied: nvidia-nccl-cu12==2.20.5 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (2.20.5)
+#8 725.3 Requirement already satisfied: nvidia-nvtx-cu12==12.1.105 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.1.105)
+#8 725.3 Requirement already satisfied: triton==2.3.0 in /usr/local/lib/python3.11/dist-packages (from torch>=2.0.0->pyannote.audio<4.0,>=3.1) (2.3.0)
+#8 725.3 Requirement already satisfied: nvidia-nvjitlink-cu12 in /usr/local/lib/python3.11/dist-packages (from nvidia-cusolver-cu12==11.4.5.107->torch>=2.0.0->pyannote.audio<4.0,>=3.1) (12.9.86)
+#8 725.4 Collecting aiohappyeyeballs>=2.5.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 725.4   Downloading aiohappyeyeballs-2.6.2-py3-none-any.whl.metadata (5.9 kB)
+#8 725.5 Collecting aiosignal>=1.4.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 725.6   Downloading aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
+#8 725.7 Collecting attrs>=17.3.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 725.8   Downloading attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+#8 725.9 Collecting frozenlist>=1.1.1 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 726.0   Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
+#8 726.4 Collecting multidict<7.0,>=4.5 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 726.5   Downloading multidict-6.7.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.3 kB)
+#8 726.6 Collecting propcache>=0.2.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 726.7   Downloading propcache-0.5.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (16 kB)
+#8 727.2 Collecting yarl<2.0,>=1.17.0 (from aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 727.3   Downloading yarl-1.24.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (94 kB)
+#8 727.5 Collecting idna>=2.0 (from yarl<2.0,>=1.17.0->aiohttp!=4.0.0a0,!=4.0.0a1->fsspec[http]<2028.0,>=2022.5.0->lightning>=2.0.1->pyannote.audio<4.0,>=3.1)
+#8 727.5   Downloading idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+#8 727.7 Collecting contourpy>=1.0.1 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 727.8   Downloading contourpy-1.3.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (5.5 kB)
+#8 727.9 Collecting cycler>=0.10 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 727.9   Downloading cycler-0.12.1-py3-none-any.whl.metadata (3.8 kB)
+#8 728.2 Collecting fonttools>=4.22.0 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 728.3   Downloading fonttools-4.63.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (118 kB)
+#8 728.6 Collecting kiwisolver>=1.3.1 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 728.7   Downloading kiwisolver-1.5.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (5.1 kB)
+#8 729.0 Collecting pillow>=8 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 729.1   Downloading pillow-12.2.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (8.8 kB)
+#8 729.2 Collecting pyparsing>=3 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 729.3   Downloading pyparsing-3.3.2-py3-none-any.whl.metadata (5.8 kB)
+#8 729.4 Collecting python-dateutil>=2.7 (from matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 729.4   Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+#8 729.5 Collecting alembic>=1.5.0 (from optuna>=3.1->pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 729.6   Downloading alembic-1.18.4-py3-none-any.whl.metadata (7.2 kB)
+#8 729.7 Collecting colorlog (from optuna>=3.1->pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 729.8   Downloading colorlog-6.10.1-py3-none-any.whl.metadata (11 kB)
+#8 730.3 Collecting sqlalchemy>=1.4.2 (from optuna>=3.1->pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 730.4   Downloading sqlalchemy-2.0.50-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (9.5 kB)
+#8 730.5 Collecting Mako (from alembic>=1.5.0->optuna>=3.1->pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 730.5   Downloading mako-1.3.12-py3-none-any.whl.metadata (2.9 kB)
+#8 730.6 Collecting annotated-types>=0.6.0 (from pydantic>=2.9.0->fastapi>=0.110)
+#8 730.7   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+#8 732.7 Collecting pydantic-core==2.46.4 (from pydantic>=2.9.0->fastapi>=0.110)
+#8 732.8   Downloading pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+#8 732.9 Collecting six>=1.5 (from python-dateutil>=2.7->matplotlib>=2.0.0->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 732.9   Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+#8 733.0 Collecting markdown-it-py>=2.2.0 (from rich>=12.0.0->pyannote.audio<4.0,>=3.1)
+#8 733.1   Downloading markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+#8 733.2 Collecting pygments<3.0.0,>=2.13.0 (from rich>=12.0.0->pyannote.audio<4.0,>=3.1)
+#8 733.3   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+#8 733.4 Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=12.0.0->pyannote.audio<4.0,>=3.1)
+#8 733.4   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+#8 733.5 Collecting joblib>=1.4.0 (from scikit-learn>=0.17.1->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 733.6   Downloading joblib-1.5.3-py3-none-any.whl.metadata (5.5 kB)
+#8 733.8 Collecting narwhals>=2.0.1 (from scikit-learn>=0.17.1->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 733.8   Downloading narwhals-2.22.1-py3-none-any.whl.metadata (15 kB)
+#8 733.9 Collecting threadpoolctl>=3.5.0 (from scikit-learn>=0.17.1->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1)
+#8 734.0   Downloading threadpoolctl-3.6.0-py3-none-any.whl.metadata (13 kB)
+#8 734.1 Collecting hyperpyyaml>=0.0.1 (from speechbrain>=1.0.0->pyannote.audio<4.0,>=3.1)
+#8 734.1   Downloading hyperpyyaml-1.2.3-py3-none-any.whl.metadata (8.1 kB)
+#8 734.3 Collecting sentencepiece>=0.1.91 (from speechbrain>=1.0.0->pyannote.audio<4.0,>=3.1)
+#8 734.4   Downloading sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (10 kB)
+#8 734.7 Collecting ruamel.yaml<0.19.0,>=0.17.28 (from hyperpyyaml>=0.0.1->speechbrain>=1.0.0->pyannote.audio<4.0,>=3.1)
+#8 734.8   Downloading ruamel_yaml-0.18.17-py3-none-any.whl.metadata (27 kB)
+#8 734.9 Collecting ruamel.yaml.clib>=0.2.15 (from ruamel.yaml<0.19.0,>=0.17.28->hyperpyyaml>=0.0.1->speechbrain>=1.0.0->pyannote.audio<4.0,>=3.1)
+#8 735.0   Downloading ruamel_yaml_clib-0.2.15-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (3.5 kB)
+#8 735.2 Collecting charset_normalizer<4,>=2 (from requests->huggingface_hub<1.0)
+#8 735.3   Downloading charset_normalizer-3.4.7-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (40 kB)
+#8 735.4 Collecting urllib3<3,>=1.26 (from requests->huggingface_hub<1.0)
+#8 735.5   Downloading urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+#8 735.6 Collecting certifi>=2023.5.7 (from requests->huggingface_hub<1.0)
+#8 735.6   Downloading certifi-2026.5.20-py3-none-any.whl.metadata (2.5 kB)
+#8 736.0 Collecting greenlet>=1 (from sqlalchemy>=1.4.2->optuna>=3.1->pyannote.pipeline<4.0,>=3.0.1->pyannote.audio<4.0,>=3.1)
+#8 736.1   Downloading greenlet-3.5.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (3.8 kB)
+#8 736.2 Collecting anyio<5,>=3.6.2 (from starlette>=0.46.0->fastapi>=0.110)
+#8 736.3   Downloading anyio-4.13.0-py3-none-any.whl.metadata (4.5 kB)
+#8 736.3 Requirement already satisfied: mpmath<1.4,>=1.1.0 in /usr/local/lib/python3.11/dist-packages (from sympy>=1.1->pyannote.metrics<4.0,>=3.2->pyannote.audio<4.0,>=3.1) (1.3.0)
+#8 736.6 Collecting protobuf>=3.20 (from tensorboardX>=2.6->pyannote.audio<4.0,>=3.1)
+#8 736.7   Downloading protobuf-7.35.0-cp310-abi3-manylinux2014_x86_64.whl.metadata (595 bytes)
+#8 736.8 Collecting julius<0.3,>=0.2.3 (from torch_audiomentations>=0.11.0->pyannote.audio<4.0,>=3.1)
+#8 736.9   Downloading julius-0.2.8-py3-none-any.whl.metadata (7.6 kB)
+#8 737.0 Collecting torch-pitch-shift>=1.2.2 (from torch_audiomentations>=0.11.0->pyannote.audio<4.0,>=3.1)
+#8 737.0   Downloading torch_pitch_shift-1.2.5-py3-none-any.whl.metadata (2.5 kB)
+#8 737.1 Collecting primePy>=1.3 (from torch-pitch-shift>=1.2.2->torch_audiomentations>=0.11.0->pyannote.audio<4.0,>=3.1)
+#8 737.2   Downloading primePy-1.3-py3-none-any.whl.metadata (4.8 kB)
+#8 737.3 Collecting shellingham>=1.3.0 (from typer>=0.12.1->pyannote.database<6.0,>=5.0.1->pyannote.audio<4.0,>=3.1)
+#8 737.4   Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+#8 737.5 Collecting httptools>=0.8.0 (from uvicorn[standard]>=0.27)
+#8 737.6   Downloading httptools-0.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (3.5 kB)
+#8 737.6 Collecting python-dotenv>=0.13 (from uvicorn[standard]>=0.27)
+#8 737.7   Downloading python_dotenv-1.2.2-py3-none-any.whl.metadata (27 kB)
+#8 737.9 Collecting uvloop>=0.15.1 (from uvicorn[standard]>=0.27)
+#8 737.9   Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (4.9 kB)
+#8 738.1 Collecting watchfiles>=0.20 (from uvicorn[standard]>=0.27)
+#8 738.2   Downloading watchfiles-1.2.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.9 kB)
+#8 738.4 Collecting websockets>=10.4 (from uvicorn[standard]>=0.27)
+#8 738.5   Downloading websockets-16.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+#8 738.5 Requirement already satisfied: MarkupSafe>=2.0 in /usr/local/lib/python3.11/dist-packages (from jinja2->torch>=2.0.0->pyannote.audio<4.0,>=3.1) (3.0.3)
+#8 738.6 Downloading pyannote_audio-3.4.0-py2.py3-none-any.whl (897 kB)
+#8 739.0    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 897.8/897.8 kB 2.0 MB/s  0:00:00
+#8 739.1 Downloading huggingface_hub-0.36.2-py3-none-any.whl (566 kB)
+#8 739.4    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 566.4/566.4 kB 2.4 MB/s  0:00:00
+#8 739.4 Downloading numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (18.3 MB)
+#8 744.5    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.3/18.3 MB 3.6 MB/s  0:00:05
+#8 744.6 Downloading hf_xet-1.5.1-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.5 MB)
+#8 746.3    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.5/4.5 MB 2.7 MB/s  0:00:01
+#8 746.4 Downloading omegaconf-2.3.0-py3-none-any.whl (79 kB)
+#8 746.4 Downloading pyannote.core-5.0.0-py3-none-any.whl (58 kB)
+#8 746.5 Downloading pyannote.database-5.1.3-py3-none-any.whl (48 kB)
+#8 746.6 Downloading pyannote.metrics-3.2.1-py3-none-any.whl (51 kB)
+#8 746.7 Downloading pyannote.pipeline-3.0.1-py3-none-any.whl (31 kB)
+#8 746.8 Downloading soundfile-0.14.0-py2.py3-none-manylinux_2_28_x86_64.whl (1.3 MB)
+#8 747.2    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 2.9 MB/s  0:00:00
+#8 747.3 Downloading fastapi-0.136.3-py3-none-any.whl (117 kB)
+#8 747.4 Downloading uvicorn-0.49.0-py3-none-any.whl (71 kB)
+#8 747.5 Downloading python_multipart-0.0.32-py3-none-any.whl (30 kB)
+#8 747.6 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
+#8 747.6 Downloading asteroid_filterbanks-0.4.0-py3-none-any.whl (29 kB)
+#8 747.7 Downloading cffi-2.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (215 kB)
+#8 747.9 Downloading click-8.4.1-py3-none-any.whl (116 kB)
+#8 748.0 Downloading einops-0.8.2-py3-none-any.whl (65 kB)
+#8 748.0 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#8 748.1 Downloading lightning-2.6.5-py3-none-any.whl (848 kB)
+#8 748.4    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 848.6/848.6 kB 3.0 MB/s  0:00:00
+#8 748.5 Downloading lightning_utilities-0.15.3-py3-none-any.whl (31 kB)
+#8 748.5 Downloading pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (806 kB)
+#8 748.8    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 806.6/806.6 kB 3.0 MB/s  0:00:00
+#8 748.9 Downloading torchmetrics-1.9.0-py3-none-any.whl (983 kB)
+#8 749.2    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 983.4/983.4 kB 3.1 MB/s  0:00:00
+#8 749.3 Downloading tqdm-4.68.2-py3-none-any.whl (78 kB)
+#8 749.4 Downloading aiohttp-3.14.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.8 MB)
+#8 750.0    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 3.2 MB/s  0:00:00
+#8 750.0 Downloading multidict-6.7.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (246 kB)
+#8 750.2 Downloading yarl-1.24.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (106 kB)
+#8 750.3 Downloading aiohappyeyeballs-2.6.2-py3-none-any.whl (15 kB)
+#8 750.4 Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+#8 750.4 Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
+#8 750.5 Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
+#8 750.7 Downloading idna-3.18-py3-none-any.whl (65 kB)
+#8 750.7 Downloading matplotlib-3.10.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (8.8 MB)
+#8 753.4    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.8/8.8 MB 3.4 MB/s  0:00:02
+#8 753.4 Downloading contourpy-1.3.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (355 kB)
+#8 753.6 Downloading cycler-0.12.1-py3-none-any.whl (8.3 kB)
+#8 753.6 Downloading fonttools-4.63.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.1 MB)
+#8 754.9    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.1/5.1 MB 4.1 MB/s  0:00:01
+#8 755.0 Downloading kiwisolver-1.5.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (1.4 MB)
+#8 755.3    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 4.8 MB/s  0:00:00
+#8 755.3 Downloading optuna-4.9.0-py3-none-any.whl (425 kB)
+#8 755.5 Downloading alembic-1.18.4-py3-none-any.whl (263 kB)
+#8 755.6 Downloading pandas-3.0.3-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (11.3 MB)
+#8 757.8    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.3/11.3 MB 5.1 MB/s  0:00:02
+#8 757.9 Downloading pillow-12.2.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.1 MB)
+#8 759.2    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.1/7.1 MB 5.3 MB/s  0:00:01
+#8 759.3 Downloading propcache-0.5.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (58 kB)
+#8 759.4 Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+#8 759.5 Downloading pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#8 759.9    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 6.0 MB/s  0:00:00
+#8 760.0 Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+#8 760.0 Downloading pyparsing-3.3.2-py3-none-any.whl (122 kB)
+#8 760.1 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+#8 760.3 Downloading pytorch_metric_learning-2.9.0-py3-none-any.whl (127 kB)
+#8 760.3 Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+#8 760.5 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+#8 760.7    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 5.7 MB/s  0:00:00
+#8 760.8 Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+#8 760.9 Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+#8 760.9 Downloading scikit_learn-1.9.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (9.3 MB)
+#8 762.7    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.3/9.3 MB 5.2 MB/s  0:00:01
+#8 762.8 Downloading joblib-1.5.3-py3-none-any.whl (309 kB)
+#8 762.9 Downloading narwhals-2.22.1-py3-none-any.whl (454 kB)
+#8 763.2 Downloading scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (35.3 MB)
+#8 773.4    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 35.3/35.3 MB 3.5 MB/s  0:00:10
+#8 773.5 Downloading semver-3.0.4-py3-none-any.whl (17 kB)
+#8 773.5 Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+#8 773.6 Downloading sortedcontainers-2.4.0-py2.py3-none-any.whl (29 kB)
+#8 773.7 Downloading speechbrain-1.1.0-py3-none-any.whl (2.3 MB)
+#8 774.1    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 4.9 MB/s  0:00:00
+#8 774.2 Downloading hyperpyyaml-1.2.3-py3-none-any.whl (16 kB)
+#8 774.3 Downloading ruamel_yaml-0.18.17-py3-none-any.whl (121 kB)
+#8 774.4 Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+#8 774.5 Downloading charset_normalizer-3.4.7-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (214 kB)
+#8 774.6 Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+#8 774.7 Downloading certifi-2026.5.20-py3-none-any.whl (134 kB)
+#8 774.8 Downloading ruamel_yaml_clib-0.2.15-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (777 kB)
+#8 774.9    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 777.6/777.6 kB 5.3 MB/s  0:00:00
+#8 775.0 Downloading sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (1.4 MB)
+#8 775.3    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 5.4 MB/s  0:00:00
+#8 775.3 Downloading sqlalchemy-2.0.50-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.3 MB)
+#8 776.0    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 5.3 MB/s  0:00:00
+#8 776.0 Downloading greenlet-3.5.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (614 kB)
+#8 776.2    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 614.8/614.8 kB 5.8 MB/s  0:00:00
+#8 776.2 Downloading starlette-1.2.1-py3-none-any.whl (73 kB)
+#8 776.3 Downloading anyio-4.13.0-py3-none-any.whl (114 kB)
+#8 776.4 Downloading tabulate-0.10.0-py3-none-any.whl (39 kB)
+#8 776.5 Downloading tensorboardx-2.6.5-py3-none-any.whl (87 kB)
+#8 776.6 Downloading protobuf-7.35.0-cp310-abi3-manylinux2014_x86_64.whl (327 kB)
+#8 776.7 Downloading threadpoolctl-3.6.0-py3-none-any.whl (18 kB)
+#8 776.8 Downloading torch_audiomentations-0.12.0-py3-none-any.whl (48 kB)
+#8 776.9 Downloading julius-0.2.8-py3-none-any.whl (21 kB)
+#8 776.9 Downloading torch_pitch_shift-1.2.5-py3-none-any.whl (5.0 kB)
+#8 777.0 Downloading primePy-1.3-py3-none-any.whl (4.0 kB)
+#8 777.1 Downloading typer-0.26.7-py3-none-any.whl (122 kB)
+#8 777.2 Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+#8 777.2 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+#8 777.3 Downloading httptools-0.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (464 kB)
+#8 777.5 Downloading python_dotenv-1.2.2-py3-none-any.whl (22 kB)
+#8 777.5 Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.8 MB)
+#8 778.2    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 5.7 MB/s  0:00:00
+#8 778.3 Downloading watchfiles-1.2.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+#8 778.4 Downloading websockets-16.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (184 kB)
+#8 778.6 Downloading colorlog-6.10.1-py3-none-any.whl (11 kB)
+#8 778.6 Downloading mako-1.3.12-py3-none-any.whl (78 kB)
+#8 778.7 Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+#8 778.8 Downloading pytorch_lightning-2.6.5-py3-none-any.whl (852 kB)
+#8 778.9    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 852.4/852.4 kB 6.5 MB/s  0:00:00
+#8 779.3 Building wheels for collected packages: antlr4-python3-runtime, docopt
+#8 779.3   Building wheel for antlr4-python3-runtime (pyproject.toml): started
+#8 779.8   Building wheel for antlr4-python3-runtime (pyproject.toml): finished with status 'done'
+#8 779.8   Created wheel for antlr4-python3-runtime: filename=antlr4_python3_runtime-4.9.3-py3-none-any.whl size=144590 sha256=a22418638f2dbeb23f61d5275118810d046f3357e5719517e10f9596c535db8c
+#8 779.8   Stored in directory: /tmp/pip-ephem-wheel-cache-v4lnerda/wheels/1a/97/32/461f837398029ad76911109f07047fde1d7b661a147c7c56d1
+#8 779.8   Building wheel for docopt (pyproject.toml): started
+#8 780.1   Building wheel for docopt (pyproject.toml): finished with status 'done'
+#8 780.1   Created wheel for docopt: filename=docopt-0.6.2-py2.py3-none-any.whl size=13782 sha256=584a89f09ef188b87be2419f39843d4a26ab872667397dae26e7085d15ebf569
+#8 780.1   Stored in directory: /tmp/pip-ephem-wheel-cache-v4lnerda/wheels/1a/b0/8c/4b75c4116c31f83c8f9f047231251e13cc74481cca4a78a9ce
+#8 780.1 Successfully built antlr4-python3-runtime docopt
+#8 780.7 Installing collected packages: sortedcontainers, primePy, docopt, antlr4-python3-runtime, websockets, uvloop, urllib3, typing-inspection, tqdm, threadpoolctl, tabulate, six, shellingham, sentencepiece, semver, ruamel.yaml.clib, pyyaml, python-multipart, python-dotenv, pyparsing, pygments, pydantic-core, pycparser, protobuf, propcache, pillow, numpy, narwhals, multidict, mdurl, Mako, lightning-utilities, kiwisolver, joblib, idna, httptools, hf-xet, h11, greenlet, frozenlist, fonttools, einops, cycler, colorlog, click, charset_normalizer, certifi, attrs, annotated-types, annotated-doc, aiohappyeyeballs, yarl, uvicorn, tensorboardX, sqlalchemy, scipy, ruamel.yaml, requests, python-dateutil, pydantic, omegaconf, markdown-it-py, contourpy, cffi, anyio, aiosignal, watchfiles, starlette, soundfile, scikit-learn, rich, pyannote.core, pandas, matplotlib, hyperpyyaml, huggingface_hub, alembic, aiohttp, typer, torchmetrics, pytorch_metric_learning, optuna, julius, fastapi, asteroid-filterbanks, torch-pitch-shift, speechbrain, pytorch-lightning, pyannote.database, torch_audiomentations, pyannote.pipeline, pyannote.metrics, lightning, pyannote.audio
+#8 806.6 
+#8 806.6 Successfully installed Mako-1.3.12 aiohappyeyeballs-2.6.2 aiohttp-3.14.1 aiosignal-1.4.0 alembic-1.18.4 annotated-doc-0.0.4 annotated-types-0.7.0 antlr4-python3-runtime-4.9.3 anyio-4.13.0 asteroid-filterbanks-0.4.0 attrs-26.1.0 certifi-2026.5.20 cffi-2.0.0 charset_normalizer-3.4.7 click-8.4.1 colorlog-6.10.1 contourpy-1.3.3 cycler-0.12.1 docopt-0.6.2 einops-0.8.2 fastapi-0.136.3 fonttools-4.63.0 frozenlist-1.8.0 greenlet-3.5.1 h11-0.16.0 hf-xet-1.5.1 httptools-0.8.0 huggingface_hub-0.36.2 hyperpyyaml-1.2.3 idna-3.18 joblib-1.5.3 julius-0.2.8 kiwisolver-1.5.0 lightning-2.6.5 lightning-utilities-0.15.3 markdown-it-py-4.2.0 matplotlib-3.10.9 mdurl-0.1.2 multidict-6.7.1 narwhals-2.22.1 numpy-1.26.4 omegaconf-2.3.0 optuna-4.9.0 pandas-3.0.3 pillow-12.2.0 primePy-1.3 propcache-0.5.2 protobuf-7.35.0 pyannote.audio-3.4.0 pyannote.core-5.0.0 pyannote.database-5.1.3 pyannote.metrics-3.2.1 pyannote.pipeline-3.0.1 pycparser-3.0 pydantic-2.13.4 pydantic-core-2.46.4 pygments-2.20.0 pyparsing-3.3.2 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 python-multipart-0.0.32 pytorch-lightning-2.6.5 pytorch_metric_learning-2.9.0 pyyaml-6.0.3 requests-2.34.2 rich-15.0.0 ruamel.yaml-0.18.17 ruamel.yaml.clib-0.2.15 scikit-learn-1.9.0 scipy-1.17.1 semver-3.0.4 sentencepiece-0.2.1 shellingham-1.5.4 six-1.17.0 sortedcontainers-2.4.0 soundfile-0.14.0 speechbrain-1.1.0 sqlalchemy-2.0.50 starlette-1.2.1 tabulate-0.10.0 tensorboardX-2.6.5 threadpoolctl-3.6.0 torch-pitch-shift-1.2.5 torch_audiomentations-0.12.0 torchmetrics-1.9.0 tqdm-4.68.2 typer-0.26.7 typing-inspection-0.4.2 urllib3-2.7.0 uvicorn-0.49.0 uvloop-0.22.1 watchfiles-1.2.0 websockets-16.0 yarl-1.24.2
+#8 806.6 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#8 811.5 pyannote.audio 3.4.0 ✓
+#8 811.5 huggingface_hub 0.36.2 ✓
+#8 DONE 813.4s
+
+#9 [5/6] RUN test -n "***REMOVED_HF_TOKEN***" || (echo "ERROR: --build-arg HF_TOKEN=<your-token> required" && exit 1)     && python3.11 -c "from pyannote.audio import Pipeline, Model; Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token='***REMOVED_HF_TOKEN***'); Model.from_pretrained('pyannote/wespeaker-voxceleb-resnet34-LM', use_auth_token='***REMOVED_HF_TOKEN***'); print('weights cached ✓')"
+#9 14.84 weights cached ✓
+#9 DONE 15.7s
+
+#10 [6/6] COPY pyannote_server.py /app/pyannote_server.py
+#10 DONE 0.1s
+
+#11 exporting to image
+#11 exporting layers
+#11 exporting layers 187.2s done
+#11 exporting manifest sha256:9a1d0c55d65ce7ca022673a9be5081ae76971d47e52bfeb90ad4ce3147abc14b 0.0s done
+#11 exporting config sha256:8d88a87c2bcdccac3a99771c1eab0ce5d3883f87c7e66f3597861bd82472feaf 0.0s done
+#11 exporting attestation manifest sha256:b200241b2d7ef925a2df50b9f36d319bb83f94eb28a96cad466e9711caf9f0a4 0.0s done
+#11 exporting manifest list sha256:811c1602be551f955681ee2583594c13927c3fecd1956c09273f6979b7b606c1
+#11 exporting manifest list sha256:811c1602be551f955681ee2583594c13927c3fecd1956c09273f6979b7b606c1 0.0s done
+#11 naming to docker.io/mee/pyannote:0.1 done
+#11 unpacking to docker.io/mee/pyannote:0.1
+#11 unpacking to docker.io/mee/pyannote:0.1 41.5s done
+#11 DONE 228.9s
+
+ [33m1 warning found (use docker --debug to expand):
+[0m - SecretsUsedInArgOrEnv: Do not use ARG or ENV instructions for sensitive data (ARG "HF_TOKEN") (line 47)

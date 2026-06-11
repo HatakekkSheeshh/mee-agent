@@ -8,6 +8,7 @@ import os
 import threading
 import uuid
 from datetime import datetime
+from typing import Optional
 
 import requests
 import soundfile as sf
@@ -21,6 +22,8 @@ from contextlib import asynccontextmanager
 
 from meeting.api.chat import router as chat_router
 from meeting.api.meetings import router as meetings_router
+from meeting.api.voiceprints import router as voiceprints_router
+from meeting.auth import auth_router
 from meeting.graphs import close_checkpointer, init_checkpointer
 from meeting.memory_client import save_meeting_events
 from meeting.note_generator import generate_meeting_notes
@@ -64,7 +67,10 @@ class CorrectionRequest(BaseModel):
 
 
 WHISPER_FILE_SIZE_LIMIT = 24 * 1024 * 1024  # 24MB safe under Whisper 25MB hard limit
-CHUNK_DURATION_SEC = 10 * 60  # 10-min chunks → ~19MB at 16kHz mono PCM16
+CHUNK_DURATION_SEC = 5 * 60  # 5-min chunks → ~9.5MB at 16kHz mono PCM16.
+# Was 10 min — shrunk because Whisper large-v3 has a ~5% chance per chunk
+# of getting stuck in a repetition loop on Vietnamese; smaller chunks limit
+# the damage when one loops + reduce odds proportionally to chunk length.
 
 # Hallucination words list (Whisper sometimes outputs these from silence/noise)
 WHISPER_HALLUCINATIONS = [
@@ -80,6 +86,117 @@ def _filter_hallucinations(text: str) -> str:
     for hw in WHISPER_HALLUCINATIONS:
         if hw in text_lower:
             return ""
+    return text
+
+
+def _strip_repetition_loops(
+    text: str,
+    sent_min_repeats: int = 5,
+    word_min_repeats: int = 8,
+    degenerate_unique_ratio: float = 0.05,
+) -> str:
+    """Detect + cut Whisper repetition loops within a chunk.
+
+    Whisper large-v3 has three failure modes we guard against:
+
+      1) Same SENTENCE repeated 20-50× ("Trên đó có gì không? Trên đó…")
+         → split on .!?\\n, cut runs ≥ sent_min_repeats.
+
+      2) Same WORD repeated 100-1000× without sentence boundaries
+         ("direct direct direct…", "earlier earlier earlier…",
+         "Number Number Number…"). Splitting by .!?\\n leaves these
+         intact because they're a single long run-on "sentence".
+         → tokenise on whitespace, cut runs ≥ word_min_repeats.
+
+      3) Whole chunk is degenerate gibberish (unique_words/total < 0.05
+         means the chunk is 95%+ a single token loop). Even after trimming
+         the loop, almost no real content remains.
+         → drop the entire chunk, replace with a marker.
+    """
+    import re
+    if not text:
+        return text
+
+    # ─── Pass 1: word-level loop trim ──────────────────────────────
+    tokens = text.split()
+    if len(tokens) >= word_min_repeats:
+        kept_tokens: list[str] = []
+        i = 0
+        cut = False
+        while i < len(tokens):
+            tok = tokens[i].lower().strip(".,!?:;\"'()[]")
+            j = i + 1
+            while (
+                j < len(tokens)
+                and tokens[j].lower().strip(".,!?:;\"'()[]") == tok
+            ):
+                j += 1
+            run = j - i
+            if run >= word_min_repeats and tok:
+                kept_tokens.append(tokens[i])
+                logging.warning(
+                    f"[whisper] word-loop detected: '{tok}' "
+                    f"repeated {run}× — keeping 1 of run"
+                )
+                cut = True
+                i = j
+            else:
+                kept_tokens.extend(tokens[i:j])
+                i = j
+        text = " ".join(kept_tokens)
+        if cut:
+            text += " […repetition loop trimmed]"
+
+    # ─── Pass 2: sentence-level loop trim ──────────────────────────
+    sents = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    sents = [s for s in (s.strip() for s in sents) if s]
+    if len(sents) >= sent_min_repeats:
+        def _norm(s: str) -> str:
+            return re.sub(r"[\s\W]+", "", s.lower())
+        kept: list[str] = []
+        i = 0
+        cut_at = None
+        while i < len(sents):
+            s = sents[i]
+            norm = _norm(s)
+            if not norm:
+                kept.append(s)
+                i += 1
+                continue
+            j = i + 1
+            while j < len(sents) and _norm(sents[j]) == norm:
+                j += 1
+            run = j - i
+            if run >= sent_min_repeats:
+                kept.append(s)
+                cut_at = j
+                logging.warning(
+                    f"[whisper] sentence-loop detected: '{s[:60]}…' "
+                    f"repeated {run}× — trimming chunk"
+                )
+                break
+            kept.extend(sents[i:j])
+            i = j
+        text = " ".join(kept)
+        if cut_at is not None and "[…repetition loop trimmed]" not in text:
+            text += " […repetition loop trimmed]"
+
+    # ─── Pass 3: degenerate-chunk drop ─────────────────────────────
+    # If after trimming the chunk still has terrible token diversity, it
+    # was hopelessly gibberish to start with — drop it entirely.
+    final_tokens = [
+        t.lower().strip(".,!?:;\"'()[]") for t in text.split() if t.strip()
+    ]
+    if len(final_tokens) >= 20:
+        unique_ratio = len(set(final_tokens)) / len(final_tokens)
+        if unique_ratio < degenerate_unique_ratio:
+            logging.warning(
+                f"[whisper] degenerate chunk dropped — only "
+                f"{len(set(final_tokens))}/{len(final_tokens)} unique tokens "
+                f"({unique_ratio:.1%})"
+            )
+            return "[chunk dropped — Whisper hallucination loop, no recoverable content]"
+
     return text
 
 
@@ -107,12 +224,21 @@ def _call_whisper_api(
             "language": language,
             "response_format": "json",
             "prompt": prompt,
+            # NOTE: we deliberately do NOT pin temperature here. The Whisper
+            # paper (Sec. 4.5) defines a cascading fallback — start at temp=0,
+            # and if the chunk fails compression_ratio>2.4 or logprob<-1.0
+            # (signals of repetition loop), retry at 0.2, 0.4, 0.6, 0.8.
+            # Forcing temperature=0 disables that fallback and traps the
+            # decoder in the loop with no way out. The server's default does
+            # the cascading automatically.
         },
         timeout=timeout,
     )
     resp.raise_for_status()
     payload = resp.json()
-    payload["text"] = _filter_hallucinations(payload.get("text", ""))
+    text = payload.get("text", "")
+    text = _strip_repetition_loops(text)
+    payload["text"] = _filter_hallucinations(text)
     return payload
 
 
@@ -123,20 +249,65 @@ def _chunk_and_transcribe(
     model: str,
     prompt: str,
     language: str,
-) -> tuple[str, int]:
+) -> dict:
     """
-    Split large audio into 10-min chunks (mono 16kHz WAV), transcribe each,
-    concat results. Returns (joined_text, chunk_count).
+    Split large audio into 5-min chunks (mono 16kHz WAV), transcribe each,
+    concat results, then run pyannote ONCE on the full audio to recover
+    speaker turns + cluster embeddings + 3s sample clips.
 
-    Uses soundfile to read source (handles MP3/WAV/FLAC), then writes WAV chunks
-    in-memory before sending to Whisper. Resampling to 16kHz handled via numpy.
+    Returns:
+      {
+        "text": str,                       # joined transcript
+        "chunks": int,                     # chunks processed
+        "segments": list | None,           # [{start,end,speaker,text}, ...]
+        "cluster_embeddings": dict | None, # {SPEAKER_NN: [256d]}
+        "sample_audio_b64": dict,          # {SPEAKER_NN: base64 wav}
+      }
+    segments/cluster_embeddings are None when pyannote isn't available
+    (no HF_TOKEN) — caller treats those like the MaaS-text-only path.
     """
     import numpy as np  # local import — only needed in chunking path
 
     logging.info(f"[chunking] source size = {len(audio_bytes) / 1024 / 1024:.1f}MB")
 
-    # Read full audio → numpy (any format soundfile supports)
-    audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    # Read full audio → numpy (any format soundfile supports). Some files
+    # have corrupt headers — most commonly FLAC with frames=INT64_MAX, which
+    # makes soundfile try to allocate a multi-GB array ("array is too big").
+    # In that case (and for codecs soundfile can't read at all: m4a/aac/opus),
+    # round-trip through ffmpeg → clean 16kHz mono WAV → retry.
+    try:
+        audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    except Exception as sf_err:
+        logging.warning(
+            f"[chunking] soundfile failed ({sf_err}); transcoding via ffmpeg…"
+        )
+        import subprocess
+        try:
+            proc = subprocess.run(
+                [
+                    "ffmpeg", "-loglevel", "error", "-y",
+                    "-i", "pipe:0",
+                    "-ac", "1", "-ar", "16000",
+                    "-f", "wav", "pipe:1",
+                ],
+                input=audio_bytes, capture_output=True, timeout=180,
+            )
+            if proc.returncode != 0 or not proc.stdout:
+                raise RuntimeError(
+                    f"ffmpeg rc={proc.returncode}: "
+                    f"{proc.stderr.decode('utf-8', 'replace')[:300]}"
+                )
+            audio_bytes = proc.stdout
+            logging.info(
+                f"[chunking] ffmpeg-transcoded source → "
+                f"{len(audio_bytes) // 1024}KB clean WAV"
+            )
+            audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+        except FileNotFoundError:
+            raise RuntimeError(
+                "Cannot decode audio: soundfile failed and ffmpeg not installed. "
+                "Install ffmpeg (apt install ffmpeg) or upload WAV/FLAC with valid header."
+            )
 
     # Stereo → mono
     if audio_data.ndim > 1:
@@ -187,7 +358,86 @@ def _chunk_and_transcribe(
             logging.error(f"[chunking] chunk {idx+1} failed: {e}")
             transcripts.append(f"[chunk {idx+1} failed: {e}]")
 
-    return "\n".join(t for t in transcripts if t), n_chunks
+    joined_text = "\n".join(t for t in transcripts if t)
+
+    # Run pyannote INLINE right after Whisper finishes so the HTTP response
+    # carries text + segments + embeddings + samples together — same shape
+    # as the small-file standard path. No Celery defer, no "Not recognized"
+    # race condition. Trade ~3-5 extra min in this request for guaranteed
+    # data-complete-on-return.
+    #
+    # parallel_diarize chunks the audio into 15-min slices internally and
+    # runs N pyannote threads in parallel, then merges via cosine AHC →
+    # global SPEAKER_NN labels consistent across the whole file.
+    segments = None
+    cluster_embeddings: dict = {}
+    sample_audio_b64: dict = {}
+    pending_diarize_path: Optional[str] = None
+    if os.getenv("HF_TOKEN") and joined_text.strip():
+        try:
+            from meeting.services.parallel_diarize import diarize_parallel
+            from meeting.services.local_diarize import split_text_proportional
+
+            # Re-encode the full cleaned audio (already mono 16kHz from
+            # earlier steps in this function) → bytes for diarize.
+            full_wav_buf = io.BytesIO()
+            sf.write(full_wav_buf, audio_data, sr, format="WAV", subtype="PCM_16")
+            full_wav_bytes = full_wav_buf.getvalue()
+
+            logging.info(
+                f"[chunking] running INLINE pyannote on full {duration_sec:.0f}s "
+                f"audio (parallel chunked) — adds ~3-5 min to this request "
+                f"in exchange for embeddings ready on return"
+            )
+            diarize_result = diarize_parallel(full_wav_bytes, slice_seconds=15 * 60)
+            turns = diarize_result.get("turns") or []
+            if turns:
+                segments = split_text_proportional(joined_text, turns)
+                cluster_embeddings = diarize_result.get("cluster_embeddings") or {}
+                sample_audio_b64 = diarize_result.get("sample_audio_b64") or {}
+                logging.info(
+                    f"[chunking] inline pyannote → {len(turns)} turns, "
+                    f"{len(cluster_embeddings)} speakers, "
+                    f"{len(sample_audio_b64)} samples"
+                )
+            else:
+                logging.warning(
+                    "[chunking] pyannote returned 0 turns — staging WAV "
+                    "as fallback for retry via /api/recordings/{id}/rediarize"
+                )
+                raise RuntimeError("pyannote returned no turns")
+        except Exception as e:
+            # Fallback: stage WAV to disk so an admin/operator can dispatch
+            # diarize manually later if pyannote fails inline (eg. HF_TOKEN
+            # expired mid-request, OOM, etc).
+            logging.warning(
+                f"[chunking] inline pyannote failed ({e}); staging WAV "
+                f"for async retry"
+            )
+            try:
+                import uuid as _uuid
+                output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), "output"
+                )
+                pending_dir = os.path.join(output_dir, "_pending_diarize")
+                os.makedirs(pending_dir, exist_ok=True)
+                tmp_path = os.path.join(pending_dir, f"{_uuid.uuid4().hex}.wav")
+                sf.write(tmp_path, audio_data, sr, format="WAV", subtype="PCM_16")
+                pending_diarize_path = os.path.relpath(tmp_path, output_dir)
+            except Exception as ee:
+                logging.warning(f"[chunking] WAV stage also failed: {ee}")
+
+    return {
+        "text": joined_text,
+        "chunks": n_chunks,
+        "segments": segments,
+        "cluster_embeddings": cluster_embeddings,
+        "sample_audio_b64": sample_audio_b64,
+        # Set only when inline pyannote failed and we staged a WAV instead —
+        # FE forwards this so /import-transcript can dispatch the Celery
+        # retry path.
+        "pending_diarize_path": pending_diarize_path,
+    }
 
 
 def _build_whisper_prompt(
@@ -261,6 +511,10 @@ def create_app(output_dir: str = None) -> FastAPI:
     app.include_router(meetings_router)
     # Phase B2 — Chat + HITL router
     app.include_router(chat_router)
+    # Auth Phase 1 — mock/real O365 login + voice enrollment gate
+    app.include_router(auth_router)
+    # Voice enrollment endpoint — flips users.voice_enrolled
+    app.include_router(voiceprints_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):
@@ -427,14 +681,25 @@ def create_app(output_dir: str = None) -> FastAPI:
                 f"File {filename} is {original_size_mb:.1f}MB > 24MB threshold → auto-chunking"
             )
             try:
-                text, n_chunks = _chunk_and_transcribe(
+                chunk_out = _chunk_and_transcribe(
                     audio_bytes, base_url, api_key, model, prompt, language,
                 )
                 return {
-                    "text": text,
+                    "text": chunk_out["text"],
                     "chunked": True,
-                    "chunks": n_chunks,
+                    "chunks": chunk_out["chunks"],
                     "original_size_mb": round(original_size_mb, 1),
+                    # Same shape as the small-file standard path: pyannote
+                    # ran INLINE so embeddings + samples are ready right now.
+                    # FE forwards everything to /import-transcript → DB
+                    # has speakers populated by the time the user looks.
+                    "segments": chunk_out.get("segments"),
+                    "cluster_embeddings": chunk_out.get("cluster_embeddings") or {},
+                    "sample_audio_b64": chunk_out.get("sample_audio_b64") or {},
+                    # Only set when inline pyannote failed and we staged a
+                    # WAV for async retry instead. FE-side, this triggers
+                    # the old Celery diarize dispatch path.
+                    "pending_diarize_path": chunk_out.get("pending_diarize_path"),
                 }
             except Exception as e:
                 logging.exception("Auto-chunk transcribe failed")
@@ -528,6 +793,7 @@ def create_app(output_dir: str = None) -> FastAPI:
             text = resp.get("text", "")
             segments = resp.get("segments")
             cluster_embeddings = resp.get("cluster_embeddings")
+            sample_audio_b64: dict = {}
 
             # Fallback path: MaaS Whisper returns text-only (no segments, no
             # cluster_embeddings). Run pyannote LOCALLY on the audio to
@@ -545,9 +811,11 @@ def create_app(output_dir: str = None) -> FastAPI:
                         cluster_embeddings = (
                             cluster_embeddings or diarize["cluster_embeddings"]
                         )
+                        sample_audio_b64 = diarize.get("sample_audio_b64") or {}
                         logging.info(
                             f"[local pyannote] recovered {len(segments)} segments "
-                            f"+ {len(cluster_embeddings)} cluster embeddings"
+                            f"+ {len(cluster_embeddings)} cluster embeddings "
+                            f"+ {len(sample_audio_b64)} sample clips"
                         )
                 except Exception as e:
                     logging.warning(
@@ -558,6 +826,7 @@ def create_app(output_dir: str = None) -> FastAPI:
                 "text": text,
                 "segments": segments,
                 "cluster_embeddings": cluster_embeddings,
+                "sample_audio_b64": sample_audio_b64,
                 "chunked": False,
                 "size_mb": round(original_size_mb, 1),
             }

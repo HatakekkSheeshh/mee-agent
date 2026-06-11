@@ -193,11 +193,17 @@ def generate_phonetic_mappings(
             "chat_template_kwargs": {"enable_thinking": False}
         }
 
+    # Budget ~100 tokens per mapping (JSON overhead + 5-6 VN phonetic words
+    # per correction + thinking pad). Cap at 16K to avoid timeout. Floor 2K
+    # so short vocabs still have room.
+    n_terms = max(1, len(llm_vocab.split(",")))
+    max_toks = max(2000, min(16_000, n_terms * 120))
+
     try:
         resp = client.chat.completions.create(
             model=mdl,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,  # ~50 mappings worst case
+            max_tokens=max_toks,
             timeout=timeout,
             **extra_kwargs,
         )
@@ -209,7 +215,42 @@ def generate_phonetic_mappings(
         elif "```" in output:
             output = output.split("```")[1].split("```")[0].strip()
 
-        parsed = json.loads(output)
+        # If output got truncated mid-array, salvage what's parseable —
+        # regex-extract all complete {"wrong": "...", "correct": "..."}
+        # blocks. Better than dropping the entire response when only the
+        # last 1-2 entries are corrupted.
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError as je:
+            logger.warning(
+                f"[phonetic_generator] JSON malformed at {je}; "
+                f"attempting regex salvage"
+            )
+            salvaged: list[dict] = []
+            # Match {"wrong":"...","correct":"..."} accepting whitespace +
+            # arbitrary key order. Non-greedy strings; escapes handled below.
+            for m in re.finditer(
+                r'\{\s*"wrong"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*,\s*'
+                r'"correct"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*\}',
+                output,
+                flags=re.DOTALL,
+            ):
+                w, c = m.group(1), m.group(2)
+                # Unescape JSON \\ / \" / \n inside strings
+                try:
+                    w = json.loads(f'"{w}"')
+                    c = json.loads(f'"{c}"')
+                except Exception:
+                    pass
+                salvaged.append({"wrong": w, "correct": c})
+            if salvaged:
+                logger.info(
+                    f"[phonetic_generator] salvaged {len(salvaged)} mappings "
+                    f"from truncated output"
+                )
+                parsed = {"mappings": salvaged}
+            else:
+                raise
         mappings = parsed.get("mappings", [])
         if not isinstance(mappings, list):
             raise ValueError("mappings is not a list")

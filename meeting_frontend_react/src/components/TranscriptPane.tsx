@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
-import type { CleanResponse } from "../types/api";
+import type { CleanResponse, MoMJson } from "../types/api";
 import { CleanEditor } from "./CleanEditor";
 import { SpeakerMapper } from "./SpeakerMapper";
 import { useLiveRecording, type LiveSegment } from "../hooks/useLiveRecording";
@@ -37,7 +37,16 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     setTranscriptStatus: setStatus,
     t,
     lang,
+    generatingRecordings,
+    markGeneratingRecording,
+    unmarkGeneratingRecording,
   } = useApp();
+  // Derived: true iff backend is generating MoM for the recording the user is
+  // CURRENTLY viewing. Survives recording-switch — if user comes back, we still
+  // know gen is in flight (set was kept in context).
+  const isGenerating = !!(
+    currentRecordingId && generatingRecordings.has(currentRecordingId)
+  );
   const [view, setView] = useState<ViewMode>("raw");
   // Background clean status: poll backend every 3s while running.
   // Lets the user see a progress bar instead of guessing why Clean tab
@@ -62,7 +71,11 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     } catch { /* ignore */ }
   }, [currentRecordingId]);
   const [rawText, setRawText] = useState<string>("");
-  const [cleanSegs, setCleanSegs] = useState<CleanResponse["clean_segments"] | null>(null);
+  // null = not loaded yet; [] = loaded but no segments; non-empty = ready.
+  // Concrete type rather than `CleanResponse["clean_segments"]` because the
+  // response field is now optional (task-id shape carries no segments).
+  type CleanSeg = NonNullable<CleanResponse["clean_segments"]>[number];
+  const [cleanSegs, setCleanSegs] = useState<CleanSeg[] | null>(null);
   const [editedHtml, setEditedHtml] = useState<string | null>(null);
   const [clusterMapping, setClusterMapping] = useState<Record<string, string>>({});
   const [preMappedClusters, setPreMappedClusters] = useState<string[]>([]);
@@ -71,11 +84,48 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   // with fresh content (so renamed speaker labels show up immediately).
   const [editorRev, setEditorRev] = useState(0);
 
+  /** /clean now returns either:
+   *  - {cached:true, clean_segments:[...]}             — cache hit, inline result
+   *  - {task_id, status:"queued", mode:"celery"}       — dispatched, poll task
+   *  - {cached:false, clean_segments:[...]}            — inline fallback (broker down)
+   *
+   * This wrapper polls when needed and ALWAYS returns the cached result via
+   * a second /clean call once the task finishes. Lets callers stay simple. */
+  async function requestClean(rid: string, regenerate: boolean) {
+    const first = await api.recordings.clean(rid, regenerate);
+    if (!first.task_id) return first;
+    // Dispatched to Celery — poll until SUCCESS, then re-fetch /clean which
+    // now hits the DB cache and returns full segments + cluster_mapping.
+    const targetRid = rid;
+    while (true) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      if (currentRecordingIdRef.current !== targetRid) {
+        // User switched recording mid-poll. Abort gracefully — when they
+        // return, reloadClean() will hit the cache (task likely finished).
+        throw new Error("recording switched");
+      }
+      let st;
+      try {
+        st = await api.tasks.status(first.task_id);
+      } catch {
+        continue; // transient network blip — keep polling
+      }
+      if (st.state === "SUCCESS") {
+        return await api.recordings.clean(rid, false);
+      }
+      if (st.state === "FAILURE") {
+        const msg = st.error || "Cleaner task failed";
+        throw new ApiError(500, msg);
+      }
+      // PENDING / STARTED / RETRY → continue polling
+    }
+  }
+
   async function reloadClean() {
     if (!currentRecordingId) return;
     try {
-      const r = await api.recordings.clean(currentRecordingId, false);
-      setCleanSegs(r.clean_segments);
+      const r = await requestClean(currentRecordingId, false);
+      setCleanSegs(r.clean_segments || []);
       setEditedHtml(r.edited_html || null);
       setClusterMapping(r.cluster_mapping || {});
       setPreMappedClusters(r.pre_mapped_clusters || []);
@@ -87,6 +137,30 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   }
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Ref tracking the CURRENT recording id — used by async generators to
+  // detect if user switched recordings mid-flight. Pure state lookups inside
+  // a long-running async closure read the captured (stale) value from when
+  // the callback was created, so we shadow it via ref that's kept in sync.
+  const currentRecordingIdRef = useRef(currentRecordingId);
+  useEffect(() => {
+    currentRecordingIdRef.current = currentRecordingId;
+    // Switching recording mid-generation. Reset the LOCAL busy + status so
+    // they don't bleed across recordings. If the recording we're switching
+    // TO is itself still generating in the background, re-apply the
+    // "Đang tạo…" banner so the user knows.
+    setBusy(false);
+    setStatus(null);
+    if (currentRecordingId && generatingRecordings.has(currentRecordingId)) {
+      setMomStatus({
+        kind: "assessing",
+        msg: "Đang tạo biên bản qua LangGraph… (tiếp tục từ lần bấm trước)",
+      });
+    } else {
+      setMomStatus(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRecordingId]);
 
   // ─── Live record (WebSocket Whisper) ───
   // Each Record session APPENDS to whatever the textarea already holds —
@@ -289,7 +363,10 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           try {
             const c = await api.recordings.clean(currentRecordingId, false);
             if (cancelled) return;
-            setCleanSegs(c.clean_segments);
+            // task_id response means dispatched to Celery — skip silently;
+            // user can hit Clean tab again or the polling fires on next try.
+            if (c.task_id) return;
+            setCleanSegs(c.clean_segments || []);
             setClusterMapping(c.cluster_mapping || {});
             setPreMappedClusters(c.pre_mapped_clusters || []);
             setAvailableClusters(c.available_clusters || []);
@@ -382,15 +459,66 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         cluster_embeddings:
           (transcribeResp as { cluster_embeddings?: Record<string, number[]> })
             .cluster_embeddings || null,
+        // Local pyannote also yields 3s sample WAVs — forward so user can
+        // play them in SpeakerMapper before saving the voiceprint name.
+        sample_audio_b64:
+          (transcribeResp as { sample_audio_b64?: Record<string, string> })
+            .sample_audio_b64 || null,
+        // Chunked upload — backend staged the full WAV; pass the path
+        // so import-transcript can dispatch the async pyannote task.
+        pending_diarize_path:
+          (transcribeResp as { pending_diarize_path?: string | null })
+            .pending_diarize_path || null,
       });
       await reloadCurrentMeeting();
       // Background clean was just triggered by import-transcript endpoint —
       // flip the badge to "running" right away.
       pingCleanStatus();
-      setStatus({
-        kind: "success",
-        msg: `Đã transcribe "${file.name}" ✓ (${imp.segments_count} đoạn)`,
-      });
+      const baseMsg = `Đã transcribe "${file.name}" ✓ (${imp.segments_count} đoạn)`;
+      const diarizeTaskId =
+        (imp as { diarize_task_id?: string | null }).diarize_task_id || null;
+      if (diarizeTaskId) {
+        // Async pyannote running in background. Poll until SUCCESS / FAILURE,
+        // then reload meeting so speaker_samples + cluster_mapping appear.
+        setStatus({
+          kind: "success",
+          msg: `${baseMsg} — đang phân tích speakers ở background (~30 phút)`,
+        });
+        (async () => {
+          const targetRid = currentRecordingIdRef.current;
+          while (true) {
+            await new Promise((r) => setTimeout(r, 30_000));
+            try {
+              const st = await api.tasks.status(diarizeTaskId);
+              if (st.state === "SUCCESS") {
+                if (currentRecordingIdRef.current === targetRid) {
+                  setStatus({
+                    kind: "success",
+                    msg: "Đã phân tích speakers xong ✓",
+                  });
+                  await reloadCurrentMeeting();
+                }
+                return;
+              }
+              if (st.state === "FAILURE") {
+                if (currentRecordingIdRef.current === targetRid) {
+                  setStatus({
+                    kind: "error",
+                    msg: `Phân tích speakers thất bại: ${st.error || "unknown"}`,
+                  });
+                }
+                return;
+              }
+              // PENDING / STARTED / RETRY → keep waiting
+            } catch (e) {
+              // Network blip — keep polling
+              console.warn("[diarize-poll] status check failed", e);
+            }
+          }
+        })();
+      } else {
+        setStatus({ kind: "success", msg: baseMsg });
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
       setStatus({ kind: "error", msg: `Lỗi: ${msg}` });
@@ -404,32 +532,78 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   // Status goes to MoM pane (where the result will appear), not Transcript pane.
   async function handleGenerateMom() {
     if (!currentRecordingId || !currentMeetingId) return;
-    setBusy(true);
+    // Block re-entry: if backend is already generating for this recording,
+    // don't fire another call. UI button is also disabled on isGenerating.
+    if (generatingRecordings.has(currentRecordingId)) return;
+    // Snapshot the recording + meeting we started on. Gen state is tracked
+    // in context (survives recording-switch); local status banner is only
+    // shown while user is still viewing this recording.
+    const targetRid = currentRecordingId;
+    const targetMid = currentMeetingId;
+    const stillOnThis = () => currentRecordingIdRef.current === targetRid;
+    markGeneratingRecording(targetRid);
     setMomStatus({ kind: "assessing", msg: "Đang tạo biên bản qua LangGraph…" });
     try {
       const currentText = rawText.trim();
       if (currentText) {
-        await api.meetings.importTranscript(currentMeetingId, {
+        await api.meetings.importTranscript(targetMid, {
           text: currentText,
-          recording_id: currentRecordingId,
+          recording_id: targetRid,
           replace: false,
         });
       }
-      const res = await api.recordings.generateMom(currentRecordingId, lang);
-      // Cache immediately — MoMPane displays without waiting for backend reload
-      // (which would also require backend to be running latest code).
-      setRecordingMom(currentRecordingId, res.notes);
-      reloadCurrentMeeting(); // fire-and-forget refresh for sidebar/meta
-      const memHint = res.memory_context_count
-        ? ` (dùng ${res.memory_context_count} memory events)`
-        : "";
-      setMomStatus({ kind: "success", msg: `Đã tạo biên bản ✓${memHint}` });
-      setTimeout(() => setMomStatus(null), 4000);
+      const res = await api.recordings.generateMom(targetRid, lang);
+      // Two shapes: Celery enqueued (task_id) vs inline (notes returned).
+      let notes: MoMJson | undefined;
+      let memoryCount = 0;
+      if ("task_id" in res) {
+        // Celery path — poll /api/tasks/{id} every 3s until SUCCESS/FAILURE.
+        // Hard stop at 15 min to match backend task_time_limit. Caller stays
+        // marked as generating across the entire poll loop so UI button
+        // remains disabled + status banner sticks.
+        const taskId = res.task_id;
+        const startedAt = Date.now();
+        const POLL_MS = 3000;
+        const TIMEOUT_MS = 15 * 60 * 1000;
+        while (Date.now() - startedAt < TIMEOUT_MS) {
+          await new Promise((r) => setTimeout(r, POLL_MS));
+          const status = await api.tasks.status(taskId);
+          if (status.state === "SUCCESS") {
+            notes = status.result?.notes;
+            memoryCount = status.result?.memory_context_count ?? 0;
+            break;
+          }
+          if (status.state === "FAILURE" || status.state === "REVOKED") {
+            throw new Error(status.error || "MoM generation failed");
+          }
+          // PENDING / STARTED / RETRY → keep polling
+        }
+        if (!notes) throw new Error("MoM generation timed out");
+      } else {
+        // Inline (broker down) path — notes returned directly.
+        notes = res.notes;
+        memoryCount = res.memory_context_count;
+      }
+      // Always cache result under the snapshot id (correct destination).
+      if (notes) setRecordingMom(targetRid, notes);
+      // reloadCurrentMeeting reads currentMeetingId from a ref (latest), so
+      // calling it here is safe — if user has switched to another project,
+      // the reload will hit the NEW project's endpoint instead of clobbering
+      // it with X's data. Safe to fire-and-forget unconditionally.
+      reloadCurrentMeeting();
+      // Only mutate visible status when user is still viewing this recording.
+      if (stillOnThis()) {
+        const memHint = memoryCount ? ` (dùng ${memoryCount} memory events)` : "";
+        setMomStatus({ kind: "success", msg: `Đã tạo biên bản ✓${memHint}` });
+        setTimeout(() => setMomStatus(null), 4000);
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      setMomStatus({ kind: "error", msg: `Lỗi tạo MoM: ${msg}` });
+      if (stillOnThis()) {
+        setMomStatus({ kind: "error", msg: `Lỗi tạo MoM: ${msg}` });
+      }
     } finally {
-      setBusy(false);
+      unmarkGeneratingRecording(targetRid);
     }
   }
 
@@ -484,8 +658,11 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             // Non-fatal — /clean will surface the real problem below if any.
           }
         }
-        const r = await api.recordings.clean(currentRecordingId, false);
-        setCleanSegs(r.clean_segments);
+        // Initial Clean — when LLM call is dispatched to Celery, this
+        // resolves only after the worker finishes (the wrapper polls).
+        setStatus({ kind: "assessing", msg: "Đang clean transcript…" });
+        const r = await requestClean(currentRecordingId, false);
+        setCleanSegs(r.clean_segments || []);
         setEditedHtml(r.edited_html || null);
         setClusterMapping(r.cluster_mapping || {});
         setPreMappedClusters(r.pre_mapped_clusters || []);
@@ -511,11 +688,10 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   function regenerateClean() {
     if (!currentRecordingId) return;
     setBusy(true);
-    setStatus({ kind: "assessing", msg: "Regenerate clean…" });
-    api.recordings
-      .clean(currentRecordingId, true)
+    setStatus({ kind: "assessing", msg: "Regenerate clean (LLM ~2-4 phút)…" });
+    requestClean(currentRecordingId, true)
       .then((r) => {
-        setCleanSegs(r.clean_segments);
+        setCleanSegs(r.clean_segments || []);
         setEditedHtml(r.edited_html || null);
         setClusterMapping(r.cluster_mapping || {});
         setPreMappedClusters(r.pre_mapped_clusters || []);
@@ -543,7 +719,11 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     URL.revokeObjectURL(url);
   }
 
-  const canGenMom = !!currentRecordingId && rawText.trim().length > 0 && !busy;
+  // Disable Generate button when: no recording selected, no transcript, the
+  // local component is busy with another op, OR backend is already generating
+  // for THIS recording (state tracked in context, survives recording-switch).
+  const canGenMom =
+    !!currentRecordingId && rawText.trim().length > 0 && !busy && !isGenerating;
   const canGenSummary =
     !!currentMeetingId &&
     !!currentMeeting?.recordings.some((r) => r.mom_json) &&
@@ -676,6 +856,11 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                   clusterMapping={clusterMapping}
                   preMappedClusters={preMappedClusters}
                   availableClusters={availableClusters}
+                  availableSamples={
+                    currentMeeting?.recordings.find(
+                      (r) => r.id === currentRecordingId,
+                    )?.speaker_samples
+                  }
                   onSaved={reloadClean}
                 />
                 <CleanEditor

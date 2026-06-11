@@ -317,6 +317,7 @@ class ServeClientMaaS(ServeClientBase):
             result = diarize_audio(wav_bytes, sample_rate=self.RATE)
             turns = result.get("turns", [])
             embeddings = result.get("cluster_embeddings", {})
+            sample_audio_b64 = result.get("sample_audio_b64") or {}
             if not turns or not embeddings:
                 logging.info(
                     "[post-record diarize] local pyannote returned empty "
@@ -368,6 +369,7 @@ class ServeClientMaaS(ServeClientBase):
                 json={
                     "cluster_embeddings": embeddings,
                     "diarized_text": diarized_text,
+                    "sample_audio_b64": sample_audio_b64,
                 },
                 timeout=30,
             )
