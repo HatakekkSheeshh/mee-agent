@@ -64,6 +64,8 @@ class ChatState(TypedDict, total=False):
     pm_rounds: int                 # loop counter for PM_MAX_ROUNDS
     pm_route: Optional[str]        # pm_call → router hint: "await"|"reply"|"end"|"error"|"retry"
     pm_last_error: Optional[str]   # last pm transport error (shown on the retry card)
+    pm_queue: list                 # chunked-reconcile payloads still to send (one per assignee group)
+    pm_replies: list               # accumulated group replies, joined into final_reply when queue drains
 
     # Internal
     error: Optional[str]

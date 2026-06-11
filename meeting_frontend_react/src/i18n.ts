@@ -100,6 +100,43 @@ export const STRINGS = {
     "chat.clear": "Xóa hội thoại",
     "chat.clearConfirm": "Xóa toàn bộ hội thoại trong dự án này? Hành động này không thể hoàn tác.",
     "chat.cleared": "Đã xóa hội thoại.",
+    "chat.stop": "Dừng",
+    "chat.zoomIn": "Phóng to",
+    "chat.zoomOut": "Thu nhỏ",
+    "chat.stopped": "Đã dừng yêu cầu.",
+    "chat.copy": "Sao chép",
+    "chat.copied": "Đã chép",
+    "chat.rejectedNote": "Đã từ chối",
+    "chat.stepsSummary": "Các bước đã thực hiện ({n})",
+    "chat.step.context": "Đang đọc ngữ cảnh dự án…",
+    "chat.step.classify": "Đang phân tích yêu cầu…",
+    "chat.step.tool": "Đang dùng:",
+    "chat.step.pm": "Đang làm việc với pm-agent (Redmine)…",
+    "tool.list_recordings": "Danh sách phiên họp",
+    "tool.recording_mom": "Đọc biên bản phiên họp",
+    "tool.search_transcript": "Tìm trong transcript",
+    "tool.retrieve": "Truy xuất ghi nhớ dự án",
+    "tool.create_task": "Chuẩn bị danh sách task",
+    "tool.send_email": "Soạn email",
+    "tool.switch_meeting": "Chuyển dự án",
+    "arg.to": "Người nhận",
+    "arg.subject": "Tiêu đề",
+    "arg.body": "Nội dung",
+    "arg.attachments": "Tệp đính kèm",
+    "arg.title": "Tiêu đề",
+    "arg.assignee": "Phụ trách",
+    "arg.deadline": "Hạn",
+    "arg.due_date": "Hạn",
+    "arg.description": "Mô tả",
+    "arg.recording_id": "Phiên họp (id)",
+    "arg.meeting_id": "Dự án (id)",
+    "arg.project": "Dự án",
+    "arg.items": "Danh sách việc",
+    "arg.query": "Truy vấn",
+    "arg.room": "Phòng họp",
+    "arg.attendees": "Người tham dự",
+    "arg.date_window": "Khoảng thời gian",
+    "arg.duration_minutes": "Thời lượng (phút)",
     // Settings menu
     "menu.appearance": "Giao diện",
     "menu.theme": "Chủ đề",
@@ -314,6 +351,43 @@ export const STRINGS = {
     "chat.clear": "Clear chat",
     "chat.clearConfirm": "Clear all chat in this project? This cannot be undone.",
     "chat.cleared": "Chat cleared.",
+    "chat.stop": "Stop",
+    "chat.zoomIn": "Expand",
+    "chat.zoomOut": "Collapse",
+    "chat.stopped": "Request stopped.",
+    "chat.copy": "Copy",
+    "chat.copied": "Copied",
+    "chat.rejectedNote": "Rejected",
+    "chat.stepsSummary": "Steps taken ({n})",
+    "chat.step.context": "Reading project context…",
+    "chat.step.classify": "Analyzing the request…",
+    "chat.step.tool": "Using:",
+    "chat.step.pm": "Working with pm-agent (Redmine)…",
+    "tool.list_recordings": "List recordings",
+    "tool.recording_mom": "Read session MoM",
+    "tool.search_transcript": "Search transcript",
+    "tool.retrieve": "Retrieve project memory",
+    "tool.create_task": "Prepare task list",
+    "tool.send_email": "Draft email",
+    "tool.switch_meeting": "Switch project",
+    "arg.to": "To",
+    "arg.subject": "Subject",
+    "arg.body": "Body",
+    "arg.attachments": "Attachments",
+    "arg.title": "Title",
+    "arg.assignee": "Assignee",
+    "arg.deadline": "Due",
+    "arg.due_date": "Due",
+    "arg.description": "Description",
+    "arg.recording_id": "Recording (id)",
+    "arg.meeting_id": "Project (id)",
+    "arg.project": "Project",
+    "arg.items": "Items",
+    "arg.query": "Query",
+    "arg.room": "Room",
+    "arg.attendees": "Attendees",
+    "arg.date_window": "Date window",
+    "arg.duration_minutes": "Duration (min)",
     "menu.appearance": "Appearance",
     "menu.theme": "Theme",
     "menu.themeDark": "Dark",
@@ -433,3 +507,20 @@ export const STRINGS = {
 } as const;
 
 export type StringKey = keyof typeof STRINGS.vi;
+
+/** Tool name → friendly label via the `tool.<name>` keys; raw name fallback
+ * for tools without a label yet. Shared by every surface that shows a tool
+ * (activity trace, approval cards, reject notes). */
+export function toolLabel(t: (key: StringKey) => string, name: string): string {
+  const key = `tool.${name}` as StringKey;
+  const label = t(key);
+  return label === key ? name : label;
+}
+
+/** Tool-arg key → friendly field label via the `arg.<key>` keys; raw key
+ * fallback. Used by the generic editable action card. */
+export function argLabel(t: (key: StringKey) => string, name: string): string {
+  const key = `arg.${name}` as StringKey;
+  const label = t(key);
+  return label === key ? name : label;
+}

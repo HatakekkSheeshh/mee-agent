@@ -133,15 +133,41 @@ async def pm_await(state: ChatState) -> dict:
     return {"pm_pending": pending, "pm_next_payload": _decision_to_payload(decision)}
 
 async def pm_reply(state: ChatState) -> dict:
+    """Surface the pm-agent reply — or, when a chunked reconcile left payloads
+    in pm_queue, accumulate this group's reply and start a FRESH pm task for
+    the next group (per-assignee chunking: one small message/send per group so
+    the agentbase gateway never times out on a big reconcile)."""
     last = state.get("pm_last") or {}
+    text = last.get("text") or "(pm-agent không trả về nội dung)"
+    queue = list(state.get("pm_queue") or [])
+
+    if queue:
+        logger.info("[Node pm_reply] group done — %d payload(s) left in queue", len(queue))
+        return {
+            "pm_replies": list(state.get("pm_replies") or []) + [text],
+            "pm_next_payload": queue[0],
+            "pm_queue": queue[1:],
+            # New group = new pm-agent task: never resume the finished thread.
+            "pm_task_id": None,
+            "pm_context_id": None,
+            "pm_rounds": 0,
+            "pm_route": "next",
+        }
+
+    replies = list(state.get("pm_replies") or []) + [text]
     return {
-        "final_reply": last.get("text") or "(pm-agent không trả về nội dung)",
+        "final_reply": "\n\n---\n\n".join(replies),
         "tool_result": {
             "status": last.get("state"),
             "task_id": last.get("task_id"),
             "via": "pm_agent",
         },
     }
+
+
+def route_after_pm_reply(state: ChatState) -> Literal["pm_call", "save_reply"]:
+    """Drain the chunked-reconcile queue before ending the turn."""
+    return "pm_call" if state.get("pm_route") == "next" else "save_reply"
 
 async def pm_error(state: ChatState) -> dict:
     """Interrupt after a transient pm-agent transport error, offering a retry.

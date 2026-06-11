@@ -1,14 +1,25 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useApp } from "../store/AppContext";
+import { toolLabel as mapToolLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
-import type { ChatTurnResult, PendingAction } from "../types/api";
+import type { ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
 import { WelcomeBanner } from "./WelcomeBanner";
+import { ActionArgsCard } from "./ActionArgsCard";
 import { CreateTaskCard, parseTaskTemplate, type TaskTemplate } from "./CreateTaskCard";
 
 interface ThreadMsg {
-  role: "user" | "agent";
+  role: "user" | "agent" | "note";
   text: string;
+  /** Activity-trace labels collected while the turn streamed (agent msgs only). */
+  steps?: string[];
 }
 
 export function ChatPane() {
@@ -19,6 +30,16 @@ export function ChatPane() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   // Free-text reply for a pm-agent need_more_info pause.
   const [infoInput, setInfoInput] = useState("");
+  // Live activity trace for the in-flight streamed turn.
+  const [steps, setSteps] = useState<string[]>([]);
+  // Abort handle for the in-flight streamed send (the stop button).
+  const abortRef = useRef<AbortController | null>(null);
+  // Index of the agent message whose copy button just fired ("copied" flash).
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // Whether the current pending-action card is zoomed into the modal overlay.
+  // One flag suffices — at most one pending card exists at a time.
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => setZoomed(false), [pending?.id]);
 
   // The chat session id (LangGraph thread). Created lazily on first send and
   // re-created when the bound meeting changes. Kept in refs so it survives
@@ -89,16 +110,49 @@ export function ChatPane() {
   const pushAgent = (text: string) =>
     setMessages((m) => [...m, { role: "agent", text }]);
 
-  const applyResult = (res: ChatTurnResult) => {
+  const pushNote = (text: string) =>
+    setMessages((m) => [...m, { role: "note", text }]);
+
+  const applyResult = (res: ChatTurnResult, traceSteps?: string[]) => {
     if (res.status === "interrupted") {
       setPending(res.pending_action);
-      const hint = res.pending_action.rationale || res.pending_action.description;
+      // Only the LLM's own rationale is user-facing; the tool spec
+      // `description` is internal English prompt text — never show it.
+      const hint = res.pending_action.rationale;
       if (hint) pushAgent(hint);
     } else {
       setPending(null);
-      pushAgent(res.reply);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "agent",
+          text: res.reply,
+          ...(traceSteps?.length ? { steps: traceSteps } : {}),
+        },
+      ]);
     }
   };
+
+  // Tool name → localized label (shared i18n helper, bound to this t).
+  const toolLabel = useCallback(
+    (name: string): string => mapToolLabel(t, name),
+    [t],
+  );
+
+  // SSE step event → localized trace label.
+  const stepLabel = useCallback(
+    (ev: ChatStreamStep): string | null => {
+      if (ev.step === "context") return t("chat.step.context");
+      if (ev.step === "classify") return t("chat.step.classify");
+      if (ev.step === "pm") return t("chat.step.pm");
+      if (ev.step === "tool_call") {
+        const names = (ev.tools ?? []).map(toolLabel);
+        return `${t("chat.step.tool")} ${names.join(", ")}`;
+      }
+      return null; // tool_done — completion shows on the next step/answer
+    },
+    [t, toolLabel],
+  );
 
   const errorText = (e: unknown) =>
     `${t("chat.error")}: ${e instanceof ApiError ? e.detail : String(e)}`;
@@ -119,15 +173,45 @@ export function ChatPane() {
     setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
+    setSteps([]);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    // Collected outside state so the final message gets the full trace even
+    // though setSteps batches.
+    const collected: string[] = [];
+    const onStep = (ev: ChatStreamStep) => {
+      const label = stepLabel(ev);
+      if (!label) return;
+      collected.push(label);
+      setSteps((s) => [...s, label]);
+    };
     try {
       const sid = await ensureSession();
-      applyResult(await api.chat.send(sid, text));
+      let res: ChatTurnResult;
+      try {
+        res = await api.chat.sendStream(sid, text, onStep, ctrl.signal);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        // Stream route missing (older backend) → fall back to the blocking POST.
+        if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+          res = await api.chat.send(sid, text);
+        } else {
+          throw e;
+        }
+      }
+      applyResult(res, collected);
     } catch (e) {
-      pushAgent(errorText(e));
+      if (e instanceof DOMException && e.name === "AbortError") {
+        pushNote(t("chat.stopped"));
+      } else {
+        pushAgent(errorText(e));
+      }
     } finally {
+      abortRef.current = null;
+      setSteps([]);
       setBusy(false);
     }
-  }, [input, busy, ensureSession, t]);
+  }, [input, busy, ensureSession, stepLabel, t]);
 
   // Clear the session in place: wipe its messages + pending + checkpoint on the
   // backend (keeping the session id / meeting binding), then empty the local
@@ -160,7 +244,10 @@ export function ChatPane() {
     async (approve: boolean) => {
       if (!pending || busy) return;
       const id = pending.id;
+      const toolName = pending.tool;
       setPending(null);
+      // Leave a visible mark of the dismissed action in the thread.
+      if (!approve) pushNote(`✕ ${t("chat.rejectedNote")}: ${toolLabel(toolName)}`);
       setBusy(true);
       try {
         applyResult(approve ? await api.chat.approve(id) : await api.chat.reject(id));
@@ -170,8 +257,37 @@ export function ChatPane() {
         setBusy(false);
       }
     },
+    [pending, busy, t, toolLabel],
+  );
+
+  // Approve a generic local side-effect tool with the user's field edits
+  // (ActionArgsCard). The backend merges `edited_args` before executing.
+  const approveGeneric = useCallback(
+    async (edited: Record<string, unknown>) => {
+      if (!pending || busy) return;
+      const id = pending.id;
+      setPending(null);
+      setBusy(true);
+      try {
+        applyResult(await api.chat.approve(id, { edited_args: edited }));
+      } catch (e) {
+        pushAgent(errorText(e));
+      } finally {
+        setBusy(false);
+      }
+    },
     [pending, busy, t],
   );
+
+  const copyMsg = useCallback(async (idx: number, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 1500);
+    } catch {
+      /* clipboard unavailable (http origin) — silently skip */
+    }
+  }, []);
 
   // Approve the create_task GATE-1 card with the user's edits. The edited
   // template is sent as `edited_args`; the backend merges it into the reconcile
@@ -290,13 +406,50 @@ export function ChatPane() {
           </div>
         )}
 
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "msg msg-user" : "msg msg-agent"}>
-            {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
-          </div>
-        ))}
+        {messages.map((m, i) =>
+          m.role === "note" ? (
+            <div key={i} className="msg msg-note">{m.text}</div>
+          ) : (
+            <div key={i} className={m.role === "user" ? "msg msg-user" : "msg msg-agent"}>
+              {m.role === "agent" && m.steps?.length ? (
+                <details className="chat-activity chat-activity-collapsed">
+                  <summary className="small">
+                    {t("chat.stepsSummary", { n: m.steps.length })}
+                  </summary>
+                  {m.steps.map((s, j) => (
+                    <div key={j} className="activity-step activity-done">
+                      <span className="activity-check">✓</span> {s}
+                    </div>
+                  ))}
+                </details>
+              ) : null}
+              {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
+              {m.role === "agent" && m.text && (
+                <button
+                  className="msg-copy"
+                  type="button"
+                  title={copiedIdx === i ? t("chat.copied") : t("chat.copy")}
+                  aria-label={t("chat.copy")}
+                  onClick={() => void copyMsg(i, m.text)}
+                >
+                  {copiedIdx === i ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
+              )}
+            </div>
+          ),
+        )}
 
         {pending && pending.kind === "need_more_info" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">{t("chat.needInfo")}</div>
             {/* {pending.task_id && (
@@ -326,18 +479,22 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
         {taskTemplate && (
-          <CreateTaskCard
-            template={taskTemplate}
-            busy={busy}
-            onApprove={(edited, reason) => void approveCreateTask(edited, reason)}
-            onReject={() => void decide(false)}
-          />
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
+            <CreateTaskCard
+              template={taskTemplate}
+              busy={busy}
+              onApprove={(edited, reason) => void approveCreateTask(edited, reason)}
+              onReject={() => void decide(false)}
+            />
+          </ZoomCard>
         )}
 
         {pending && pending.kind === "pm_error" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">{t("chat.pmError.title")}</div>
             {pending.prompt && <Markdown>{pending.prompt}</Markdown>}
@@ -350,17 +507,31 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
-        {pending && pending.kind !== "need_more_info" && pending.kind !== "pm_error" && !taskTemplate && (
+        {/* Local side-effect tool without a bespoke card → generic editable card. */}
+        {pending && !pending.kind && !taskTemplate && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
+            <ActionArgsCard
+              key={pending.id}
+              tool={pending.tool}
+              args={pending.args}
+              busy={busy}
+              onApprove={(edited) => void approveGeneric(edited)}
+              onReject={() => void decide(false)}
+            />
+          </ZoomCard>
+        )}
+
+        {/* pm-agent need_approval — issues list straight from pm-agent. */}
+        {pending && pending.kind === "need_approval" && (
+          <ZoomCard zoomed={zoomed} onZoom={setZoomed}>
           <div className="msg msg-agent pending-action">
             <div className="pending-title">
-              {t("chat.pending")}: <strong>{pending.tool}</strong>
+              {t("chat.pending")}: <strong>{toolLabel(pending.tool)}</strong>
             </div>
-            {/* {pending.task_id && (
-              <div className="pending-thread small">Thread: {pending.task_id}</div>
-            )} */}
-            {pending.kind === "need_approval" && pending.issues?.length ? (
+            {pending.issues?.length ? (
               <ul className="pending-issues">
                 {pending.issues.map((iss, i) => (
                   <li key={i}>
@@ -381,9 +552,35 @@ export function ChatPane() {
               </button>
             </div>
           </div>
+          </ZoomCard>
         )}
 
-        {busy && <div className="msg msg-agent msg-typing">{t("chat.thinking")}</div>}
+        {busy && (
+          <div className="msg msg-agent msg-typing">
+            {steps.length > 0 ? (
+              <div className="chat-activity">
+                {steps.map((s, i) => (
+                  <div
+                    key={i}
+                    className={
+                      "activity-step " +
+                      (i === steps.length - 1 ? "activity-live" : "activity-done")
+                    }
+                  >
+                    {i === steps.length - 1 ? (
+                      <span className="activity-spinner" />
+                    ) : (
+                      <span className="activity-check">✓</span>
+                    )}{" "}
+                    {s}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              t("chat.thinking")
+            )}
+          </div>
+        )}
       </div>
 
       <div className="chat-input-wrap">
@@ -396,19 +593,89 @@ export function ChatPane() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <button
-          className="chat-send"
-          type="button"
-          title="Send"
-          disabled={busy || !input.trim()}
-          onClick={() => void handleSend()}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="19" x2="12" y2="5" />
-            <polyline points="5 12 12 5 19 12" />
-          </svg>
-        </button>
+        {busy ? (
+          <button
+            className="chat-send chat-stop"
+            type="button"
+            title={t("chat.stop")}
+            aria-label={t("chat.stop")}
+            disabled={!abortRef.current}
+            onClick={() => abortRef.current?.abort()}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <rect x="7" y="7" width="10" height="10" rx="1.5" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            className="chat-send"
+            type="button"
+            title="Send"
+            disabled={!input.trim()}
+            onClick={() => void handleSend()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </button>
+        )}
       </div>
     </section>
+  );
+}
+
+interface ZoomCardProps {
+  zoomed: boolean;
+  onZoom: (z: boolean) => void;
+  children: ReactNode;
+}
+
+/**
+ * Magnify wrapper for pending-action cards. Zoomed = the SAME card subtree is
+ * styled into a centered fixed overlay (CSS only — no portal/remount, so
+ * in-progress field edits survive toggling). Esc / backdrop click collapse.
+ */
+function ZoomCard({ zoomed, onZoom, children }: ZoomCardProps) {
+  const { t } = useApp();
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") onZoom(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed, onZoom]);
+
+  return (
+    <div className={zoomed ? "card-zoom card-zoom-open" : "card-zoom"}>
+      {zoomed && <div className="card-zoom-backdrop" onClick={() => onZoom(false)} />}
+      <div className="card-zoom-host">
+        <button
+          className="card-zoom-btn"
+          type="button"
+          title={zoomed ? t("chat.zoomOut") : t("chat.zoomIn")}
+          aria-label={zoomed ? t("chat.zoomOut") : t("chat.zoomIn")}
+          onClick={() => onZoom(!zoomed)}
+        >
+          {zoomed ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 14 10 14 10 20" />
+              <polyline points="20 10 14 10 14 4" />
+              <line x1="14" y1="10" x2="21" y2="3" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 3 21 3 21 9" />
+              <polyline points="9 21 3 21 3 15" />
+              <line x1="21" y1="3" x2="14" y2="10" />
+              <line x1="3" y1="21" x2="10" y2="14" />
+            </svg>
+          )}
+        </button>
+        {children}
+      </div>
+    </div>
   );
 }

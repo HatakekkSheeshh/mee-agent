@@ -23,11 +23,12 @@ from meeting.graphs._chat_serde import (
     _json,
     _last_assistant_text,
     _parse_tool_args,
-    _reconcile_text,
+    _reconcile_payloads,
     _seed_agent_messages,
     _tc_to_dict,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
+from meeting.services.tools.create_task import assignee_matches
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ async def _build_reconcile_template(
     """
     project = (meeting_ctx or {}).get("title") or ""
     explicit_title = args.get("title") or args.get("subject")
+    recording_id = (args.get("recording_id") or "").strip()
     if explicit_title:
         items = [{
             "subject": explicit_title,
@@ -94,18 +96,30 @@ async def _build_reconcile_template(
             "due_date": args.get("deadline") or args.get("due_date", ""),
             "description": args.get("description", ""),
         }]
-    elif resolved_meeting_id:
-        action_items = await repo.get_mom_action_items(
-            session, uuid.UUID(resolved_meeting_id)
-        )
+    elif recording_id or resolved_meeting_id:
+        # "trong Meeting 1" → the model passes the recording_id it saw in
+        # list_recordings; scope to that recording's MoM instead of aggregating
+        # the whole project.
+        if recording_id:
+            try:
+                mom = await repo.get_recording_mom(session, uuid.UUID(recording_id)) or {}
+            except ValueError:
+                logger.warning("[create_task] invalid recording_id %r", recording_id)
+                mom = {}
+            action_items = [ai for ai in (mom.get("action_items") or []) if ai]
+        else:
+            action_items = await repo.get_mom_action_items(
+                session, uuid.UUID(resolved_meeting_id)
+            )
         items = tools.build_task_items(action_items)
         # "tạo task cho <người>" → keep the {project, items} shape but narrow to
-        # that person's action items (matched on assignee/pic, case-insensitive).
+        # that person's items. assignee_matches bridges the Redmine-login ↔
+        # display-name gap ("hieunq3" ↔ pic "Hiếu").
         assignee = (args.get("assignee") or "").strip()
         if assignee:
             items = [
                 it for it in items
-                if assignee.lower() in (it.get("assignee") or "").lower()
+                if assignee_matches(assignee, it.get("assignee") or "")
             ]
     else:
         items = []
@@ -258,10 +272,20 @@ def make_agent_approve(*, tools=None):
         """
         pending = state.get("pending_tool") or {}
         spec = ts.get_tool(pending.get("name", "")) or {}
+        msgs = state.get("agent_messages") or []
+        # Text the model attaches to a tool_call is unreliable narration — gemma
+        # often claims the action is ALREADY done ("Đã gửi email ... rồi nhé!")
+        # before approval/execution. Never surface that as the card's rationale:
+        # only a standalone (non-tool-call) assistant message qualifies, else
+        # empty → the FE shows just the card, no redundant bubble.
+        last_assistant = next(
+            (m for m in reversed(msgs) if m.get("role") == "assistant"), {}
+        )
+        rationale = "" if last_assistant.get("tool_calls") else _last_assistant_text(msgs)
         decision = interrupt({
             "tool": pending.get("name"),
             "args": pending.get("args") or {},
-            "rationale": _last_assistant_text(state.get("agent_messages") or []),
+            "rationale": rationale,
             "description": spec.get("description", ""),
         })
         logger.info(f"[Node agent_approve] RESUMED decision={decision}")
@@ -292,17 +316,19 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
                 template.update(decision["edited_args"])
             project = template.get("project", "")
             items = template.get("items", [])
+            note = decision.get("reason") or ""
+            payloads = _reconcile_payloads(project, items, note=note)
             logger.info(
-                "[Node agent_execute] create_task → pm reconcile (%d item(s))", len(items)
+                "[Node agent_execute] create_task → pm reconcile (%d item(s), %d send(s))",
+                len(items), len(payloads),
             )
             return {
                 "pending_tool": None,
                 "user_decision": None,
                 "agent_route": "reconcile",
-                "pm_next_payload": {
-                    "kind": "reconcile", "project": project, "items": items,
-                    "text": _reconcile_text(project, items),
-                },
+                "pm_next_payload": payloads[0],
+                "pm_queue": payloads[1:],
+                "pm_replies": [],
                 "pm_rounds": 0,
                 "tool_result": {
                     "status": "reconcile_handoff", "project": project, "count": len(items),

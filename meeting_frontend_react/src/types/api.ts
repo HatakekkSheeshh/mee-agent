@@ -197,3 +197,13 @@ export type ChatTurnResult =
   | { status: "interrupted"; pending_action_id: string; pending_action: PendingAction }
   | { status: "executed"; reply: string; tool_result?: unknown }
   | { status: "rejected"; reply: string };
+
+/** Progress frame from the SSE stream (POST /messages/stream) while the graph runs. */
+export interface ChatStreamStep {
+  type: "step";
+  step: "context" | "classify" | "tool_call" | "tool_done" | "pm";
+  /** classify: the detected intent. */
+  intent?: string;
+  /** tool_call: names of the tools the agent is about to run. */
+  tools?: string[];
+}

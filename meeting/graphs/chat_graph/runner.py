@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +69,8 @@ def _initial_turn_state(
         # reset pm-agent branch state (new message = new pm request)
         "pm_rounds": 0,
         "pm_next_payload": None,
+        "pm_queue": [],
+        "pm_replies": [],
         "pm_last": None,
         "pm_pending": None,
         "pm_route": None,
@@ -107,6 +109,72 @@ async def run_chat_turn(
     logger.info(f"=== Running ChatGraph turn for session {session_id[:8]} ===")
     result = await graph.ainvoke(initial_state, config=config)
     return await _interrupt_or_complete(graph, config, result, session_id)
+
+def update_to_events(node: str, delta: dict) -> list[dict]:
+    """Map one `astream(stream_mode="updates")` chunk to UI step events. Pure.
+
+    Only nodes whose progress is meaningful to the user emit an event; the FE
+    maps `step`/tool names to localized labels. Unknown nodes emit nothing, so
+    new graph nodes degrade silently instead of breaking the stream.
+    """
+    if node == "load_context":
+        return [{"type": "step", "step": "context"}]
+    if node == "classify_intent":
+        ev: dict = {"type": "step", "step": "classify"}
+        if delta.get("intent"):
+            ev["intent"] = delta["intent"]
+        return [ev]
+    if node == "agent":
+        if delta.get("agent_route") != "tools":
+            return []  # final answer surfaces via the terminal result event
+        msgs = delta.get("agent_messages") or []
+        last = msgs[-1] if msgs else {}
+        names = [
+            (tc.get("function") or {}).get("name", "?")
+            for tc in (last.get("tool_calls") or [])
+        ]
+        return [{"type": "step", "step": "tool_call", "tools": names}]
+    if node == "agent_tools":
+        return [{"type": "step", "step": "tool_done"}]
+    if node in ("pm_call", "pm_await"):
+        return [{"type": "step", "step": "pm"}]
+    return []
+
+async def stream_chat_turn(
+    *,
+    session_id: str,
+    user_id: str,
+    user_message: str,
+    meeting_id: Optional[str],
+    session: AsyncSession,
+    checkpointer,
+) -> AsyncIterator[dict]:
+    """Streaming variant of run_chat_turn.
+
+    Yields `{type:"step", ...}` events while the graph runs, then a single
+    terminal `{type:"result", result}` whose `result` has exactly the
+    run_chat_turn shape (complete | interrupted) — so the API layer reuses the
+    same persist/response code for both transports.
+    """
+    graph = build_chat_graph(session, checkpointer)
+    config = {"configurable": {"thread_id": session_id}}
+    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id)
+
+    logger.info(f"=== Streaming ChatGraph turn for session {session_id[:8]} ===")
+    final_values: dict = {}
+    async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
+        for node, delta in (chunk or {}).items():
+            if node == "__interrupt__":
+                continue  # surfaced via the post-stream snapshot below
+            if isinstance(delta, dict):
+                final_values.update(delta)
+                for ev in update_to_events(node, delta):
+                    yield ev
+
+    yield {
+        "type": "result",
+        "result": await _interrupt_or_complete(graph, config, final_values, session_id),
+    }
 
 async def resume_chat_turn(
     *,
