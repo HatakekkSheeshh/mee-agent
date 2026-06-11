@@ -2,16 +2,38 @@
 Lightweight AgentBase Memory client for Mee Agent.
 Saves meeting events (transcript + notes summary) to AgentBase Memory Service.
 Uses stdlib only — no extra dependencies.
+
+Also hosts the project-state memory-records layer used by the Postgres→AgentBase
+sync (scripts/sync_memory.py). AgentBase memory-records have NO metadata field and
+record DELETE is denied for our service account (confirmed via probe), so v1 is
+**insert-only, newest-wins**: each project's distilled state is written as one
+record whose first line is a machine-readable marker
+`[mee-sync project=<id> hash=<source_hash>]`. Change detection reads back the
+latest record for a project and compares the embedded hash. Pure helpers
+(build/parse/select) are unit-tested without network; the network functions take
+an injectable `call` seam.
+
+Confirmed write contract (memory `memory-0a6ff6dc-…`, namespace `project_facts/<actor>`):
+  POST /memory/memories/{id}/memory-records:insert-directly?namespace=<ns>
+       body {"memoryRecords": ["<text>"]}        (raw namespace, no %2F)
 """
 import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
 
 logger = logging.getLogger(__name__)
+
+# ── Project-state memory-records (sync projection) ──────────────────────────
+PROJECT_FACTS_PREFIX = "project_facts"   # strategy namespaceTemplate is "project_facts/{actorId}"
+DEFAULT_ACTOR_ID = "mee-user"
+SYNC_MARKER = "mee-sync"
+_MEMORY_BASE = os.getenv("AGENTBASE_MEMORY_URL", "https://agentbase.api.vngcloud.vn/memory")
+_MARKER_RE = re.compile(rf"^\[{SYNC_MARKER} project=(?P<pid>\S+) hash=(?P<hash>\S+)\]")
 
 _token_cache: dict = {"token": None, "expires_at": 0}
 
@@ -119,3 +141,121 @@ def save_meeting_events(session_id: str, notes: dict, transcript: str) -> None:
         logger.info(f"Memory: events saved for session {session_id}")
     except Exception as e:
         logger.warning(f"Memory: failed to save assistant event: {e}")
+
+
+# ── Pure helpers (network-free, unit-tested) ────────────────────────────────
+
+def build_project_record_text(project_id: str, source_hash: str, state_text: str) -> str:
+    """Embed the change-detection marker as the record's first line.
+
+    AgentBase records have no metadata field, so the source_hash rides inside
+    the text. `parse_project_marker` is the inverse.
+    """
+    return f"[{SYNC_MARKER} project={project_id} hash={source_hash}]\n{state_text}"
+
+
+def parse_project_marker(memory_text: str | None) -> dict | None:
+    """Extract {'project_id', 'hash'} from a record's marker line, or None."""
+    m = _MARKER_RE.match((memory_text or "").lstrip())
+    if not m:
+        return None
+    return {"project_id": m.group("pid"), "hash": m.group("hash")}
+
+
+def _records_of(resp: object) -> list:
+    """Normalize AgentBase browse/search envelopes to a list of record dicts."""
+    if isinstance(resp, dict):
+        for key in ("listData", "data", "records", "items"):
+            val = resp.get(key)
+            if isinstance(val, list):
+                return val
+    if isinstance(resp, list):
+        return resp
+    return []
+
+
+def select_latest_project_record(records: list, project_id: str) -> dict | None:
+    """Newest record (max created_at) whose marker matches project_id, or None.
+
+    Implements the insert-only "newest-wins" read: older state records for the
+    same project linger (DELETE is denied) but the latest one is authoritative.
+    """
+    matches = []
+    for rec in records or []:
+        marker = parse_project_marker(rec.get("memory") if isinstance(rec, dict) else None)
+        if marker and marker["project_id"] == str(project_id):
+            matches.append(rec)
+    if not matches:
+        return None
+    return max(matches, key=lambda r: r.get("created_at") or "")
+
+
+# ── Network functions (injectable `call` seam) ──────────────────────────────
+
+def _default_call(method: str, url: str, body: dict | None, token: str) -> object:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode()
+    return json.loads(raw) if raw else None
+
+
+def _namespace(actor_id: str) -> str:
+    return f"{PROJECT_FACTS_PREFIX}/{actor_id}"
+
+
+def search_project_record(
+    project_id: str,
+    *,
+    memory_id: str | None = None,
+    actor_id: str = DEFAULT_ACTOR_ID,
+    token: str | None = None,
+    call=_default_call,
+) -> dict | None:
+    """Fetch the latest project-state record for `project_id`, or None.
+
+    Browses the project_facts namespace and picks the newest marker match.
+    `call`/`token`/`memory_id` are injectable so this is unit-testable offline.
+    """
+    memory_id = memory_id or os.getenv("MEMORY_ID", "")
+    if not memory_id:
+        return None
+    token = token or _get_token()
+    ns = _namespace(actor_id)
+    url = (
+        f"{_MEMORY_BASE}/memories/{memory_id}/memory-records"
+        f"?namespace={ns}&limit=200"
+    )
+    resp = call("GET", url, None, token)
+    return select_latest_project_record(_records_of(resp), project_id)
+
+
+def upsert_project_record(
+    project_id: str,
+    text: str,
+    source_hash: str,
+    *,
+    memory_id: str | None = None,
+    actor_id: str = DEFAULT_ACTOR_ID,
+    token: str | None = None,
+    call=_default_call,
+) -> object:
+    """Insert one project-state record (insert-only; DELETE is denied for our SA).
+
+    The record text carries the marker line so the next sync can compare hashes.
+    """
+    memory_id = memory_id or os.getenv("MEMORY_ID", "")
+    if not memory_id:
+        raise RuntimeError("MEMORY_ID not set")
+    token = token or _get_token()
+    ns = _namespace(actor_id)
+    url = (
+        f"{_MEMORY_BASE}/memories/{memory_id}/memory-records:insert-directly"
+        f"?namespace={ns}"
+    )
+    record_text = build_project_record_text(project_id, source_hash, text)
+    return call("POST", url, {"memoryRecords": [record_text]}, token)

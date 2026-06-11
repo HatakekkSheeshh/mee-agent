@@ -73,3 +73,58 @@ def distill_project_state(
     )
     content = resp.choices[0].message.content or ""
     return _strip_think(content)
+
+
+# ── Sync orchestration (network-free, injectable seams) ─────────────────────
+
+def plan_project_sync(
+    project_summary: dict | None,
+    moms: list[dict | None],
+    existing_hash: str | None,
+) -> tuple[str, str]:
+    """Decide the action for one project. Returns (action, source_hash).
+
+    action ∈ {"empty", "skip", "sync"}:
+      - "empty": no summary and no MoM content → nothing to distill (hash "").
+      - "skip" : current hash equals the stored one → unchanged, no LLM/write.
+      - "sync" : content changed (or never synced) → distill + upsert.
+    """
+    has_content = bool(project_summary) or any(m for m in moms)
+    if not has_content:
+        return "empty", ""
+    source_hash = canonical_source_hash(project_summary, moms)
+    if existing_hash == source_hash:
+        return "skip", source_hash
+    return "sync", source_hash
+
+
+def sync_one_project(
+    *,
+    project_id: str,
+    project_summary: dict | None,
+    moms: list[dict | None],
+    get_existing_hash,
+    distill,
+    upsert_record,
+    dry_run: bool = False,
+) -> dict:
+    """Run change-detection + (conditional) distill/upsert for one project.
+
+    All side-effecting deps are injected callables so this is fully unit-testable
+    without DB, network, or an LLM:
+      - get_existing_hash(project_id) -> str | None   (reads AgentBase marker hash)
+      - distill(project_summary, moms) -> str          (LLM)
+      - upsert_record(project_id, text, source_hash)   (AgentBase insert)
+
+    Returns {"action", "hash", "text"?}. On "empty"/"skip" neither distill nor
+    upsert is called. On "sync" with dry_run=True, distill runs but upsert does not.
+    """
+    existing_hash = get_existing_hash(project_id)
+    action, source_hash = plan_project_sync(project_summary, moms, existing_hash)
+    if action != "sync":
+        return {"action": action, "hash": source_hash}
+
+    text = distill(project_summary, moms)
+    if not dry_run:
+        upsert_record(project_id, text, source_hash)
+    return {"action": action, "hash": source_hash, "text": text}

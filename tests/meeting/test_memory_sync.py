@@ -10,7 +10,12 @@ Spec: docs/superpowers/specs/2026-06-11-agent-memory-sync-design.md
 """
 from __future__ import annotations
 
-from meeting.services.memory_sync import canonical_source_hash, distill_project_state
+from meeting.services.memory_sync import (
+    canonical_source_hash,
+    distill_project_state,
+    plan_project_sync,
+    sync_one_project,
+)
 
 
 # ── canonical_source_hash ───────────────────────────────────────────────
@@ -97,3 +102,101 @@ def test_distill_prompt_includes_source_content():
     blob = str(sent.get("messages", ""))
     assert "AI Innovation" in blob
     assert "pgvector" in blob
+
+
+# ── plan_project_sync ────────────────────────────────────────────────────
+
+def test_plan_skips_when_hash_unchanged():
+    summary = {"project_title": "X"}
+    moms = [{"decisions": ["d1"]}]
+    h = canonical_source_hash(summary, moms)
+    action, out_hash = plan_project_sync(summary, moms, existing_hash=h)
+    assert action == "skip"
+    assert out_hash == h
+
+
+def test_plan_syncs_when_hash_differs_or_absent():
+    summary = {"project_title": "X"}
+    moms = [{"decisions": ["d1"]}]
+    assert plan_project_sync(summary, moms, existing_hash=None)[0] == "sync"
+    assert plan_project_sync(summary, moms, existing_hash="stale")[0] == "sync"
+
+
+def test_plan_empty_when_no_content():
+    action, out_hash = plan_project_sync(None, [None], existing_hash=None)
+    assert action == "empty"
+    assert out_hash == ""
+
+
+# ── sync_one_project (skip-path: zero distill/upsert when unchanged) ──────
+
+def _recorder():
+    calls = []
+    def fn(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "DISTILLED"
+    fn.calls = calls
+    return fn
+
+
+def test_sync_skips_distill_and_upsert_when_hash_matches():
+    summary = {"project_title": "X"}
+    moms = [{"decisions": ["d1"]}]
+    matching = canonical_source_hash(summary, moms)
+    distill = _recorder()
+    upsert = _recorder()
+
+    result = sync_one_project(
+        project_id="p1",
+        project_summary=summary,
+        moms=moms,
+        get_existing_hash=lambda pid: matching,
+        distill=distill,
+        upsert_record=upsert,
+    )
+    assert result["action"] == "skip"
+    assert distill.calls == [], "must NOT distill an unchanged project"
+    assert upsert.calls == [], "must NOT upsert an unchanged project"
+
+
+def test_sync_distills_and_upserts_when_changed():
+    summary = {"project_title": "X"}
+    moms = [{"decisions": ["d2"]}]
+    distill = _recorder()
+    upsert = _recorder()
+
+    result = sync_one_project(
+        project_id="p1",
+        project_summary=summary,
+        moms=moms,
+        get_existing_hash=lambda pid: "stale",
+        distill=distill,
+        upsert_record=upsert,
+    )
+    assert result["action"] == "sync"
+    assert result["text"] == "DISTILLED"
+    assert len(distill.calls) == 1
+    # upsert called with (project_id, distilled_text, source_hash)
+    (args, _) = upsert.calls[0]
+    assert args[0] == "p1" and args[1] == "DISTILLED"
+    assert args[2] == canonical_source_hash(summary, moms)
+
+
+def test_sync_dry_run_distills_but_does_not_upsert():
+    summary = {"project_title": "X"}
+    moms = [{"decisions": ["d3"]}]
+    distill = _recorder()
+    upsert = _recorder()
+
+    result = sync_one_project(
+        project_id="p1",
+        project_summary=summary,
+        moms=moms,
+        get_existing_hash=lambda pid: None,
+        distill=distill,
+        upsert_record=upsert,
+        dry_run=True,
+    )
+    assert result["action"] == "sync"
+    assert len(distill.calls) == 1
+    assert upsert.calls == [], "dry-run must not write"
