@@ -150,11 +150,12 @@ async def _interrupted(graph, config):
 
 # ─── prompt ───────────────────────────────────────────────────────────
 
-def test_system_prompt_no_longer_steers_to_detached_read_tools():
-    """The Postgres grounding tools are DETACHED — the prompt must not instruct
-    the agent to call them anymore (it grounds on project_memory instead)."""
+def test_system_prompt_steers_to_list_recordings_for_per_recording_scoping():
+    """list_recordings is RE-ATTACHED so create_task can target ONE recording
+    (the memory bullets carry no recording_id). The heavier grounding tools stay
+    detached — the agent still grounds Q&A on project_memory."""
     prompt = _agent_system_prompt(_initial("việc của Hiếu trong Meeting 1"))
-    assert "list_recordings" not in prompt
+    assert "list_recordings" in prompt        # re-attached, for per-recording task scoping
     assert "recording_mom" not in prompt
     assert "retrieve" not in prompt
 

@@ -38,11 +38,17 @@ logger = logging.getLogger(__name__)
 REJECT_REPLY = "Đã hủy. Tui hong tạo task nữa."
 
 # Postgres-backed meeting-data grounding tools, DETACHED from the agent's surface:
-# the agent grounds on the distilled AgentBase project_memory injected at
+# the agent grounds Q&A on the distilled AgentBase project_memory injected at
 # load_context, not live Postgres reads. The tool modules stay registered (still
-# callable / unit-tested); they're just not offered to the LLM. Re-attach by
-# clearing this set.
-DETACHED_TOOLS = frozenset({"retrieve", "list_recordings", "recording_mom", "search_transcript"})
+# callable / unit-tested); they're just not offered to the LLM.
+#
+# `list_recordings` is the deliberate EXCEPTION — kept attached as the agent's one
+# data-crawl tool so create_task can scope to a SPECIFIC recording: the memory
+# bullets carry session labels but no recording_id, so the model lists recordings
+# to resolve "Meeting 1" → recording_id before handing off. The server then pulls
+# that recording's exact MoM (build_task_template, agent.py). Re-attach others by
+# removing them from this set.
+DETACHED_TOOLS = frozenset({"retrieve", "recording_mom", "search_transcript"})
 
 
 def _openai_tools(*, tools=_services) -> list[dict]:
