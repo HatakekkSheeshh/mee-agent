@@ -11,11 +11,33 @@ Spec: docs/superpowers/specs/2026-06-11-agent-memory-sync-design.md
 from __future__ import annotations
 
 from meeting.services.memory_sync import (
+    build_session_bullets,
     canonical_source_hash,
     distill_project_state,
     plan_project_sync,
     sync_one_project,
 )
+
+
+# ── build_session_bullets (deterministic, no LLM) ────────────────────────
+
+def test_session_bullets_formats_decisions_actions_blockers():
+    out = build_session_bullets([
+        {"label": "Meeting 1", "date": "2026-06-08T09:00:00+00:00", "mom": {
+            "decisions": ["ship Friday"],
+            "action_items": [{"item": "viết migration", "pic": "Hiếu", "deadline": "10/06"}],
+            "blockers": [{"text": "thiếu API key", "by": "An"}],
+        }},
+    ])
+    assert "### Meeting 1 (2026-06-08)" in out
+    assert "Quyết định: ship Friday" in out
+    assert "Việc: viết migration — Hiếu (hạn 10/06)" in out
+    assert "Blocker: thiếu API key (bởi An)" in out
+
+
+def test_session_bullets_skips_empty_sessions_and_returns_blank():
+    assert build_session_bullets([{"label": "X", "date": None, "mom": {}}]) == ""
+    assert build_session_bullets([]) == ""
 
 
 # ── canonical_source_hash ───────────────────────────────────────────────

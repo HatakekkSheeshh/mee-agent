@@ -46,6 +46,52 @@ def canonical_source_hash(project_summary: dict | None, moms: list[dict | None])
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _mom_texts(items) -> list[str]:
+    """Extract strings from a decisions/blockers/commitments list (str or {text,by})."""
+    out: list[str] = []
+    for it in items or []:
+        if isinstance(it, str) and it.strip():
+            out.append(it.strip())
+        elif isinstance(it, dict) and it.get("text"):
+            txt = it["text"].strip()
+            by = it.get("by")
+            out.append(f"{txt} (bởi {by})" if by else txt)
+    return out
+
+
+def build_session_bullets(sessions: list[dict]) -> str:
+    """Deterministic per-session bullets from each recording's MoM (no LLM).
+
+    `sessions`: ordered [{"label", "date", "mom"}]. Produces a "Theo từng phiên"
+    block so the project record answers per-recording questions without Postgres.
+    Returns "" when no session has any decisions/action-items/blockers.
+    """
+    blocks: list[str] = []
+    for s in sessions:
+        mom = s.get("mom") or {}
+        decisions = _mom_texts(mom.get("decisions"))
+        blockers = _mom_texts(mom.get("blockers"))
+        action_items = [ai for ai in (mom.get("action_items") or []) if isinstance(ai, dict) and ai.get("item")]
+        if not (decisions or blockers or action_items):
+            continue
+        date = (s.get("date") or "")[:10]
+        header = f"### {s.get('label') or 'Phiên họp'}" + (f" ({date})" if date else "")
+        lines = [header]
+        if decisions:
+            lines.append("- Quyết định: " + "; ".join(decisions))
+        for ai in action_items:
+            seg = f"- Việc: {ai['item']}"
+            if ai.get("pic"):
+                seg += f" — {ai['pic']}"
+            if ai.get("deadline"):
+                seg += f" (hạn {ai['deadline']})"
+            lines.append(seg)
+        if blockers:
+            lines.append("- Blocker: " + "; ".join(blockers))
+        blocks.append("\n".join(lines))
+    return "Theo từng phiên:\n\n" + "\n\n".join(blocks) if blocks else ""
+
+
 def _strip_think(text: str) -> str:
     text = _THINK_TAG_RE.sub("", text)
     text = _THINK_OPEN_RE.sub("", text)

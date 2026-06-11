@@ -31,7 +31,11 @@ from meeting.memory_client import (
     search_project_record,
     upsert_project_record,
 )
-from meeting.services.memory_sync import distill_project_state, sync_one_project
+from meeting.services.memory_sync import (
+    build_session_bullets,
+    distill_project_state,
+    sync_one_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +87,18 @@ async def sync_project(
     project_summary = meeting.project_summary_json
     pid = str(meeting.id)
 
+    # Deterministic per-session bullets (no LLM) so the project record answers
+    # per-recording questions without Postgres — the agent's read tools are detached.
+    sessions = [
+        {"label": r.title or r.session_label, "date": r.started_at.isoformat() if r.started_at else None,
+         "mom": r.mom_json}
+        for r in recordings
+    ]
+    session_block = build_session_bullets(sessions)
+
     def distill(summary, ms):
-        return distill_project_state(summary, ms, client=client, model=model)
+        aggregate = distill_project_state(summary, ms, client=client, model=model)
+        return f"{aggregate}\n\n{session_block}" if session_block else aggregate
 
     def upsert(project_id, text, source_hash):
         return upsert_project_record(project_id, text, source_hash, title=title)
