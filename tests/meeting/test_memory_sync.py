@@ -40,6 +40,38 @@ def test_session_bullets_skips_empty_sessions_and_returns_blank():
     assert build_session_bullets([]) == ""
 
 
+def _session(n: int) -> dict:
+    # Sessions are passed oldest→newest; each has content so it produces a block.
+    return {"label": f"Phiên {n}", "date": f"2026-06-{n:02d}T09:00:00+00:00",
+            "mom": {"decisions": [f"quyết định {n}"]}}
+
+
+def test_session_bullets_windows_to_recent_and_marks_omitted():
+    # 5 content sessions, window=2 → keep the 2 NEWEST (4,5), drop the 3 oldest,
+    # and surface a collapse marker. Oldest detail lives in the LLM aggregate.
+    out = build_session_bullets([_session(n) for n in range(1, 6)], window=2)
+
+    assert "### Phiên 4" in out and "### Phiên 5" in out
+    assert "### Phiên 1" not in out
+    assert "### Phiên 2" not in out
+    assert "### Phiên 3" not in out
+    assert "3 phiên cũ hơn" in out  # omitted-count marker
+
+
+def test_session_bullets_no_marker_when_within_window():
+    out = build_session_bullets([_session(n) for n in range(1, 4)], window=8)
+    assert "phiên cũ hơn" not in out
+    assert out.count("###") == 3
+
+
+def test_session_bullets_window_counts_only_content_sessions():
+    # Empty sessions don't consume the window or trigger a (misleading) marker.
+    sessions = [{"label": "Trống", "date": None, "mom": {}}] + [_session(n) for n in (4, 5)]
+    out = build_session_bullets(sessions, window=2)
+    assert "phiên cũ hơn" not in out
+    assert "### Phiên 4" in out and "### Phiên 5" in out
+
+
 # ── canonical_source_hash ───────────────────────────────────────────────
 
 def test_hash_is_stable_across_dict_key_order():

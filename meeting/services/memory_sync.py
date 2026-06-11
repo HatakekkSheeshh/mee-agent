@@ -38,8 +38,14 @@ Trả về văn bản trạng thái thuần (không JSON, không markdown thừa
 # Bump when the PROJECTION FORMAT changes (not the source data) — e.g. adding the
 # per-session bullets. Folded into the hash so every record re-syncs once on the
 # next run even though summary/moms are unchanged. History:
-#   1 = aggregate-only;  2 = aggregate + "Theo từng phiên" per-session bullets.
-PROJECTION_VERSION = 2
+#   1 = aggregate-only;  2 = aggregate + "Theo từng phiên" per-session bullets;
+#   3 = bullets recency-windowed (only the most recent sessions, older collapsed).
+PROJECTION_VERSION = 3
+
+# Recency guard: keep detailed bullets for only the most recent N sessions so the
+# record (re-injected into the agent prompt on EVERY chat turn) doesn't grow
+# unbounded with session count. Older sessions stay covered by the LLM aggregate.
+RECENT_SESSIONS_WINDOW = 8
 
 
 def canonical_source_hash(project_summary: dict | None, moms: list[dict | None]) -> str:
@@ -67,12 +73,20 @@ def _mom_texts(items) -> list[str]:
     return out
 
 
-def build_session_bullets(sessions: list[dict]) -> str:
+def build_session_bullets(
+    sessions: list[dict], *, window: int | None = RECENT_SESSIONS_WINDOW
+) -> str:
     """Deterministic per-session bullets from each recording's MoM (no LLM).
 
-    `sessions`: ordered [{"label", "date", "mom"}]. Produces a "Theo từng phiên"
-    block so the project record answers per-recording questions without Postgres.
-    Returns "" when no session has any decisions/action-items/blockers.
+    `sessions`: ordered OLDEST→NEWEST [{"label", "date", "mom"}]. Produces a
+    "Theo từng phiên" block so the project record answers per-recording questions
+    without Postgres. Returns "" when no session has any decisions/action-items/
+    blockers.
+
+    `window` bounds growth: only the most recent `window` content-bearing sessions
+    keep detailed bullets; older ones are collapsed to a one-line marker (their
+    detail remains in the LLM aggregate above this block). `None`/0 disables the
+    window (keep all).
     """
     blocks: list[str] = []
     for s in sessions:
@@ -97,7 +111,16 @@ def build_session_bullets(sessions: list[dict]) -> str:
         if blockers:
             lines.append("- Blocker: " + "; ".join(blockers))
         blocks.append("\n".join(lines))
-    return "Theo từng phiên:\n\n" + "\n\n".join(blocks) if blocks else ""
+    if not blocks:
+        return ""
+    omitted = 0
+    if window and len(blocks) > window:
+        omitted = len(blocks) - window
+        blocks = blocks[-window:]  # keep the newest `window` (sessions are oldest→newest)
+    parts = (
+        [f"— {omitted} phiên cũ hơn đã gộp vào phần tóm tắt ở trên —"] if omitted else []
+    ) + blocks
+    return "Theo từng phiên:\n\n" + "\n\n".join(parts)
 
 
 def _strip_think(text: str) -> str:
