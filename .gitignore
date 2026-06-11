@@ -5,5 +5,9 @@ __pycache__/
 .greennode.json
 .agentbase/
 .dockerignore
+venv
 temp
 slides
+.claude/
+.pytest_cache/
+cache/

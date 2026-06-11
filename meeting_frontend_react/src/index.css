@@ -1848,3 +1848,86 @@ html { scroll-behavior: smooth; }
   transform: translateY(0);
 }
 
+/* ── Chat welcome banner (intro shown on an empty thread) ── */
+.welcome-banner {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(120% 100% at 0% 0%, var(--accent-soft), transparent 60%),
+    var(--surface-2);
+  padding: 18px 18px 14px;
+  margin-bottom: 14px;
+}
+.welcome-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.welcome-banner-title {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.welcome-banner-tagline {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.welcome-banner-feats {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.welcome-feat {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--r);
+  transition: background 0.18s var(--ease);
+}
+.welcome-feat:hover {
+  background: var(--surface);
+}
+.welcome-feat-icon {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 7px;
+  background: var(--accent-soft);
+}
+.welcome-feat-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.welcome-feat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.welcome-feat-desc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-feat { transition: none; }
+}
+.welcome-banner-note {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  font-size: 12px;
+  color: var(--text-mute);
+}

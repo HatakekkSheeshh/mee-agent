@@ -12,7 +12,7 @@ Output: structured clean view:
 LLM tasks:
 1. Detect speaker từ context (xưng hô "em"/"anh", gọi tên trực tiếp, attendees list)
 2. Group consecutive sentences của cùng speaker thành 1 block
-3. Bỏ filler words: "ờ", "um", "à", "dạ", "thì là", "kiểu", "you know"
+3. Bỏ filler words: "ờ", "um", "à", "dạ", "thì là", "kiểu", "you know", "domixi", "anh nghĩ là", "kiểu như"
 4. Add punctuation đúng + normalize wording nhẹ
 5. Tag mỗi block: commitment / decision / blocker / question / update (optional)
 

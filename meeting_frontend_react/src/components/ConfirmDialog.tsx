@@ -11,6 +11,8 @@ export interface ConfirmOpts {
   cancelLabel?: string;
   /** Style the primary button as danger (red) — for destructive ops. */
   danger?: boolean;
+  /** Style the primary button with the brand accent (green). Ignored if danger. */
+  accent?: boolean;
 }
 
 interface Props extends ConfirmOpts {
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   danger,
+  accent,
   onConfirm,
   onCancel,
 }: Props) {
@@ -59,7 +62,7 @@ export function ConfirmDialog({
             {cancelLabel || t("confirm.cancel")}
           </button>
           <button
-            className={`btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`}
+            className={`btn btn-sm ${danger ? "btn-danger" : accent ? "btn-accent" : "btn-primary"}`}
             type="button"
             onClick={onConfirm}
             autoFocus

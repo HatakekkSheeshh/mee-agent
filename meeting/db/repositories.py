@@ -7,7 +7,7 @@ No business logic here — just data access.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
 from sqlalchemy import delete, select
@@ -104,6 +104,32 @@ async def list_meetings_for_user(
             Meeting.deleted_at.is_(None),
         )
         .order_by(Meeting.is_pinned.desc(), Meeting.created_at.desc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def find_meetings_by_title(
+    session: AsyncSession, user_id: uuid.UUID, q: str
+) -> Sequence[Meeting]:
+    """ILIKE-search the user's meetings by title fragment, most-recent first.
+
+    User-scoped via MeetingMember (mirrors list_meetings_for_user). Used by the
+    chat agent to resolve a project the user names by title. Returns [] for a
+    blank query.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    stmt = (
+        select(Meeting)
+        .join(MeetingMember, MeetingMember.meeting_id == Meeting.id)
+        .where(
+            MeetingMember.user_id == user_id,
+            MeetingMember.revoked_at.is_(None),
+            Meeting.deleted_at.is_(None),
+            Meeting.title.ilike(f"%{q}%"),
+        )
+        .order_by(Meeting.created_at.desc())
     )
     return (await session.execute(stmt)).scalars().all()
 
@@ -451,6 +477,72 @@ async def soft_delete_segment(
     return True
 
 
+async def get_mom_action_items(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> list[dict]:
+    """Aggregate action_items from every recording's MoM for a meeting.
+
+    Each item follows the note_generator shape: {pic, deadline, item}.
+    Returns [] if the meeting/recordings have no MoM yet.
+    """
+    meeting = await get_meeting(session, meeting_id)
+    if not meeting:
+        return []
+    items: list[dict] = []
+    for rec in (meeting.recordings or []):
+        mom = rec.mom_json or {}
+        for ai in (mom.get("action_items") or []):
+            if ai:
+                items.append(ai)
+    return items
+
+
+async def list_recordings(
+    session: AsyncSession, meeting_id: uuid.UUID
+) -> list[dict]:
+    """List a meeting's recordings as lightweight dicts, oldest first.
+
+    Each entry = {recording_id, label, date, has_mom}, where label =
+    `title or session_label` and date is the event date (falling back to the
+    started_at date). Lets the chat agent map "Meeting 1"/ordinal/date →
+    recording_id before reading that recording's MoM. Returns [] if the meeting
+    is missing or has no recordings.
+    """
+    meeting = await get_meeting(session, meeting_id)
+    if not meeting:
+        return []
+    recordings = sorted(
+        (meeting.recordings or []),
+        key=lambda r: r.started_at or datetime.min,
+    )
+    out: list[dict] = []
+    for rec in recordings:
+        if rec.date:
+            iso_date = rec.date.isoformat()
+        elif rec.started_at:
+            iso_date = rec.started_at.date().isoformat()
+        else:
+            iso_date = None
+        out.append({
+            "recording_id": str(rec.id),
+            "label": rec.title or rec.session_label or "phiên",
+            "date": iso_date,
+            "has_mom": bool(rec.mom_json),
+        })
+    return out
+
+
+async def get_recording_mom(
+    session: AsyncSession, recording_id: uuid.UUID
+) -> Optional[dict]:
+    """Return one recording's stored MoM (recordings.mom_json), or None if the
+    recording is missing or has no MoM yet."""
+    recording = await session.get(Recording, recording_id)
+    if not recording:
+        return None
+    return recording.mom_json
+
+
 async def join_meeting_transcript(
     session: AsyncSession, meeting_id: uuid.UUID
 ) -> str:
@@ -518,7 +610,7 @@ async def add_chat_message(
     # Touch last_activity_at
     chat = await session.get(ChatSession, session_id)
     if chat:
-        chat.last_activity_at = datetime.utcnow()
+        chat.last_activity_at = datetime.now(timezone.utc)
     await session.flush()
     return msg
 
@@ -535,6 +627,22 @@ async def list_chat_messages(
         .limit(limit)
     )
     return (await session.execute(stmt)).scalars().all()
+
+
+async def clear_chat_session(
+    session: AsyncSession, session_id: uuid.UUID
+) -> None:
+    """Delete a session's messages + pending actions in place (keeps the session
+    row, its id, and meeting_id binding). Pending actions are deleted rather than
+    status-flagged — a cleared session has no live interrupt to track and the
+    status CHECK constraint has no 'cancelled' value."""
+    await session.execute(
+        delete(ChatMessage).where(ChatMessage.session_id == session_id)
+    )
+    await session.execute(
+        delete(PendingAction).where(PendingAction.session_id == session_id)
+    )
+    await session.flush()
 
 
 # ─── Pending Actions (HITL) ───────────────────────────────────────
@@ -712,6 +820,7 @@ async def retrieve_memory_events(
     query: str = "",
     topic: Optional[str] = None,
     exclude_meeting_id: Optional[uuid.UUID] = None,
+    meeting_id: Optional[uuid.UUID] = None,
     event_types: Optional[list[str]] = None,
     limit: int = 10,
 ) -> Sequence[MemoryEventRow]:
@@ -733,6 +842,8 @@ async def retrieve_memory_events(
 
     def _base_filter(stmt):
         stmt = stmt.where(MemoryEventRow.user_id == user_id)
+        if meeting_id:
+            stmt = stmt.where(MemoryEventRow.meeting_id == meeting_id)
         if exclude_meeting_id:
             stmt = stmt.where(MemoryEventRow.meeting_id != exclude_meeting_id)
         if event_types:

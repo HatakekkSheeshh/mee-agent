@@ -9,7 +9,7 @@ import type {
   CleanResponse,
   MoMJson,
   ProjectSummary,
-  ChatMessage,
+  ChatTurnResult,
   Voiceprint,
 } from "../types/api";
 
@@ -316,19 +316,37 @@ export const api = {
   // ─── Chat ──────────────────────────────────────────────────────────
   chat: {
     createSession: (meetingId: string) =>
-      http<{ id: string; meeting_id: string }>(
+      http<{ id: string; meeting_id: string | null; title: string; created_at: string }>(
         "POST", "/api/chat/sessions", { meeting_id: meetingId },
       ),
-    send: (sessionId: string, message: string) =>
-      http<ChatMessage>(
-        "POST", `/api/chat/sessions/${sessionId}/messages`, { message },
+    // Backend MessageSend expects `text` (NOT `message`); returns a status envelope.
+    send: (sessionId: string, text: string) =>
+      http<ChatTurnResult>(
+        "POST", `/api/chat/sessions/${sessionId}/messages`, { text },
       ),
-    resume: (
-      sessionId: string,
-      approval: { approved: boolean; reason?: string },
+    // HITL resume hits /pending-actions/{id}/approve|reject (there is no /resume route).
+    approve: (
+      actionId: string,
+      body: {
+        edited_args?: Record<string, unknown>;
+        reason?: string;
+        // pm-agent: free-text answer to need_more_info, or the approval verb.
+        text?: string;
+        approval_action?: string;
+      } = {},
     ) =>
-      http<ChatMessage>(
-        "POST", `/api/chat/sessions/${sessionId}/resume`, approval,
+      http<ChatTurnResult>(
+        "POST", `/api/chat/pending-actions/${actionId}/approve`, body,
+      ),
+    reject: (actionId: string, reason?: string) =>
+      http<ChatTurnResult>(
+        "POST", `/api/chat/pending-actions/${actionId}/reject`, { reason },
+      ),
+    // Clear a session in place: wipes its messages + pending + checkpoint, keeps
+    // the session id (and meeting binding), so the agent re-grounds on a clean thread.
+    clear: (sessionId: string) =>
+      http<{ status: string; session_id: string }>(
+        "POST", `/api/chat/sessions/${sessionId}/clear`,
       ),
   },
 };

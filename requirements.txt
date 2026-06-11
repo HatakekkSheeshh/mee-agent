@@ -29,3 +29,4 @@ celery[librabbitmq]>=5.3
 # run_meeting.py so it auto-restarts when meeting/*.py changes.
 # Celery doesn't pick up new @task definitions until the process restarts.
 watchdog>=4.0
+psycopg[binary]
