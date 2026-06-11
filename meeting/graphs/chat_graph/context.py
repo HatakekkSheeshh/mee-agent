@@ -2,6 +2,7 @@
 meeting resolution."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Optional
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
 from meeting.graphs._chat_state import ChatState
+from meeting.memory_client import search_project_record, strip_project_marker
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,10 @@ async def resolve_meeting(
             }
     return {"meeting_id": bound_meeting_id, "resolved_by": "bound", "candidates": []}
 
-def make_load_context(session: AsyncSession):
+def make_load_context(session: AsyncSession, *, search_record=None):
+    # DI seam: real AgentBase browse by default; tests inject a fake.
+    _search = search_record or search_project_record
+
     async def load_context(state: ChatState) -> dict:
         """Load meeting context + recent messages for the LLM prompt."""
         sid = uuid.UUID(state["session_id"])
@@ -47,10 +52,19 @@ def make_load_context(session: AsyncSession):
         recent = [{"role": m.role, "content": m.content} for m in messages]
 
         meeting_ctx = {}
+        project_memory = ""
         chat_sess = await repo.get_chat_session(session, sid)
         if chat_sess and chat_sess.meeting_id:
             meeting = await repo.get_meeting(session, chat_sess.meeting_id)
             if meeting:
+                # Best-effort recall of the distilled project-state projection
+                # (AgentBase). Off the event loop (sync urllib); never block a turn.
+                try:
+                    rec = await asyncio.to_thread(_search, str(meeting.id))
+                    if rec:
+                        project_memory = strip_project_marker(rec.get("memory"))
+                except Exception as e:  # noqa: BLE001 — recall is non-critical
+                    logger.warning(f"[Node load_context] project memory recall failed: {e}")
                 meeting_ctx = {
                     "id": str(meeting.id),
                     "title": meeting.title,
@@ -69,11 +83,14 @@ def make_load_context(session: AsyncSession):
 
         logger.info(
             f"[Node load_context] session={state['session_id'][:8]}, "
-            f"recent_msgs={len(recent)}, meeting={meeting_ctx.get('title', 'none')!r}"
+            f"recent_msgs={len(recent)}, meeting={meeting_ctx.get('title', 'none')!r}, "
+            f"project_memory={len(project_memory)} chars"
+            f"{' (recalled)' if project_memory else ' (none)'}"
         )
         return {
             "recent_messages": recent,
             "meeting_context": meeting_ctx,
+            "project_memory": project_memory,
             # Default scope for the agent's tools = the chat's bound meeting.
             # switch_meeting can re-scope this mid-conversation by title.
             "resolved_meeting_id": meeting_ctx.get("id") or state.get("meeting_id"),

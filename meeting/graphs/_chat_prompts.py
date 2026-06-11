@@ -57,9 +57,17 @@ CLASSIFY_SYSTEM_PROMPT = (
 def _agent_system_prompt(state: ChatState) -> str:
     meeting = state.get("meeting_context") or {}
     title = meeting.get("title") or "(chưa gắn cuộc họp)"
+    memory = (state.get("project_memory") or "").strip()
+    memory_block = (
+        "Trạng thái project (bản chắt lọc từ bộ nhớ — dùng để ĐỊNH HƯỚNG; vẫn phải "
+        "GỌI tool đọc biên bản khi cần chi tiết/độ chính xác):\n"
+        f"{memory}\n\n"
+        if memory else ""
+    )
     return (
         "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
         f"Cuộc họp hiện tại: {title}\n\n"
+        f"{memory_block}"
         "Quy tắc:\n"
         "- Khi cần nội dung cuộc họp (quyết định, action item, ai nói gì...) để trả lời, "
         "GỌI tool `retrieve` trước — KHÔNG bịa.\n"

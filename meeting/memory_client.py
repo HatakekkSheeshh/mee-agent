@@ -168,6 +168,19 @@ def parse_project_marker(memory_text: str | None) -> dict | None:
     return {"project_id": m.group("pid"), "hash": m.group("hash")}
 
 
+def strip_project_marker(memory_text: str | None) -> str:
+    """Human-readable body of a project record — the marker line removed.
+
+    The chat agent recalls this (title header + distilled state); the
+    `[mee-sync project=… hash=…]` line is internal bookkeeping it shouldn't see.
+    """
+    text = (memory_text or "").lstrip()
+    if _MARKER_RE.match(text):
+        parts = text.split("\n", 1)
+        return parts[1].strip() if len(parts) > 1 else ""
+    return text.strip()
+
+
 def _records_of(resp: object) -> list:
     """Normalize AgentBase browse/search envelopes to a list of record dicts."""
     if isinstance(resp, dict):

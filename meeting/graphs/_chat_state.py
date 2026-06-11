@@ -25,6 +25,7 @@ class ChatState(TypedDict, total=False):
 
     # Loaded by load_context
     meeting_context: dict      # title, project_summary_json, recording_moms[]
+    project_memory: str        # distilled current-state recalled from AgentBase (best-effort)
     recent_messages: list[dict]  # last N messages from chat_messages
     resolved_meeting_id: Optional[str]  # bound meeting (or title-resolved) for tool scoping
 
