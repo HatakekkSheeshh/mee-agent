@@ -121,6 +121,16 @@ export function CreateTaskCard({ template, busy, onApprove, onReject }: CreateTa
         .filter((g) => g.items.length > 0),
     );
 
+  const blankItem = (): GroupItem => ({ subject: "", due_date: "", description: "" });
+
+  const addItem = (gi: number) =>
+    setGroups((prev) =>
+      prev.map((g, i) => (i === gi ? { ...g, items: [...g.items, blankItem()] } : g)),
+    );
+
+  const addGroup = () =>
+    setGroups((prev) => [...prev, { name: "", items: [blankItem()] }]);
+
   const totalItems = groups.reduce((n, g) => n + g.items.length, 0);
   const canApprove =
     !busy &&
@@ -144,10 +154,10 @@ export function CreateTaskCard({ template, busy, onApprove, onReject }: CreateTa
         />
       </label>
 
-      {totalItems === 0 ? (
+      {totalItems === 0 && (
         <div className="task-empty small">{t("chat.task.empty")}</div>
-      ) : (
-        <div className="task-groups">
+      )}
+      <div className="task-groups">
           {groups.map((g, gi) => (
             <div key={gi} className="task-group">
               <label className="task-field">
@@ -212,10 +222,25 @@ export function CreateTaskCard({ template, busy, onApprove, onReject }: CreateTa
                   </li>
                 ))}
               </ul>
+              <button
+                className="task-add-item"
+                type="button"
+                disabled={busy}
+                onClick={() => addItem(gi)}
+              >
+                {t("chat.task.addItem")}
+              </button>
             </div>
           ))}
         </div>
-      )}
+        <button
+          className="task-add-group"
+          type="button"
+          disabled={busy}
+          onClick={addGroup}
+        >
+          {t("chat.task.addGroup")}
+        </button>
 
       <label className="task-field">
         <span className="task-label">{t("chat.task.reason")}</span>

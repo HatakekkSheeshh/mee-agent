@@ -1490,6 +1490,22 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .task-remove:hover:not(:disabled) { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
 .task-remove:disabled { opacity: 0.5; cursor: default; }
 .task-empty { color: var(--text-mute); margin-bottom: 12px; }
+.task-add-item, .task-add-group {
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 0.85em;
+    cursor: pointer;
+}
+.task-add-group { margin-top: 10px; }
+.task-add-item:hover:not(:disabled), .task-add-group:hover:not(:disabled) {
+    color: var(--accent, #3b82f6);
+    border-color: var(--accent, #3b82f6);
+}
+.task-add-item:disabled, .task-add-group:disabled { opacity: 0.5; cursor: default; }
 
 .chat-input-wrap {
     padding: 14px 16px 16px;
