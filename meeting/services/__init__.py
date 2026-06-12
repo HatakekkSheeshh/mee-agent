@@ -5,7 +5,14 @@ from meeting.services.pm_agent_client import (
     PmAgentResult,
     get_pm_agent_client,
 )
-from meeting.services.tools import TOOLS, build_task_items, execute_tool, get_tool, list_tools
+from meeting.services.tools import (
+    TOOLS,
+    build_agenda_task_items,
+    build_task_items,
+    execute_tool,
+    get_tool,
+    list_tools,
+)
 from meeting.services.transcript_cleaner import clean_transcript
 
 __all__ = [
@@ -17,6 +24,7 @@ __all__ = [
     "get_pm_agent_client",
     "TOOLS",
     "build_task_items",
+    "build_agenda_task_items",
     "execute_tool",
     "get_tool",
     "list_tools",

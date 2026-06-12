@@ -28,7 +28,7 @@ from meeting.graphs._chat_serde import (
     _tc_to_dict,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
-from meeting.services.tools.create_task import assignee_matches
+from meeting.services.tools.create_task import assignee_matches, build_agenda_task_items
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,7 @@ async def _build_reconcile_template(
         # "trong Meeting 1" → the model passes the recording_id it saw in
         # list_recordings; scope to that recording's MoM instead of aggregating
         # the whole project.
+        mom = {}
         if recording_id:
             try:
                 mom = await repo.get_recording_mom(session, uuid.UUID(recording_id)) or {}
@@ -139,6 +140,17 @@ async def _build_reconcile_template(
                 it for it in items
                 if assignee_matches(assignee, it.get("assignee") or "")
             ]
+        # Agenda-only phiên: no action_items to track, but the session DID cover
+        # topics. Fall back to one candidate task per agenda topic, stamping the
+        # merged assignee + deadline as editable defaults (user refines on the HITL
+        # card). Recording scope only — a project-wide aggregate has no single
+        # agenda to draw from. Guard on raw action_items, not the assignee-filtered
+        # `items`, so "no items for THIS person" doesn't trigger an agenda dump.
+        if not action_items and mom.get("agenda_items"):
+            due = args.get("deadline") or args.get("due_date") or ""
+            items = build_agenda_task_items(
+                mom.get("agenda_items") or [], assignee=assignee, due_date=due
+            )
     else:
         items = []
     return {"project": project, "items": items}

@@ -48,6 +48,25 @@ def build_task_items(action_items: list[dict]) -> list[dict]:
     ]
 
 
+def build_agenda_task_items(
+    agenda_items: list[dict], *, assignee: str = "", due_date: str = ""
+) -> list[dict]:
+    """Fallback for an agenda-only MoM (agenda_items present, no action_items):
+    one candidate task per agenda topic ({subject=agenda, description=detail}).
+    `assignee`/`due_date` are editable defaults stamped on every task — an agenda
+    topic has no PIC or deadline of its own. Drops topics without a title."""
+    return [
+        {
+            "subject": (a.get("agenda") or "").strip(),
+            "assignee": assignee,
+            "due_date": due_date,
+            "description": (a.get("description") or "").strip(),
+        }
+        for a in agenda_items
+        if (a.get("agenda") or "").strip()
+    ]
+
+
 @tool(
     name="create_task",
     description=(

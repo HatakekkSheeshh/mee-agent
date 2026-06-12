@@ -25,6 +25,7 @@ import json
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from meeting.graphs._chat_prompts import _agent_system_prompt
 from meeting.graphs.chat_graph import _seed_agent_messages
 from tests.meeting.test_agent_loop import (
     FakeLLM,
@@ -60,6 +61,26 @@ def test_seed_includes_prior_turns_in_order():
     assert msgs[0]["content"] == TURN1_USER
     assert msgs[1]["content"] == TURN1_AGENT
     assert msgs[2]["content"] == TURN2_USER
+
+
+# ─── 1b. prompt carries an explicit multi-turn MERGE directive ──────
+#
+# The harness demonstrably hands the model the prior turns (tests 2+3 below);
+# the live loss is gemma treating each message as standalone. The only in-process
+# lever is the system prompt, so pin that it instructs the model to GỘP a
+# follow-up that supplies missing args into the in-flight action instead of
+# re-asking. Behavioral proof (does gemma actually merge) is a live run — a
+# FakeLLM can't exercise the real model.
+
+def test_system_prompt_has_multiturn_merge_rule():
+    prompt = _agent_system_prompt(_initial(TURN2_USER))
+    # the continuity rule exists and is named distinctly
+    assert "HỘI THOẠI LIÊN TỤC" in prompt
+    assert "GỘP" in prompt
+    # it explicitly forbids re-asking for already-supplied info
+    assert "KHÔNG hỏi lại" in prompt
+    # it grounds the rule with the canonical email-across-two-turns example
+    assert "send_email" in prompt
 
 
 # ─── 2+3. follow-up turn: context reaches the LLM; merged call works ─

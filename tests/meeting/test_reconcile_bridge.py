@@ -73,6 +73,54 @@ async def test_build_template_filters_by_assignee(monkeypatch):
     assert all(it["assignee"] == "Duy Anh" for it in tpl["items"])
 
 
+RID = "33333333-3333-3333-3333-333333333333"
+
+
+async def test_build_template_falls_back_to_agenda_when_no_action_items(monkeypatch):
+    """Agenda-only phiên (MoM has agenda_items, no action_items): build one
+    candidate task per topic, stamping the merged assignee + deadline as editable
+    defaults. This is repro #2's happy path (see multiturn-context bug)."""
+    async def fake_mom(session, rid):
+        assert rid == uuid.UUID(RID)
+        return {
+            "action_items": [],
+            "agenda_items": [
+                {"agenda": "Database migration", "description": "bàn schema mới"},
+                {"agenda": "Caching POC", "description": "thử redis"},
+            ],
+        }
+
+    monkeypatch.setattr(chat_graph.repo, "get_recording_mom", fake_mom)
+
+    tpl = await chat_graph._build_reconcile_template(
+        object(),
+        {"recording_id": RID, "assignee": "hieunq3, anhvd6", "deadline": "20/06/2026"},
+        {"title": "Dự án Mee"}, MID,
+    )
+    assert tpl["project"] == "Dự án Mee"
+    assert {it["subject"] for it in tpl["items"]} == {"Database migration", "Caching POC"}
+    # merged assignee + deadline stamped on every agenda task (editable on card)
+    assert all(it["assignee"] == "hieunq3, anhvd6" for it in tpl["items"])
+    assert all(it["due_date"] == "20/06/2026" for it in tpl["items"])
+    assert any(it["description"] == "bàn schema mới" for it in tpl["items"])
+
+
+async def test_build_template_prefers_action_items_over_agenda(monkeypatch):
+    """When a recording HAS action_items, agenda is NOT used (no double-source)."""
+    async def fake_mom(session, rid):
+        return {
+            "action_items": [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}],
+            "agenda_items": [{"agenda": "Database migration", "description": "x"}],
+        }
+
+    monkeypatch.setattr(chat_graph.repo, "get_recording_mom", fake_mom)
+
+    tpl = await chat_graph._build_reconcile_template(
+        object(), {"recording_id": RID}, {"title": "GIP"}, MID,
+    )
+    assert {it["subject"] for it in tpl["items"]} == {"viết migration"}
+
+
 def test_route_after_agent_execute_reconcile_goes_to_pm():
     assert chat_graph.route_after_agent_execute({"agent_route": "reconcile"}) == "pm_call"
 
