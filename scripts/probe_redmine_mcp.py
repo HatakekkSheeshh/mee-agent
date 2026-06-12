@@ -20,7 +20,15 @@ load_dotenv(override=True, interpolate=False)
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))  # for imports``
 
 
+import json  # noqa: E402
+
 from meeting.services.redmine_mcp_client import get_redmine_mcp_client  # noqa: E402
+from meeting.services.tools import get_tool  # noqa: E402
+from meeting.services.tools.redmine import (  # noqa: E402
+    fetch_redmine_tool_schemas,
+    is_write_tool,
+    register_redmine_tools,
+)
 
 
 async def main() -> None:
@@ -29,17 +37,37 @@ async def main() -> None:
     print(f">>> MCP_REDMINE_URL={url!r}  REDMINE_API_KEY={'set' if key else 'MISSING'}")
     client = get_redmine_mcp_client()
 
-    # 1) list_tools — proves auth + transport + the tool surface.
-    print("\n=== list_tools ===")
+    # 1) Fetch the FULL tool surface + every inputSchema (no inference).
+    print("\n=== tool surface (name | read/write | required | full inputSchema) ===")
     try:
-        async with client._session() as session:
-            tools = await session.list_tools()
-            for t in tools.tools:
-                print(f"  - {t.name}: {(t.description or '')[:60]}")
+        schemas = await fetch_redmine_tool_schemas()
     except Exception as e:
-        print(f"  ❌ list_tools failed: {e}")
+        print(f"  ❌ fetch_redmine_tool_schemas failed: {e}")
         print("  (check REDMINE_API_KEY auth, MCP_REDMINE_URL, and that `mcp` is installed)")
         return
+
+    for s in schemas:
+        name = s["name"]
+        sch = s.get("inputSchema") or {}
+        required = sch.get("required") or []
+        kind = "WRITE" if is_write_tool(name) else "read"
+        print(f"\n  ## {name}  [{kind}]  required={required}")
+        print("  " + json.dumps(sch, ensure_ascii=False, indent=2).replace("\n", "\n  "))
+
+    # 2) Registration dry-run — exactly what the app registers at startup.
+    print("\n=== register_redmine_tools dry-run (side_effect per tool) ===")
+    names = register_redmine_tools(schemas)
+    for n in names:
+        spec = get_tool(n)
+        print(f"  - {n}: side_effect={spec['side_effect']} props={list((spec['schema'].get('properties') or {}).keys())}")
+
+    # 3) Explicit subtask check: is create_redmine_issue parent-aware?
+    print("\n=== subtask capability (explicit) ===")
+    create = next((s for s in schemas if s["name"] == "create_redmine_issue"), None)
+    has_subtask_tool = any("subtask" in s["name"].lower() for s in schemas)
+    parent_field = bool(create and "parent_issue_id" in ((create.get("inputSchema") or {}).get("properties") or {}))
+    print(f"  separate *subtask* tool present: {has_subtask_tool}")
+    print(f"  create_redmine_issue has parent_issue_id field: {parent_field}")
 
     # 2) get_redmine_projects — a real READ round-trip through our call_tool path.
     print("\n=== get_redmine_projects ===")
