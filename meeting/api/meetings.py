@@ -19,7 +19,7 @@ import uuid
 from datetime import date as date_type
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,13 +83,25 @@ class RecordingCreate(BaseModel):
     session_label: Optional[str] = None
 
 
+class WordTimestamp(BaseModel):
+    """One word with absolute start/end seconds. Returned by faster-whisper
+    (DTW from attention) and used by the FE Notta view for word-by-word
+    playback highlight. Absent for STT backends without word_timestamps."""
+    text: str
+    start: float
+    end: float
+
+
 class TranscriptSegmentIn(BaseModel):
-    """One segment from PhoWhisper response. start/end in seconds (float).
-    Backend converts to ms when saving."""
+    """One segment from PhoWhisper / faster-whisper response. start/end in
+    seconds (float). Backend converts to ms when saving."""
     text: str
     speaker: Optional[str] = None
     start: Optional[float] = None  # seconds
     end: Optional[float] = None    # seconds
+    # Per-word timestamps (only present when STT supports word_timestamps —
+    # e.g. faster-whisper). Saved to transcript_segments.words for FE sync.
+    words: Optional[list[WordTimestamp]] = None
 
 
 class TranscriptImport(BaseModel):
@@ -298,6 +310,107 @@ async def download_meeting_summary(
     )
 
 
+@router.get("/meetings/{meeting_id}/members")
+async def list_meeting_members(
+    meeting_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return the list of members for this meeting — feeds the Notta-style
+    speaker dropdown in the Clean view.
+
+    Three sources merged into one list:
+    1. `meeting_members` rows (real users with O365/mock auth)
+    2. Meeting creator (always included even without an explicit row)
+    3. Attendees on the recordings of this meeting (free-text names from
+       the recording form — "7 người" shown in the header)
+
+    Attendee-only entries get a synthetic `user_id` of `attendee:<name>` so
+    the FE can render them in the dropdown without needing real user rows.
+    They're flagged `voice_enrolled=false` since no voiceprint exists.
+    """
+    from sqlalchemy import select
+    from meeting.db.models import MeetingMember, User as UserM, Recording as RecordingM
+
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    rows = (
+        await session.execute(
+            select(MeetingMember, UserM)
+            .join(UserM, UserM.id == MeetingMember.user_id)
+            .where(MeetingMember.meeting_id == mid)
+            .where(MeetingMember.revoked_at.is_(None))
+        )
+    ).all()
+
+    members = [
+        {
+            "user_id": str(u.id),
+            "email": u.email,
+            "display_name": u.display_name or u.email.split("@")[0],
+            "avatar_url": u.avatar_url,
+            "voice_enrolled": u.voice_enrolled,
+            "role": mm.role,
+        }
+        for mm, u in rows
+    ]
+
+    # Always include the creator even if they don't have an explicit
+    # meeting_members row (DB schema doesn't auto-add them).
+    if meeting.user_id:
+        creator = (
+            await session.execute(
+                select(UserM).where(UserM.id == meeting.user_id)
+            )
+        ).scalar_one_or_none()
+        if creator and not any(m["user_id"] == str(creator.id) for m in members):
+            members.insert(0, {
+                "user_id": str(creator.id),
+                "email": creator.email,
+                "display_name": creator.display_name or creator.email.split("@")[0],
+                "avatar_url": creator.avatar_url,
+                "voice_enrolled": creator.voice_enrolled,
+                "role": "owner",
+            })
+
+    # Pull every distinct attendee name from this meeting's recordings.
+    # `attendees` is a JSONB list of {name, dept?, title?}. De-dupe by
+    # name (case-insensitive) and skip names already in `members` so the
+    # creator + invited users aren't duplicated.
+    rec_rows = (
+        await session.execute(
+            select(RecordingM.attendees).where(RecordingM.meeting_id == mid)
+        )
+    ).all()
+    member_name_set = {m["display_name"].lower() for m in members}
+    seen_attendees: set[str] = set()
+    for (att,) in rec_rows:
+        if not att:
+            continue
+        for entry in att:
+            if not isinstance(entry, dict):
+                continue
+            name = (entry.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in member_name_set or key in seen_attendees:
+                continue
+            seen_attendees.add(key)
+            members.append({
+                "user_id": f"attendee:{name}",
+                "email": "",
+                "display_name": name,
+                "avatar_url": None,
+                "voice_enrolled": False,
+                "role": "viewer",
+            })
+
+    return {"meeting_id": meeting_id, "members": members}
+
+
 @router.get("/meetings/{meeting_id}/transcript")
 async def get_meeting_transcript_endpoint(
     meeting_id: str, session: AsyncSession = Depends(get_session)
@@ -362,6 +475,8 @@ async def get_recording_transcript_endpoint(
             "speaker": s.speaker,
             "start_ms": s.start_time_ms,
             "end_ms": s.end_time_ms,
+            # Optional per-word timestamps (faster-whisper). NULL for VNG MaaS.
+            "words": s.words,
         }
         for s in db_segs
     ]
@@ -549,6 +664,183 @@ async def diarize_result_endpoint(
         "clusters": list(req.cluster_embeddings.keys()),
         "diarized_text_chars": len(req.diarized_text or ""),
     }
+
+
+class SegmentSpeakerPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/segment-speaker`.
+
+    `index` is the position in `recording.clean_segments`. `speaker` is the
+    new display name (or empty string to clear). `scope='current'` overrides
+    just this one segment; `scope='all'` would normally reuse the
+    voiceprints.bind endpoint instead — we keep it as a server-side fallback
+    so the FE can call one endpoint regardless of scope.
+    """
+    index: int
+    speaker: str
+    scope: str = "current"  # 'current' | 'all'
+
+
+@router.patch("/recordings/{recording_id}/segment-speaker")
+async def patch_segment_speaker(
+    recording_id: str,
+    req: SegmentSpeakerPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename the speaker on one (or all matching) clean segment(s)."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    segs = recording.clean_segments or {}
+    seg_list = segs.get("segments") if isinstance(segs, dict) else segs
+    if not isinstance(seg_list, list):
+        raise HTTPException(status_code=400, detail="Recording has no clean segments yet")
+    if not (0 <= req.index < len(seg_list)):
+        raise HTTPException(status_code=400, detail=f"Segment index {req.index} out of range")
+
+    new_name = (req.speaker or "").strip()
+    if req.scope == "all":
+        # Rename every segment whose CURRENT speaker matches this row's
+        # speaker. Lets the FE do the "apply all" UX without a separate call.
+        target_label = (seg_list[req.index].get("speaker") or "").strip()
+        renamed = 0
+        for s in seg_list:
+            if (s.get("speaker") or "").strip() == target_label:
+                s["speaker"] = new_name
+                renamed += 1
+    else:
+        seg_list[req.index]["speaker"] = new_name
+        renamed = 1
+
+    # JSONB column needs explicit flag — SQLAlchemy can't auto-detect dict mutation.
+    flag_modified(recording, "clean_segments")
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "renamed": renamed,
+        "scope": req.scope,
+        "speaker": new_name,
+    }
+
+
+@router.post("/recordings/{recording_id}/audio")
+async def upload_recording_audio(
+    recording_id: str,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Upload (or re-upload) the source audio for an existing recording.
+
+    Two scenarios this covers:
+
+    1. Recovery: recording was created/transcribed BEFORE we started saving
+       audio to disk (the transcribe path used to discard bytes). User clicks
+       "Upload audio" in the player → file lands here → Notta playback works.
+    2. Replacement: user wants to swap the audio after the fact (e.g.
+       uploaded the wrong file initially).
+
+    Saves to `output/audio/<recording_id>.<ext>` and updates `audio_path`.
+    Does NOT re-trigger transcription — that's a separate `/api/transcribe`
+    call. Use this when you only want to attach audio for playback.
+    """
+    import os as _os
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+    output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+    audio_dir = _os.path.join(output_dir, "audio")
+    _os.makedirs(audio_dir, exist_ok=True)
+
+    filename = file.filename or "audio.wav"
+    ext = _os.path.splitext(filename)[1].lower() or ".wav"
+    if ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+        ext = ".wav"
+    saved_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
+
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
+
+    with open(saved_path, "wb") as f:
+        f.write(audio_bytes)
+    recording.audio_path = _os.path.relpath(saved_path, project_root)
+    await session.commit()
+
+    return {
+        "recording_id": recording_id,
+        "audio_path": recording.audio_path,
+        "size_bytes": len(audio_bytes),
+    }
+
+
+@router.get("/recordings/{recording_id}/audio")
+async def get_recording_audio(
+    recording_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Serve the recording's original audio file for in-browser playback.
+
+    Used by TranscriptPane to enable Notta-style audio sync: the <audio>
+    element streams from this endpoint while the transcript highlights the
+    segment whose [start_time_ms, end_time_ms] contains audio.currentTime.
+
+    Returns 404 when recording has no audio_path (live-record path before
+    save) or when the file is missing on disk.
+    """
+    import os as _os
+    from fastapi.responses import FileResponse
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+    fpath: Optional[str] = None
+    if recording.audio_path:
+        candidate = recording.audio_path
+        if not _os.path.isabs(candidate):
+            candidate = _os.path.join(project_root, candidate)
+        if _os.path.exists(candidate):
+            fpath = candidate
+
+    # Fallback: scan output/audio/<recording_id>.<ext> for files saved before
+    # we started tracking audio_path in DB (or after a DB restore). Auto-heal
+    # the DB if a match exists so subsequent requests skip the scan.
+    if fpath is None:
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+        audio_dir = _os.path.join(output_dir, "audio")
+        if _os.path.isdir(audio_dir):
+            for ext in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                candidate = _os.path.join(audio_dir, f"{recording_id}{ext}")
+                if _os.path.exists(candidate):
+                    fpath = candidate
+                    # Persist the discovery so next call doesn't scan again.
+                    recording.audio_path = _os.path.relpath(candidate, project_root)
+                    await session.commit()
+                    break
+
+    if fpath is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Recording has no audio file — upload again to enable playback",
+        )
+    ext = _os.path.splitext(fpath)[1].lower()
+    media_type = {
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".flac": "audio/flac",
+        ".webm": "audio/webm",
+        ".ogg": "audio/ogg",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(fpath, media_type=media_type, filename=_os.path.basename(fpath))
 
 
 @router.get("/recordings/{recording_id}/speaker-sample/{label}")
@@ -1132,6 +1424,14 @@ async def import_transcript_endpoint(
                 text = (seg.text or "").strip()
                 if not text:
                     continue
+                # Preserve word-level timestamps when STT returned them
+                # (faster-whisper). Stored as JSONB on transcript_segments.
+                words_payload = None
+                if seg.words:
+                    words_payload = [
+                        {"text": w.text, "start": w.start, "end": w.end}
+                        for w in seg.words
+                    ]
                 await repo.add_segment(
                     session,
                     recording_id=recording.id,
@@ -1144,6 +1444,7 @@ async def import_transcript_endpoint(
                     end_time_ms=(
                         int(seg.end * 1000) if seg.end is not None else None
                     ),
+                    words=words_payload,
                 )
                 structured_count += 1
             lines = [s.text for s in req.segments if s.text and s.text.strip()]
@@ -1583,8 +1884,8 @@ async def bind_voiceprint_endpoint(
         # "same voice stored under multiple names" bug when the user changes
         # their mind about a speaker's label and re-saves.
         #
-        # Threshold 0.15 ≈ 0.85 cosine similarity — comfortably above the
-        # default 0.30 match threshold; only fires when we're highly confident
+        # Threshold 0.15 ≈ 0.85 cosine similarity — comfortably tighter than the
+        # default 0.45 match threshold; only fires when we're highly confident
         # it's literally the same voice.
         close = await find_similar_voiceprint(
             session, user_id=user.id, embedding=emb, threshold=0.15, limit=5,
