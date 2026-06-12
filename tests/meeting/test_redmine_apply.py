@@ -56,3 +56,174 @@ def test_summary_counts_ok_and_lists_failures():
     assert "1/2" in text
     assert "GIP" in text
     assert "b" in text and "no assignee" in text
+
+
+# ── Task 5: full-graph create_task → MCP apply ──────────────────────
+import uuid
+from types import SimpleNamespace
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import Command
+
+from meeting.graphs import chat_graph
+from meeting.graphs.chat_graph import (
+    ChatState,
+    make_agent,
+    make_agent_approve,
+    make_agent_execute,
+    make_agent_tools,
+    route_after_agent,
+    route_after_agent_execute,
+    route_after_agent_tools,
+)
+
+MID = "11111111-1111-1111-1111-111111111111"
+UID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+SESSION = object()
+
+
+def _resp_tool(calls):
+    tcs = [SimpleNamespace(id=c["id"], type="function",
+                           function=SimpleNamespace(name=c["name"], arguments=c["arguments"]))
+           for c in calls]
+    msg = SimpleNamespace(content=None, tool_calls=tcs)
+    return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="tool_calls")])
+
+
+class _FakeLLM:
+    def __init__(self, scripted):
+        self._s = list(scripted); self.calls = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kw):
+        i = len(self.calls); self.calls.append(kw); return self._s[i]
+
+
+class _FakeExec:
+    def __init__(self): self.calls = []
+    async def __call__(self, name, args, *, session, user_id):
+        self.calls.append({"name": name, "args": args})
+        return {"id": 100 + len(self.calls)}   # fake created issue id, no "error"
+
+
+CREATE_TASK_SPEC = {
+    "name": "create_task", "description": "make tasks", "side_effect": True,
+    "schema": {"type": "object",
+               "properties": {"meeting_id": {"type": "string"}, "title": {"type": "string"}}},
+}
+
+
+class FakeToolset:
+    def __init__(self): self.exec = _FakeExec()
+    def list_tools(self): return [CREATE_TASK_SPEC]
+    def get_tool(self, n): return CREATE_TASK_SPEC if n == "create_task" else None
+    async def execute_tool(self, name, args, *, session, user_id):
+        return await self.exec(name, args, session=session, user_id=user_id)
+    def build_task_items(self, items):
+        from meeting.services import build_task_items as real
+        return real(items)
+
+
+def _build(llm, checkpointer, tools):
+    g = StateGraph(ChatState)
+    g.add_node("agent", make_agent(llm, tools=tools))
+    g.add_node("agent_tools", make_agent_tools(SESSION, tools=tools))
+    g.add_node("agent_approve", make_agent_approve(tools=tools))
+    g.add_node("agent_execute", make_agent_execute(SESSION, tools=tools))
+    g.add_node("save_reply", lambda s: {})
+    g.set_entry_point("agent")
+    g.add_conditional_edges("agent", route_after_agent,
+                            {"agent_tools": "agent_tools", "save_reply": "save_reply"})
+    g.add_conditional_edges("agent_tools", route_after_agent_tools,
+                            {"agent": "agent", "agent_approve": "agent_approve"})
+    g.add_edge("agent_approve", "agent_execute")
+    g.add_conditional_edges("agent_execute", route_after_agent_execute,
+                            {"agent": "agent", "save_reply": "save_reply"})
+    g.add_edge("save_reply", END)
+    return g.compile(checkpointer=checkpointer)
+
+
+def _initial(msg):
+    return {"session_id": "s", "user_id": str(UID), "user_message": msg,
+            "resolved_meeting_id": MID,
+            "meeting_context": {"id": MID, "title": "AI Innovation Project"}}
+
+
+async def _interrupted(graph, cfg):
+    snap = await graph.aget_state(cfg); return bool(snap.next)
+
+
+async def test_create_task_applies_over_mcp(monkeypatch):
+    ts = FakeToolset()
+
+    async def fake_items(session, mid):
+        return [
+            {"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"},
+            {"pic": "Mai", "deadline": "", "item": "POC caching"},
+        ]
+    monkeypatch.setattr(chat_graph.repo, "get_mom_action_items", fake_items)
+
+    llm = _FakeLLM([_resp_tool([{"id": "c1", "name": "create_task", "arguments": "{}"}])])
+    graph = _build(llm, MemorySaver(), ts)
+    cfg = {"configurable": {"thread_id": "apply"}}
+
+    # Turn 1: agent calls create_task → HITL interrupt (the only approval)
+    await graph.ainvoke(_initial("đồng bộ các việc trong họp lên Redmine"), cfg)
+    assert await _interrupted(graph, cfg)
+    assert ts.exec.calls == []   # nothing applied before approval
+
+    # Approve → apply over MCP (one create_redmine_issue per item), terminal
+    result = await graph.ainvoke(Command(resume={"action": "approved"}), cfg)
+    assert not await _interrupted(graph, cfg)
+    applied = [c for c in ts.exec.calls if c["name"] == "create_redmine_issue"]
+    assert len(applied) == 2
+    assert {c["args"]["subject"] for c in applied} == {"viết migration", "POC caching"}
+    assert applied[0]["args"]["tracker"] == "Task"
+    assert "2/2" in result["final_reply"]
+    assert result["tool_result"]["status"] == "redmine_apply"
+
+
+async def test_create_task_update_item_uses_update_tool(monkeypatch):
+    """An item carrying an issue_id is reconciled via update_redmine_issue, not
+    a fresh create (defensive/future-proof apply branch)."""
+    ts = FakeToolset()
+
+    llm = _FakeLLM([_resp_tool([{"id": "c1", "name": "create_task",
+                                 "arguments": '{"title": "deploy v1"}'}])])
+    graph = _build(llm, MemorySaver(), ts)
+    cfg = {"configurable": {"thread_id": "apply-update"}}
+
+    await graph.ainvoke(_initial("tạo task deploy v1"), cfg)
+    # Edit the single item on the card to carry an existing issue_id → update path.
+    result = await graph.ainvoke(
+        Command(resume={"action": "approved", "edited_args": {
+            "project": "GIP",
+            "items": [{"subject": "deploy v1", "assignee": "Mai", "issue_id": "555"}],
+        }}),
+        cfg,
+    )
+    assert not await _interrupted(graph, cfg)
+    updates = [c for c in ts.exec.calls if c["name"] == "update_redmine_issue"]
+    assert len(updates) == 1
+    assert updates[0]["args"]["issue_id"] == "555"
+    assert updates[0]["args"]["project_name"] == "GIP"
+    assert "1/1" in result["final_reply"]
+
+
+async def test_reject_create_task_applies_nothing(monkeypatch):
+    ts = FakeToolset()
+
+    async def fake_items(session, mid):
+        return [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}]
+    monkeypatch.setattr(chat_graph.repo, "get_mom_action_items", fake_items)
+
+    llm = _FakeLLM([_resp_tool([{"id": "c1", "name": "create_task", "arguments": "{}"}])])
+    graph = _build(llm, MemorySaver(), ts)
+    cfg = {"configurable": {"thread_id": "apply-reject"}}
+
+    await graph.ainvoke(_initial("đồng bộ lên Redmine"), cfg)
+    result = await graph.ainvoke(Command(resume={"action": "rejected", "reason": "thôi"}), cfg)
+    assert not await _interrupted(graph, cfg)
+    assert ts.exec.calls == []
+    assert result["final_reply"] == chat_graph.REJECT_REPLY

@@ -23,10 +23,12 @@ from meeting.graphs._chat_serde import (
     _json,
     _last_assistant_text,
     _parse_tool_args,
-    _reconcile_payloads,
     _seed_agent_messages,
     _tc_to_dict,
     parse_leaked_tool_calls,
+    redmine_create_args,
+    redmine_update_args,
+    summarize_redmine_apply,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
 from meeting.services.tools.create_task import assignee_matches, build_agenda_task_items
@@ -343,31 +345,46 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
         user_id = uuid.UUID(state["user_id"])
         messages = list(state.get("agent_messages") or [])
 
-        # Approved create_task → bridge into the pm reconcile loop (GATE 2 is
-        # pm-agent's own write approval). The user may edit `project` on the card.
+        # Approved create_task → apply the batch directly over the Redmine MCP.
+        # One HITL approval (agent_approve) gated the whole batch; execution here
+        # is a deterministic create/update loop, terminal (no second LLM turn).
+        # An item carrying an issue_id is an update; otherwise a create.
         if action == "approved" and name == "create_task":
             template = dict(args)  # {project, items}
             if decision.get("edited_args"):
                 template.update(decision["edited_args"])
             project = template.get("project", "")
-            items = template.get("items", [])
-            note = decision.get("reason") or ""
-            payloads = _reconcile_payloads(project, items, note=note)
+            items = template.get("items", []) or []
+            results = []
+            for it in items:
+                issue_id = str(it.get("issue_id") or "").strip()
+                if issue_id:
+                    res = await ts.execute_tool(
+                        "update_redmine_issue",
+                        redmine_update_args(project, it, issue_id),
+                        session=session, user_id=user_id,
+                    )
+                else:
+                    res = await ts.execute_tool(
+                        "create_redmine_issue",
+                        redmine_create_args(project, it),
+                        session=session, user_id=user_id,
+                    )
+                results.append(
+                    {"subject": it.get("subject", ""), "issue_id": issue_id, "result": res}
+                )
             logger.info(
-                "[Node agent_execute] create_task → pm reconcile (%d item(s), %d send(s))",
-                len(items), len(payloads),
+                "[Node agent_execute] create_task → MCP apply (%d item(s))", len(items)
             )
             return {
                 "pending_tool": None,
                 "user_decision": None,
-                "agent_route": "reconcile",
-                "pm_next_payload": payloads[0],
-                "pm_queue": payloads[1:],
-                "pm_replies": [],
-                "pm_rounds": 0,
+                "agent_route": "finish",
                 "tool_result": {
-                    "status": "reconcile_handoff", "project": project, "count": len(items),
+                    "status": "redmine_apply", "project": project,
+                    "count": len(items), "results": results,
                 },
+                "final_reply": summarize_redmine_apply(project, results),
             }
 
         # Rejected side-effect tool → terminal. Append the rejected result (keeps the
@@ -413,13 +430,8 @@ def route_after_agent(state: ChatState) -> Literal["agent_tools", "save_reply"]:
 def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve"]:
     return "agent_approve" if state.get("agent_route") == "approve" else "agent"
 
-def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call", "save_reply"]:
-    """After an approved create_task, bridge into the pm reconcile loop; on a
-    rejected side-effect tool, finish the turn (terminal); otherwise loop back to
-    the agent (normal approved side-effect tools)."""
-    route = state.get("agent_route")
-    if route == "reconcile":
-        return "pm_call"
-    if route == "finish":
-        return "save_reply"
-    return "agent"
+def route_after_agent_execute(state: ChatState) -> Literal["agent", "save_reply"]:
+    """Finish the turn after a rejected side-effect tool or a completed batch
+    apply (agent_route="finish"); otherwise loop back to the agent (normal
+    approved single side-effect tools)."""
+    return "save_reply" if state.get("agent_route") == "finish" else "agent"
