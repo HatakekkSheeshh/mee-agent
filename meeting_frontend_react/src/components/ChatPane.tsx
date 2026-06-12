@@ -14,12 +14,16 @@ import { Markdown } from "./Markdown";
 import { WelcomeBanner } from "./WelcomeBanner";
 import { ActionArgsCard } from "./ActionArgsCard";
 import { CreateTaskCard, parseTaskTemplate, type TaskTemplate } from "./CreateTaskCard";
+import { pmAgentOptIn } from "../utils/pmAgent";
+import { slashMatches, type SlashCommand } from "../utils/slashCommands";
 
 interface ThreadMsg {
   role: "user" | "agent" | "note";
   text: string;
   /** Activity-trace labels collected while the turn streamed (agent msgs only). */
   steps?: string[];
+  /** User msg sent via the /pm-agent command — render a chip and show stripped text. */
+  pmAgent?: boolean;
 }
 
 export function ChatPane() {
@@ -27,6 +31,10 @@ export function ChatPane() {
   const [messages, setMessages] = useState<ThreadMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Slash-command menu: highlighted row + an Escape-dismiss flag (reset on edit).
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashClosed, setSlashClosed] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   // Free-text reply for a pm-agent need_more_info pause.
   const [infoInput, setInfoInput] = useState("");
@@ -171,7 +179,10 @@ export function ChatPane() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text }]);
+    // Mirror the backend /pm-agent opt-in for display: show a chip + the command-stripped
+    // text in the bubble, but still send the FULL text — the backend strips it itself.
+    const { opted: pmAgent, cleaned } = pmAgentOptIn(text);
+    setMessages((m) => [...m, { role: "user", text: pmAgent ? cleaned : text, pmAgent }]);
     setBusy(true);
     setSteps([]);
     const ctrl = new AbortController();
@@ -353,7 +364,44 @@ export function ChatPane() {
     }
   }, [pending, busy, t]);
 
+  // Slash-command menu state, derived from the input. The menu (while typing the
+  // command) and the floating pill (once committed) are mutually exclusive.
+  const slashList = slashClosed || busy ? null : slashMatches(input);
+  const showSlashMenu = !!slashList;
+  const pillActive = !showSlashMenu && !busy && pmAgentOptIn(input).opted;
+  // Reset the highlight as the filtered list changes with each keystroke.
+  useEffect(() => setSlashIdx(0), [input]);
+
+  const acceptSlash = useCallback((cmd: SlashCommand) => {
+    setInput(cmd.command + " ");
+    setSlashClosed(true);
+    inputRef.current?.focus();
+  }, []);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSlashMenu && slashList) {
+      const n = slashList.length;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIdx((i) => (i + 1) % n);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIdx((i) => (i - 1 + n) % n);
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        acceptSlash(slashList[Math.min(slashIdx, n - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashClosed(true);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -423,7 +471,19 @@ export function ChatPane() {
                   ))}
                 </details>
               ) : null}
-              {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
+              {m.role === "agent" ? (
+                <Markdown>{m.text}</Markdown>
+              ) : (
+                <>
+                  {m.pmAgent && (
+                    <span className="pm-chip">
+                      <img className="pm-chip-ava" src="/pm-agent-ava.webp" alt="" />
+                      {t("chat.pmAgentChip")}
+                    </span>
+                  )}
+                  {m.text}
+                </>
+              )}
               {m.role === "agent" && m.text && (
                 <button
                   className="msg-copy"
@@ -584,13 +644,45 @@ export function ChatPane() {
       </div>
 
       <div className="chat-input-wrap">
+        {pillActive && (
+          <div className="pm-agent-pill" aria-hidden="true">
+            <img className="pm-agent-ava" src="/pm-agent-ava.webp" alt="" />
+            {t("chat.pmAgentChip")}
+          </div>
+        )}
+        {showSlashMenu && slashList && (
+          <div className="slash-menu" role="listbox" aria-label={t("chat.slash.menuLabel")}>
+            {slashList.map((c, i) => (
+              <button
+                key={c.command}
+                type="button"
+                role="option"
+                aria-selected={i === slashIdx}
+                className={`slash-item${i === slashIdx ? " slash-item-active" : ""}`}
+                onMouseEnter={() => setSlashIdx(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep textarea focus
+                  acceptSlash(c);
+                }}
+              >
+                {c.icon && <img className="slash-ava" src={c.icon} alt="" />}
+                <span className="slash-cmd">{c.command}</span>
+                <span className="slash-desc">{t(c.descKey)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
+          ref={inputRef}
           className="chat-input"
           rows={1}
           placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
           value={input}
           disabled={busy}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setSlashClosed(false);
+          }}
           onKeyDown={onKeyDown}
         />
         {busy ? (

@@ -928,6 +928,108 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     border-color: var(--border-2);
 }
 
+/* /pm-agent command — floating pill above the input + in-bubble chip */
+.pm-agent-pill {
+    position: absolute;
+    bottom: calc(100% - 10px);
+    left: 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--accent-deep);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    box-shadow: 0 2px 10px var(--accent-glow);
+    pointer-events: none;
+    animation: pmPillIn 0.18s var(--ease);
+}
+.pm-agent-pill { padding-left: 5px; }
+.pm-agent-ava {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+@keyframes pmPillIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.pm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 6px;
+    padding: 1px 8px 1px 3px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    color: var(--accent-deep);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    vertical-align: middle;
+}
+.pm-chip-ava {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+/* Slash-command suggestion menu (floats above the input) */
+.slash-menu {
+    position: absolute;
+    bottom: calc(100% - 6px);
+    left: 16px;
+    right: 56px;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border-radius: var(--r);
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    z-index: 5;
+    animation: pmPillIn 0.14s var(--ease);
+}
+.slash-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    transition: background var(--dur) var(--ease);
+}
+.slash-item-active { background: var(--accent-soft); }
+.slash-ava {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.slash-cmd { font-size: 12.5px; font-weight: 700; letter-spacing: -0.01em; }
+.slash-desc {
+    font-size: 11.5px;
+    color: var(--text-mute);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Left Sidebar (collapsible, ChatGPT/Gemini-style)
    ═══════════════════════════════════════════════════════════════ */
