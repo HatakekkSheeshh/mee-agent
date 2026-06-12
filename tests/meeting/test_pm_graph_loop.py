@@ -141,6 +141,21 @@ async def test_pm_call_completed_reply():
     assert client.calls[0]["task_id"] is None
 
 
+async def test_pm_call_empty_text_skips_send():
+    """Bare /pm-agent strips to empty user_message — must NOT send empty text to
+    pm-agent (which rejects it: 'Message.text cannot be empty')."""
+    client = FakeClient([])  # no scripted results: send_message must NOT be called
+    graph = _build(client, MemorySaver())
+    cfg = _config("t-empty-text")
+
+    result = await graph.ainvoke({"user_message": "   "}, cfg)
+
+    assert client.calls == []  # no A2A send happened
+    assert not await _interrupted(graph, cfg)
+    assert result["tool_result"]["reason"] == "empty_text"
+    assert "pm-agent" in result["final_reply"]
+
+
 async def test_pm_call_need_approval_interrupts():
     issues = [{"actions": "CREATE", "subject": "Deploy v1"}]
     client = FakeClient([need_approval(issues)])
