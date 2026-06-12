@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
 from meeting.graphs._chat_state import ChatState
-from meeting.memory_client import search_project_record, strip_project_marker
+from meeting.memory_client import (
+    STALE_NOTE,
+    is_record_stale,
+    search_project_record,
+    strip_project_marker,
+)
+from meeting.services.memory_sync import canonical_source_hash
+from meeting.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +47,11 @@ async def resolve_meeting(
             }
     return {"meeting_id": bound_meeting_id, "resolved_by": "bound", "candidates": []}
 
-def make_load_context(session: AsyncSession, *, search_record=None):
-    # DI seam: real AgentBase browse by default; tests inject a fake.
+def make_load_context(session: AsyncSession, *, search_record=None, schedule_resync=None):
+    # DI seams: real AgentBase browse + fire-and-forget bg re-sync by default;
+    # tests inject fakes.
     _search = search_record or search_project_record
+    _schedule_resync = schedule_resync or schedule_project_sync
 
     async def load_context(state: ChatState) -> dict:
         """Load meeting context + recent messages for the LLM prompt."""
@@ -63,6 +72,31 @@ def make_load_context(session: AsyncSession, *, search_record=None):
                     rec = await asyncio.to_thread(_search, str(meeting.id))
                     if rec:
                         project_memory = strip_project_marker(rec.get("memory"))
+                        # Q1 staleness check: the distilled projection is a cache that
+                        # can lag Postgres (a sync hook that failed, or pre-backfill
+                        # data). Compare the record's marker hash to the live hash of
+                        # the meeting's CURRENT data. On mismatch, flag it honestly +
+                        # kick a NON-BLOCKING bg re-sync (self-heals next turn); never
+                        # block this turn re-distilling.
+                        recs = sorted((meeting.recordings or []), key=repo.recording_sort_key)
+                        live_hash = canonical_source_hash(
+                            meeting.project_summary_json, [r.mom_json for r in recs]
+                        )
+                        if is_record_stale(rec.get("memory"), live_hash):
+                            project_memory = (
+                                f"{project_memory}\n\n{STALE_NOTE}"
+                                if project_memory else STALE_NOTE
+                            )
+                            logger.info(
+                                f"[Node load_context] project memory STALE for "
+                                f"{meeting.id} — flagged + bg re-sync queued"
+                            )
+                            try:
+                                _schedule_resync(str(meeting.id))
+                            except Exception as e:  # noqa: BLE001 — re-sync is best-effort
+                                logger.warning(
+                                    f"[Node load_context] bg re-sync schedule failed: {e}"
+                                )
                 except Exception as e:  # noqa: BLE001 — recall is non-critical
                     logger.warning(f"[Node load_context] project memory recall failed: {e}")
                 meeting_ctx = {

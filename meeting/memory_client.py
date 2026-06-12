@@ -168,6 +168,31 @@ def parse_project_marker(memory_text: str | None) -> dict | None:
     return {"project_id": m.group("pid"), "hash": m.group("hash")}
 
 
+# Appended to the recalled body when load_context detects the distillation is
+# stale vs current Postgres data (Q1 staleness check). Honest-now, non-blocking:
+# the agent is told to read real data via list_recordings/recording_mom rather
+# than trust a distillation that may predate the newest session.
+STALE_NOTE = (
+    "⚠ Lưu ý: bản chắt lọc trên có thể CHƯA gồm phiên/cập nhật mới nhất. "
+    "Nếu user hỏi về một phiên cụ thể hay số liệu mới, hãy dùng `list_recordings`/"
+    "`recording_mom` để đọc dữ liệu thật trước khi trả lời, đừng chỉ dựa vào bản chắt lọc."
+)
+
+
+def is_record_stale(memory_text: str | None, live_hash: str) -> bool:
+    """True if the record's embedded marker hash differs from `live_hash`.
+
+    `live_hash` = canonical_source_hash of the project's CURRENT Postgres data.
+    A markerless/None record returns False: freshness can't be proven, so we don't
+    raise a false alarm — only a genuine hash disagreement signals a distillation
+    that predates new/changed sessions.
+    """
+    marker = parse_project_marker(memory_text)
+    if not marker:
+        return False
+    return marker["hash"] != live_hash
+
+
 def strip_project_marker(memory_text: str | None) -> str:
     """Human-readable body of a project record — the marker line removed.
 

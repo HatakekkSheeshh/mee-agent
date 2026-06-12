@@ -36,7 +36,8 @@ graph TD;
 	pm_call -.-> save_reply;
 	pm_error -.-> pm_call;
 	pm_error -.-> save_reply;
-	pm_reply --> save_reply;
+	pm_reply -.-> pm_call;
+	pm_reply -.-> save_reply;
 	save_reply --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
