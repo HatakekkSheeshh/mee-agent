@@ -153,8 +153,29 @@ def test_reconcile_text_appends_note():
     assert "Ghi chú" not in chat_graph._reconcile_text("GIP", [{"subject": "x"}])
 
 
-async def test_agent_execute_threads_reason_and_chunks(monkeypatch):
-    execute = chat_graph.make_agent_execute(object())
+class _ApplyToolset:
+    """Minimal injected toolset that records the MCP write calls."""
+
+    def __init__(self):
+        self.calls = []
+
+    def list_tools(self):
+        return []
+
+    def get_tool(self, n):
+        return None
+
+    async def execute_tool(self, name, args, *, session, user_id):
+        self.calls.append({"name": name, "args": args})
+        return {"id": 100 + len(self.calls)}
+
+
+async def test_agent_execute_applies_create_task_over_mcp():
+    """Approved create_task no longer bridges to pm-agent — agent_execute applies
+    the batch directly over the Redmine MCP (one create_redmine_issue per item),
+    and the turn finishes terminally."""
+    ts = _ApplyToolset()
+    execute = chat_graph.make_agent_execute(object(), tools=ts)
     items = [
         {"subject": "a", "assignee": "Hiếu"},
         {"subject": "b", "assignee": "Mai"},
@@ -166,7 +187,8 @@ async def test_agent_execute_threads_reason_and_chunks(monkeypatch):
         "user_decision": {"action": "approved", "reason": "gấp nhé"},
         "agent_messages": [],
     })
-    assert out["agent_route"] == "reconcile"
-    assert "Ghi chú của người duyệt: gấp nhé" in out["pm_next_payload"]["text"]
-    assert len(out["pm_queue"]) == 1  # second assignee group queued
-    assert out["pm_replies"] == []
+    assert out["agent_route"] == "finish"
+    assert out["tool_result"]["status"] == "redmine_apply"
+    created = [c for c in ts.calls if c["name"] == "create_redmine_issue"]
+    assert [c["args"]["subject"] for c in created] == ["a", "b"]
+    assert "2/2" in out["final_reply"]
