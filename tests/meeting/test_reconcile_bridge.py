@@ -121,8 +121,10 @@ async def test_build_template_prefers_action_items_over_agenda(monkeypatch):
     assert {it["subject"] for it in tpl["items"]} == {"viết migration"}
 
 
-def test_route_after_agent_execute_reconcile_goes_to_pm():
-    assert chat_graph.route_after_agent_execute({"agent_route": "reconcile"}) == "pm_call"
+def test_route_after_agent_execute_finish_goes_to_save_reply():
+    # create_task now applies over MCP in agent_execute (route="finish"); the
+    # pm bridge is gone, so the terminal route is save_reply, not pm_call.
+    assert chat_graph.route_after_agent_execute({"agent_route": "finish"}) == "save_reply"
 
 
 def test_route_after_agent_execute_default_goes_to_agent():
@@ -150,7 +152,6 @@ from meeting.graphs.chat_graph import (
     route_after_agent_tools,
     route_after_pm_call,
 )
-from meeting.services.pm_agent_client import PmAgentResult
 
 UID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 SESSION = object()
@@ -270,58 +271,10 @@ async def _interrupted_b(graph, cfg):
     snap = await graph.aget_state(cfg); return bool(snap.next)
 
 
-async def _interrupt_val_b(graph, cfg):
-    snap = await graph.aget_state(cfg)
-    for t in snap.tasks:
-        if t.interrupts:
-            return t.interrupts[0].value
-    return None
-
-
-async def test_full_bridge_create_task_to_reconcile(monkeypatch):
-    ts = _toolset_b()
-
-    async def fake_items(session, mid):
-        return [{"pic": "Hiếu", "deadline": "10/01", "item": "viết migration"}]
-    monkeypatch.setattr(chat_graph.repo, "get_mom_action_items", fake_items)
-
-    llm = _FakeLLM([
-        _resp_tool([{"id": "c1", "name": "create_task", "arguments": "{}"}]),
-    ])
-    pm = _FakePm([
-        PmAgentResult("task-1", "input_required", "Xác nhận tạo issue?", True,
-                      [{"actions": "CREATE", "subject": "viết migration"}], context_id="ctx-1"),
-        PmAgentResult("task-1", "completed", "Đã tạo issue trên Redmine.", False, None, context_id="ctx-1"),
-    ])
-    graph = _build_full(llm, pm, MemorySaver(), ts)
-    cfg = {"configurable": {"thread_id": "bridge"}}
-
-    # Turn 1: agent calls create_task → GATE 1 (local) interrupt
-    await graph.ainvoke(_initial_b("đồng bộ các việc trong họp lên Redmine"), cfg)
-    assert await _interrupted_b(graph, cfg)
-    gate1 = await _interrupt_val_b(graph, cfg)
-    assert gate1["tool"] == "create_task"
-    assert gate1["args"]["project"] == "AI Innovation Project"   # default from title
-    assert gate1["args"]["items"][0]["subject"] == "viết migration"
-    assert pm.calls == []   # nothing sent to pm before GATE 1 approval
-
-    # Approve GATE 1 with an edited project → bridges to pm → GATE 2 (pm need_approval)
-    await graph.ainvoke(
-        Command(resume={"action": "approved", "edited_args": {"project": "GIP"}}), cfg
-    )
-    assert await _interrupted_b(graph, cfg)
-    gate2 = await _interrupt_val_b(graph, cfg)
-    assert gate2["kind"] == "need_approval"
-    assert len(pm.calls) == 1
-    assert "GIP" in pm.calls[0]["text"]                          # edited project used
-    assert pm.calls[0]["data_part"]["project"] == "GIP"
-    assert pm.calls[0]["data_part"]["items"][0]["subject"] == "viết migration"
-
-    # Approve GATE 2 → pm completes
-    result = await graph.ainvoke(Command(resume={"approval_action": "approve"}), cfg)
-    assert not await _interrupted_b(graph, cfg)
-    assert result["final_reply"] == "Đã tạo issue trên Redmine."
-    assert len(pm.calls) == 2
+# NOTE: the old `test_full_bridge_create_task_to_reconcile` (create_task →
+# pm-agent reconcile, two HITL gates) was REMOVED — create_task now applies
+# directly over the Redmine MCP. Its replacement is
+# `test_create_task_applies_over_mcp` in tests/meeting/test_redmine_apply.py.
 
 
 async def test_bridge_reject_gate1_no_handoff(monkeypatch):
