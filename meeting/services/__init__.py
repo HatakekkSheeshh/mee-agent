@@ -5,6 +5,7 @@ from meeting.services.pm_agent_client import (
     PmAgentResult,
     get_pm_agent_client,
 )
+from meeting.services.redmine_mcp_client import RedmineMcpClient, get_redmine_mcp_client
 from meeting.services.tools import (
     TOOLS,
     build_agenda_task_items,
@@ -12,6 +13,8 @@ from meeting.services.tools import (
     execute_tool,
     get_tool,
     list_tools,
+    load_and_register_redmine_tools,
+    register_redmine_tools,
 )
 from meeting.services.transcript_cleaner import clean_transcript
 
@@ -22,11 +25,15 @@ __all__ = [
     "PmAgentError",
     "PmAgentResult",
     "get_pm_agent_client",
+    "RedmineMcpClient",
+    "get_redmine_mcp_client",
     "TOOLS",
     "build_task_items",
     "build_agenda_task_items",
     "execute_tool",
     "get_tool",
     "list_tools",
+    "load_and_register_redmine_tools",
+    "register_redmine_tools",
     "clean_transcript",
 ]

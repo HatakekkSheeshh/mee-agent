@@ -13,6 +13,12 @@ PM_MAX_ROUNDS = 6
 # Safety cap on the unified agent ⇄ tools loop (number of LLM tool-calling rounds).
 MAX_AGENT_ROUNDS = 6
 
+# Explicit opt-in to the pm-agent A2A branch. A message starting with this
+# command (case-insensitive, leading whitespace ok) routes deterministically to
+# pm_task; everything else stays in the unified agent, which now owns the
+# Redmine MCP tools. The FE highlights this token as a command chip.
+PM_AGENT_COMMAND = "/pm-agent"
+
 
 # ─── State ────────────────────────────────────────────────────────
 

@@ -37,6 +37,26 @@ def _fake_llm_returning(json_text: str):
     return SimpleNamespace(chat=_Chat())
 
 
+async def test_classify_pm_agent_command_routes_to_pm_task():
+    """The /pm-agent prefix opts in deterministically — no LLM call needed."""
+    classify_intent = make_classify_intent(None)  # llm unused on the prefix path
+    out = await classify_intent(
+        {"user_message": "/pm-agent liệt kê issue overdue", "meeting_context": {}}
+    )
+    assert out["intent"] == "pm_task"
+    # The command is stripped so pm_call forwards the real request, not the prefix.
+    assert out["user_message"] == "liệt kê issue overdue"
+
+
+async def test_classify_pm_agent_command_case_insensitive_and_trimmed():
+    classify_intent = make_classify_intent(None)
+    out = await classify_intent(
+        {"user_message": "  /PM-Agent  đồng bộ issue", "meeting_context": {}}
+    )
+    assert out["intent"] == "pm_task"
+    assert out["user_message"] == "đồng bộ issue"
+
+
 async def test_classify_returns_pm_task():
     fake = _fake_llm_returning('{"intent": "pm_task"}')
     classify_intent = make_classify_intent(fake)

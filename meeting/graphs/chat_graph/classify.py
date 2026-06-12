@@ -7,18 +7,33 @@ from typing import Literal
 
 from meeting.graphs._chat_llm import _llm_client, _llm_model
 from meeting.graphs._chat_prompts import CLASSIFY_SYSTEM_PROMPT
-from meeting.graphs._chat_state import ChatState
+from meeting.graphs._chat_state import ChatState, PM_AGENT_COMMAND
 
 logger = logging.getLogger(__name__)
 
+
+def _pm_agent_opt_in(msg: str) -> tuple[bool, str]:
+    """A message starting with /pm-agent (case-insensitive, leading ws ok) is an
+    explicit opt-in to the pm-agent branch. Returns (opted_in, message_without_command)."""
+    stripped = (msg or "").lstrip()
+    if stripped[: len(PM_AGENT_COMMAND)].lower() == PM_AGENT_COMMAND:
+        return True, stripped[len(PM_AGENT_COMMAND):].lstrip()
+    return False, msg
+
+
 def make_classify_intent(llm=None):
     async def classify_intent(state: ChatState) -> dict:
-        """Binary router: 'pm_task' (Redmine via pm-agent) vs 'agent' (everything else).
+        """Router: '/pm-agent' prefix → pm_task (explicit opt-in, no LLM call);
+        otherwise the LLM decides pm_task vs agent + the grounding flag.
 
-        The unified tool-calling agent handles all meeting Q&A + local tools, so the
-        only split left is whether to hand off to the separate pm-agent A2A branch.
-        """
+        The unified tool-calling agent handles all meeting Q&A + local tools
+        (incl. Redmine via MCP), so the pm-agent A2A branch is opt-in."""
         msg = state["user_message"]
+        opted_in, cleaned = _pm_agent_opt_in(msg)
+        if opted_in:
+            logger.info("[Node classify_intent] /pm-agent → pm_task (explicit opt-in)")
+            # Strip the command so pm_call forwards the real request, not the prefix.
+            return {"intent": "pm_task", "grounding": "auto", "user_message": cleaned}
         try:
             client = llm or _llm_client()
             resp = client.chat.completions.create(

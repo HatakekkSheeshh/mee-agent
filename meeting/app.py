@@ -236,8 +236,14 @@ def _build_whisper_prompt(
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Startup: init LangGraph PostgresSaver. Shutdown: close pool."""
+    """Startup: init LangGraph PostgresSaver + discover/register Redmine MCP
+    tools. Shutdown: close pool."""
     await init_checkpointer()
+    # Best-effort: registers the deployed Redmine MCP server's tools into the
+    # local registry (disk cache → live list_tools). Returns [] + logs if the
+    # server is unreachable, so the app still boots without Redmine.
+    from meeting.services import load_and_register_redmine_tools
+    await load_and_register_redmine_tools()
     yield
     await close_checkpointer()
 
