@@ -19,3 +19,8 @@ langgraph>=0.2.50
 langgraph-checkpoint-postgres>=2.0.0
 pgvector
 psycopg[binary]
+
+# === Redmine MCP client (P2) ===
+mcp>=1.25.0
+
+
