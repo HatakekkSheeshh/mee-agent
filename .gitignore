@@ -11,3 +11,4 @@ slides
 .claude/
 .pytest_cache/
 cache/
+benchmarks

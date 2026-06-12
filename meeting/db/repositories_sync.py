@@ -111,13 +111,13 @@ def match_clusters_to_names_sync(
     *,
     user_id: uuid.UUID,
     speaker_embeddings: Optional[dict],
-    threshold: float = 0.30,
+    threshold: float = 0.45,
 ) -> dict[str, str]:
     """Sync version of speaker_matcher.match_clusters_to_names.
 
     Re-implements bulk_match against the voiceprints table inline so we
     don't have to mirror the entire repositories_voiceprint module. Same
-    cosine-distance threshold (0.30 ≈ 0.7 cosine similarity = strong match).
+    cosine-distance threshold (0.45 ≈ 0.55 cosine similarity = strong match).
     """
     if not speaker_embeddings:
         return {}

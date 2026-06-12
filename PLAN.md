@@ -3,7 +3,7 @@
 > **Working document.** Updated as we go. Survives conversation compaction.
 > Single source of truth for sprint planning, decisions, and context.
 >
-> **Last updated**: 2026-06-10
+> **Last updated**: 2026-06-12
 > **Owner**: nhihb@vng.com.vn
 
 ---
@@ -232,7 +232,13 @@
 
 > History of significant completed items with context.
 
-### Sprint 04 (current — 2026-06-10)
+### Sprint 04 (current — 2026-06-12)
+
+- [x] **STT benchmark (5 models, 16 clips)** — WER/CER/RTF/hallucination/cost. Winner: VNG Whisper-large-v3 on meeting (34.6%); PhoWhisper-large best on VIVOS (4.4%, with data-leakage caveat). Code-switching corpus pending.
+- [x] **Notta-style Clean view (final)** — refactored from misguided 3rd Player tab. Single Clean view now has: per-segment avatar+speaker chip (click → dropdown of meeting members with Apply current/Apply all visual hint + guest add), timestamp gutter (derived from raw_segments by positional pairing), sticky audio player (slider + play/pause + ±3s skip + 0.5x-2x rate), active segment highlight, click row to seek. Backend: `GET /api/meetings/{id}/members` + `GET /api/recordings/{id}/audio`.
+- [x] **PhoWhisper Kaggle OOM fix** — `return_timestamps='word'` → `True`. Word-level cross_attentions tensor blew 19GB on T4 for 5-min chunks. Trade-off: segment-level timestamps only (no word-highlight, only segment-highlight in notta sync).
+
+### Sprint 04 (early — 2026-06-10)
 
 - [x] **Background task infrastructure** — Celery + RabbitMQ replacing `asyncio.to_thread`
 - [x] **3 tasks moved to Celery**: `gen_mom_task`, `clean_recording_task`, `diarize_recording_task`
@@ -312,6 +318,13 @@
 - **Why**: asyncpg pool bound to event loop. Khi Celery solo pool spawn task mới với loop mới → pool dùng loop cũ chết → `RuntimeError: Future attached to different loop`
 - **Trade-off**: Duplicate repository code (async + sync mirrors). `gen_mom_task` vẫn async vì LangGraph checkpointer require async.
 - **Apply**: Future tasks → sync DB by default. Chỉ async khi cần LangGraph.
+
+### 2026-06-12 — PhoWhisper word-level timestamps disabled
+
+- **Decision**: Kaggle server uses `return_timestamps=True` (segment-level), not `"word"`.
+- **Why**: Word-level keeps the full `cross_attentions` tensor in memory — 32 layers × 20 heads × ~250 tokens × 6000 frames × 2 bytes ≈ 19 GB. T4 only has 15 GB → OOM on any chunk >2 min.
+- **Trade-off**: Notta-style highlight is segment-level (5-30s rows) instead of per-word. Acceptable for demo + production now; revisit if Mee gets H100/A100 hosting.
+- **Apply**: Client chunks @ 120s (was 300s). `phowhisper_server.py:367` uses segment-level. `_align_words_to_turns` works because chunk shape `{text, timestamp}` is identical, just coarser.
 
 ### Earlier (from memory)
 

@@ -18,8 +18,10 @@ fi
 # are available to the celery worker CLI args below. Without this, .env values
 # only reach Python after celery_app.py's dotenv import — too late for the
 # `--pool` / `--concurrency` flags which are set BEFORE Python starts.
-# `set +u` while sourcing so passwords containing $-sigils (e.g. `$H` inside
-# a DATABASE_URL password) don't crash with "unbound variable".
+#
+# IMPORTANT: Values containing shell-special chars (e.g. $ in passwords)
+# MUST be single-quoted in .env to survive `source`. For example:
+#   DATABASE_URL='postgresql://user:p@ss$word@host/db'
 if [[ -f .env ]]; then
     set +u
     set -a

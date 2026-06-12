@@ -39,9 +39,9 @@ class MemoryEvent:
     topic: str
     text: str
     event_type: str = "update"          # action_item / decision / commitment / blocker / update / summary
+    metadata: dict = field(default_factory=dict)
     speaker: Optional[str] = None
     deadline: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
 
 
 class MemoryService:
