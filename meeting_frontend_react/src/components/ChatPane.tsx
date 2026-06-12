@@ -18,12 +18,15 @@ import { pmAgentOptIn } from "../utils/pmAgent";
 import { slashMatches, type SlashCommand } from "../utils/slashCommands";
 
 interface ThreadMsg {
-  role: "user" | "agent" | "note";
+  role: "user" | "agent" | "note" | "card";
   text: string;
   /** Activity-trace labels collected while the turn streamed (agent msgs only). */
   steps?: string[];
   /** User msg sent via the /pm-agent command — render a chip and show stripped text. */
   pmAgent?: boolean;
+  /** Read-only snapshot of a resolved pending action (role === "card"). */
+  card?: PendingAction;
+  cardStatus?: "approved" | "rejected" | "sent";
 }
 
 export function ChatPane() {
@@ -251,14 +254,22 @@ export function ChatPane() {
     }
   }, [busy, t, confirm]);
 
+  // Keep a read-only snapshot of a resolved pending card in the thread, so the
+  // conversation history preserves what was approved / sent / rejected.
+  const archiveCard = useCallback(
+    (action: PendingAction, status: "approved" | "rejected" | "sent") =>
+      setMessages((m) => [...m, { role: "card", text: "", card: action, cardStatus: status }]),
+    [],
+  );
+
   const decide = useCallback(
     async (approve: boolean) => {
       if (!pending || busy) return;
       const id = pending.id;
-      const toolName = pending.tool;
+      const snapshot = pending;
       setPending(null);
-      // Leave a visible mark of the dismissed action in the thread.
-      if (!approve) pushNote(`✕ ${t("chat.rejectedNote")}: ${toolLabel(toolName)}`);
+      // Keep the resolved card visible in the thread history.
+      archiveCard(snapshot, approve ? "approved" : "rejected");
       setBusy(true);
       try {
         applyResult(approve ? await api.chat.approve(id) : await api.chat.reject(id));
@@ -277,7 +288,9 @@ export function ChatPane() {
     async (edited: Record<string, unknown>) => {
       if (!pending || busy) return;
       const id = pending.id;
+      const snapshot = pending;
       setPending(null);
+      archiveCard({ ...snapshot, args: { ...snapshot.args, ...edited } }, "approved");
       setBusy(true);
       try {
         applyResult(await api.chat.approve(id, { edited_args: edited }));
@@ -307,7 +320,9 @@ export function ChatPane() {
     async (edited: TaskTemplate, reason: string) => {
       if (!pending || busy) return;
       const id = pending.id;
+      const snapshot = pending;
       setPending(null);
+      archiveCard({ ...snapshot, args: { project: edited.project, items: edited.items } }, "sent");
       setBusy(true);
       try {
         applyResult(
@@ -332,8 +347,10 @@ export function ChatPane() {
     const text = infoInput.trim();
     if (!text) return;
     const id = pending.id;
+    const snapshot = pending;
     setPending(null);
     setInfoInput("");
+    archiveCard(snapshot, "sent");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
     try {
@@ -351,8 +368,10 @@ export function ChatPane() {
   const cancelInfo = useCallback(async () => {
     if (!pending || busy) return;
     const id = pending.id;
+    const snapshot = pending;
     setPending(null);
     setInfoInput("");
+    archiveCard(snapshot, "rejected");
     setMessages((m) => [...m, { role: "user", text: "/cancel" }]);
     setBusy(true);
     try {
@@ -457,6 +476,8 @@ export function ChatPane() {
         {messages.map((m, i) =>
           m.role === "note" ? (
             <div key={i} className="msg msg-note">{m.text}</div>
+          ) : m.role === "card" && m.card ? (
+            <ArchivedCard key={i} card={m.card} status={m.cardStatus ?? "approved"} />
           ) : (
             <div key={i} className={m.role === "user" ? "msg msg-user" : "msg msg-agent"}>
               {m.role === "agent" && m.steps?.length ? (
@@ -714,6 +735,45 @@ export function ChatPane() {
         )}
       </div>
     </section>
+  );
+}
+
+function ArchivedCard({ card, status }: { card: PendingAction; status: string }) {
+  const { t } = useApp();
+  const items = (card.args?.items as Array<Record<string, unknown>> | undefined) ?? undefined;
+  const badge =
+    status === "rejected"
+      ? `✕ ${t("chat.card.rejected")}`
+      : status === "sent"
+        ? `↗ ${t("chat.card.sent")}`
+        : `✓ ${t("chat.card.approved")}`;
+  return (
+    <div className={`msg msg-agent pending-action card-archived card-${status}`}>
+      <div className="pending-title">
+        {mapToolLabel(t, card.tool)} <span className="card-badge">{badge}</span>
+      </div>
+      {card.prompt && <Markdown>{card.prompt}</Markdown>}
+      {card.issues?.length ? (
+        <ul className="pending-issues">
+          {card.issues.map((iss, i) => (
+            <li key={i}>
+              {String(iss.actions ?? "")}{" "}
+              <strong>{String(iss.subject ?? JSON.stringify(iss))}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : items?.length ? (
+        <ul className="pending-issues">
+          {items.map((it, i) => (
+            <li key={i}>
+              <strong>{String(it.subject ?? it.title ?? JSON.stringify(it))}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : !card.prompt && card.args ? (
+        <pre className="pending-args">{JSON.stringify(card.args, null, 2)}</pre>
+      ) : null}
+    </div>
   );
 }
 

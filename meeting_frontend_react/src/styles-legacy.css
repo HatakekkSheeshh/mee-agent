@@ -1030,6 +1030,27 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     white-space: nowrap;
 }
 
+/* Resolved pending cards archived read-only into the chat thread */
+.card-archived { opacity: 0.85; }
+.card-archived .pending-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.card-badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+}
+.card-archived.card-rejected .card-badge {
+    background: var(--surface-2);
+    color: var(--text-mute);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Left Sidebar (collapsible, ChatGPT/Gemini-style)
    ═══════════════════════════════════════════════════════════════ */
