@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from meeting.graphs._chat_state import ChatState
@@ -124,6 +125,59 @@ def _result_to_dict(result: PmAgentResult) -> dict:
         "issues": result.issues,
         "context_id": result.context_id,
     }
+
+
+# ─── leaked tool-call recovery ──────────────────────────────────────
+# minimax-m2.5 (and other Anthropic-XML-trained models) sometimes emit tool
+# calls as TEXT in message.content instead of native OpenAI tool_calls, when
+# the serving layer (VNG MaaS / vLLM) has no tool-call parser configured. The
+# leaked shape:
+#     minimax:tool_call                 (or wrapped in <minimax:tool_call>…)
+#     <invoke name="send_email">
+#       <parameter name="to">andvd6</parameter>
+#       <parameter name="subject">…</parameter>
+#     </invoke>                         (closing tags are sometimes omitted)
+# We recover them client-side so the agent loop fires regardless of MaaS config.
+_TOOLCALL_START_RE = re.compile(r"<minimax:tool_call>|minimax:tool_call|<invoke\b")
+_INVOKE_BLOCK_RE = re.compile(
+    r'<invoke\s+name="([^"]+)"\s*>(.*?)(?:</invoke>|(?=<invoke\b)|\Z)',
+    re.DOTALL,
+)
+_PARAM_RE = re.compile(
+    r'<parameter\s+name="([^"]+)"\s*>(.*?)(?:</parameter>|(?=<parameter\b)|\Z)',
+    re.DOTALL,
+)
+
+
+def parse_leaked_tool_calls(content: Optional[str]) -> tuple[list[dict], str]:
+    """Recover tool calls a model leaked into text content (minimax/Anthropic
+    XML) into the native _tc_to_dict shape so the agent loop consumes them
+    unchanged.
+
+    Returns (tool_calls, cleaned_text):
+      - tool_calls: [{id, type:"function", function:{name, arguments(JSON str)}}]
+      - cleaned_text: prose before the tool-call region (often ""), stripped.
+    Returns ([], content) when there is no tool-call markup (or it is present
+    but unparseable — the original text is surfaced untouched).
+    """
+    if not content:
+        return [], content or ""
+    start = _TOOLCALL_START_RE.search(content)
+    if not start:
+        return [], content
+    prose = content[: start.start()]
+    region = content[start.start():]
+    calls: list[dict] = []
+    for i, m in enumerate(_INVOKE_BLOCK_RE.finditer(region)):
+        args = {pm.group(1): pm.group(2).strip() for pm in _PARAM_RE.finditer(m.group(2))}
+        calls.append({
+            "id": f"call_{i}",
+            "type": "function",
+            "function": {"name": m.group(1), "arguments": json.dumps(args, ensure_ascii=False)},
+        })
+    if not calls:
+        return [], content
+    return calls, prose.strip()
 
 
 def _decision_to_payload(decision: Optional[dict]) -> dict:

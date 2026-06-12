@@ -26,6 +26,7 @@ from meeting.graphs._chat_serde import (
     _reconcile_payloads,
     _seed_agent_messages,
     _tc_to_dict,
+    parse_leaked_tool_calls,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
 from meeting.services.tools.create_task import assignee_matches, build_agenda_task_items
@@ -199,8 +200,18 @@ def make_agent(llm=None, *, tools=None):
             }
 
         msg = resp.choices[0].message
-        tool_calls = getattr(msg, "tool_calls", None)
-        if not tool_calls:
+        native = getattr(msg, "tool_calls", None)
+        if native:
+            tc_dicts = [_tc_to_dict(tc) for tc in native]
+            assistant_content = msg.content
+        else:
+            # minimax-m2.5 may leak tool calls as XML text in content when the
+            # serving layer has no tool-call parser — recover them so the loop fires.
+            tc_dicts, assistant_content = parse_leaked_tool_calls(msg.content)
+            if tc_dicts:
+                logger.info("[Node agent] recovered %d leaked tool call(s) from content", len(tc_dicts))
+
+        if not tc_dicts:
             reply = (msg.content or "").strip()
             logger.info(f"[Node agent] final answer (len={len(reply)})")
             return {
@@ -211,13 +222,11 @@ def make_agent(llm=None, *, tools=None):
 
         assistant_msg = {
             "role": "assistant",
-            "content": msg.content,
-            "tool_calls": [_tc_to_dict(tc) for tc in tool_calls],
+            "content": assistant_content or None,
+            "tool_calls": tc_dicts,
         }
-        logger.info(
-            "[Node agent] round=%d tool_calls=%s",
-            rounds + 1, [tc.function.name for tc in tool_calls],
-        )
+        names = [tc["function"]["name"] for tc in tc_dicts]
+        logger.info("[Node agent] round=%d tool_calls=%s", rounds + 1, names)
         return {
             "agent_messages": messages + [assistant_msg],
             "agent_rounds": rounds + 1,
