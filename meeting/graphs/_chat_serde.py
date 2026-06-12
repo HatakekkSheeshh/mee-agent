@@ -180,6 +180,58 @@ def parse_leaked_tool_calls(content: Optional[str]) -> tuple[list[dict], str]:
     return calls, prose.strip()
 
 
+# ─── create_task → Redmine MCP apply (P2) ──────────────────────────
+# Map an approved create_task template item ({subject, assignee, due_date,
+# description}) onto the deployed MCP write tools. LIVE-SCHEMA NOTE (probe
+# 2026-06-12): create_redmine_issue REQUIRES tracker + assigned_to and exposes
+# `due_date` as a REAL field; update_redmine_issue exposes `due_date` + `notes`.
+# So due_date is passed DIRECTLY (never folded into description), and an item's
+# free-text description becomes an update `notes` journal comment.
+def redmine_create_args(project: str, item: dict) -> dict:
+    """Map a create_task template item → create_redmine_issue args.
+
+    Required fields are always present (tracker defaults to 'Task' when the item
+    has none); optionals are included only when the item carries them.
+    """
+    args = {
+        "project_name": project,
+        "subject": item.get("subject", ""),
+        "tracker": item.get("tracker") or "Task",
+        "assigned_to": item.get("assignee", ""),
+    }
+    description = (item.get("description") or "").strip()
+    if description:
+        args["description"] = description
+    due = (item.get("due_date") or "").strip()
+    if due:
+        args["due_date"] = due
+    return args
+
+
+def redmine_update_args(project: str, item: dict, issue_id: str) -> dict:
+    """Map a template item → update_redmine_issue args (only present fields)."""
+    args: dict = {"issue_id": str(issue_id), "project_name": project}
+    if item.get("subject"):
+        args["subject"] = item["subject"]
+    if item.get("assignee"):
+        args["assigned_to"] = item["assignee"]
+    if item.get("due_date"):
+        args["due_date"] = item["due_date"]
+    if item.get("description"):
+        args["notes"] = item["description"]
+    return args
+
+
+def summarize_redmine_apply(project: str, results: list[dict]) -> str:
+    """Vietnamese summary of a batch apply ({subject, result} per item)."""
+    failed = [r for r in results if (r.get("result") or {}).get("error")]
+    ok_count = len(results) - len(failed)
+    lines = [f"Đã đồng bộ {ok_count}/{len(results)} việc lên Redmine (dự án {project})."]
+    for r in failed:
+        lines.append(f"- ❌ {r.get('subject', '')}: {(r.get('result') or {}).get('error')}")
+    return "\n".join(lines)
+
+
 def _decision_to_payload(decision: Optional[dict]) -> dict:
     """Map a resume decision (from the API/FE) → the next pm_call payload."""
     decision = decision or {}
