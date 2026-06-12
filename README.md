@@ -309,6 +309,46 @@ flowchart TB
 
 ---
 
+## 🔗 Chat agent ↔ Redmine (MCP)
+
+Chat agent của Mee thao tác Redmine **trực tiếp qua MCP server** đã deploy
+(`MCP_REDMINE_URL`, xác thực bằng header `Authorization: Bearer <REDMINE_API_KEY>` —
+token Bearer **chính là** Redmine API key). Các tool được **khám phá động**
+(`list_tools()` lúc khởi động, có disk-cache) và đăng ký vào tool registry; tool
+**ghi** bị chặn bởi HITL (user phải duyệt trước khi chạy). pm-agent (A2A) bị **hạ
+xuống opt-in**: chỉ chạy khi user gõ tiền tố lệnh `/pm-agent` (định tuyến tất định,
+không qua LLM).
+
+**Env bắt buộc:** `MCP_REDMINE_URL`, `REDMINE_API_KEY`. **Dep:** `mcp>=1.25.0`
+(client; KHÔNG cần `fastmcp`/`python-redmine` — đó là phía server). Dùng
+`scripts/probe_redmine_mcp.py` để kiểm tra auth/transport + in schema thực tế.
+
+**15 tool Redmine hiện có (12 đọc / 3 ghi):**
+
+| Tool | Loại | Công dụng |
+|------|------|-----------|
+| `get_redmine_projects` | đọc | Danh sách project có quyền truy cập |
+| `get_field_metadata` | đọc | Giá trị hợp lệ của status/priority/tracker/assignee (để map đúng tên) |
+| `list_redmine_issue` | đọc | Liệt kê issue trong một project |
+| `get_redmine_issue_by_id` | đọc | Một issue theo id (kèm project + trạng thái) |
+| `get_issue_children_recursive` | đọc | Toàn bộ subtask (đệ quy) của một issue |
+| `get_project_updates` | đọc | Issue được cập nhật trong khoảng ngày |
+| `get_stale_issues` | đọc | Issue không cập nhật quá N ngày |
+| `get_overdue_issues` | đọc | Issue mở đã quá hạn |
+| `get_issues_due_soon` | đọc | Issue mở đến hạn trong N ngày tới |
+| `get_version_progress` | đọc | Tiến độ một target version |
+| `get_workload_by_assignee` | đọc | Số issue mở theo từng người |
+| `get_unassigned_issues` | đọc | Issue mở chưa giao cho ai |
+| `create_redmine_issue` | **ghi** | Tạo một issue (HITL — cần duyệt) |
+| `update_redmine_issue` | **ghi** | Cập nhật issue theo id (HITL — cần duyệt) |
+| `bulk_update_issues` | **ghi** | Cập nhật hàng loạt issue (HITL — cần duyệt) |
+
+> Tool được khám phá động nên danh sách có thể đổi theo bản deploy của MCP server.
+> Phân loại ghi/đọc dựa trên tập tên ghi tường minh + tiền tố động từ
+> (`create`/`update`/`delete`/`bulk`…), mặc định an toàn (động từ lạ → coi là ghi → cần duyệt).
+
+---
+
 ## 📂 Cấu trúc thư mục
 
 ```
