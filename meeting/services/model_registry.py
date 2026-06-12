@@ -62,6 +62,23 @@ STT_PROFILES: dict[str, dict] = {
         "language": "vi",
         "has_diarization": True,
     },
+    "faster_whisper": {
+        "id": "faster_whisper",
+        "label": "faster-whisper (word-accurate sync)",
+        "description": (
+            "Whisper-large-v3 chạy qua CTranslate2 trên Kaggle GPU. "
+            "Trả ra word-level timestamps → Notta-style sync chính xác từng "
+            "chữ. Chậm hơn VNG MaaS ~30s/16-phút nhưng playback khớp âm thanh."
+        ),
+        "env": {
+            "base_url": "FASTER_WHISPER_BASE_URL",
+            "api_key": "FASTER_WHISPER_API_KEY",
+            "model": "FASTER_WHISPER_MODEL",
+        },
+        "language": "auto",
+        "has_diarization": True,
+        "has_word_timestamps": True,
+    },
 }
 
 # ─── LLM profiles ──────────────────────────────────────────────────────

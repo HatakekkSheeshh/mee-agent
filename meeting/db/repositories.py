@@ -421,6 +421,7 @@ async def add_segment(
     start_time_ms: Optional[int] = None,
     end_time_ms: Optional[int] = None,
     speaker: Optional[str] = None,
+    words: Optional[list] = None,
 ) -> TranscriptSegment:
     segment = TranscriptSegment(
         recording_id=recording_id,
@@ -429,6 +430,7 @@ async def add_segment(
         start_time_ms=start_time_ms,
         end_time_ms=end_time_ms,
         speaker=speaker,
+        words=words,
     )
     session.add(segment)
     await session.flush()

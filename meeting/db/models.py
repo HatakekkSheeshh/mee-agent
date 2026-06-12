@@ -247,6 +247,13 @@ class TranscriptSegment(Base):
     speaker: Mapped[Optional[str]] = mapped_column(Text)
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     edited_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Per-word timestamps from STT backends that support `word_timestamps`
+    # (faster-whisper via DTW). Shape: [{"text", "start", "end"}] in absolute
+    # seconds. NULL when the STT didn't return word-level data (VNG MaaS,
+    # PhoWhisper with word ts disabled). FE Notta view falls back to even-
+    # distribute approximation when this is NULL.
+    # Migration: 0018_segment_word_timestamps.
+    words: Mapped[Optional[list]] = mapped_column(JSONB)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     edited_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     is_deleted: Mapped[bool] = mapped_column(

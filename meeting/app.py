@@ -629,6 +629,7 @@ def create_app(output_dir: str = None) -> FastAPI:
         vocab_hints: str = Form(default=""),
         attendees: str = Form(default=""),
         stt_model: str = Form(default=""),
+        recording_id: str = Form(default=""),
     ):
         """Upload an audio file and transcribe via the chosen STT backend.
 
@@ -662,6 +663,42 @@ def create_app(output_dir: str = None) -> FastAPI:
         audio_bytes = await file.read()
         filename = file.filename or "audio.wav"
         original_size_mb = len(audio_bytes) / 1024 / 1024
+
+        # ─── Persist the upload for Notta-style in-browser playback ───
+        # Save before transcription so /api/recordings/{id}/audio works as
+        # soon as the upload completes (the user can hit Play even while
+        # the LLM is still cleaning). Path written to recording.audio_path.
+        if recording_id:
+            from meeting.db import AsyncSessionLocal
+            from meeting.db.models import Recording as _Recording
+            try:
+                _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), "output"
+                )
+                _audio_dir = os.path.join(_output_dir, "audio")
+                os.makedirs(_audio_dir, exist_ok=True)
+                _ext = os.path.splitext(filename)[1].lower() or ".wav"
+                if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                    _ext = ".wav"
+                _saved_name = f"{recording_id}{_ext}"
+                _saved_path = os.path.join(_audio_dir, _saved_name)
+                with open(_saved_path, "wb") as _f:
+                    _f.write(audio_bytes)
+                _rel = os.path.relpath(_saved_path, os.path.dirname(os.path.dirname(__file__)))
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec is not None:
+                        _rec.audio_path = _rel
+                        await _sess.commit()
+                logging.info(
+                    f"[/api/transcribe] saved audio for recording {recording_id} → {_rel}"
+                )
+            except Exception as _e:
+                # Non-fatal — transcription proceeds even if save fails;
+                # user just won't be able to play back the audio later.
+                logging.warning(
+                    f"[/api/transcribe] failed to persist audio for recording {recording_id}: {_e}"
+                )
 
         prompt = _build_whisper_prompt(vocab_hints, language, attendees)
 
