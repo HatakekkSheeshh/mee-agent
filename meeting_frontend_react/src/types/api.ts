@@ -104,13 +104,34 @@ export interface ProjectSummary {
   generated_at: string;
 }
 
+// ─── Meeting members (Notta-style speaker dropdown) ───────────────
+export interface MeetingMember {
+  user_id: string;
+  email: string;
+  display_name: string;
+  avatar_url?: string | null;
+  voice_enrolled: boolean;
+  role: "owner" | "editor" | "viewer";
+}
+
 // ─── Transcript ────────────────────────────────────────────────────
+export interface WordTimestamp {
+  text: string;
+  start: number;  // absolute seconds
+  end: number;    // absolute seconds
+}
+
 export interface RawSegment {
   seq: number;
   text: string;
   speaker?: string | null;
   start_ms?: number | null;
   end_ms?: number | null;
+  /** Per-word timestamps from STT backends that support word_timestamps
+   * (faster-whisper). NULL when STT doesn't return them (VNG MaaS, etc).
+   * FE Notta view uses these for word-accurate highlight; falls back to
+   * even-distribute approximation when NULL. */
+  words?: WordTimestamp[] | null;
 }
 
 export interface RecordingTranscript {

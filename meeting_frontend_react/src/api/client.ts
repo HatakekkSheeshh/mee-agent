@@ -4,6 +4,7 @@
 import type {
   Meeting,
   MeetingDetail,
+  MeetingMember,
   Recording,
   RecordingTranscript,
   CleanResponse,
@@ -112,6 +113,11 @@ export const api = {
       http<{ meeting_id: string; summary: ProjectSummary }>(
         "POST", `/api/meetings/${id}/generate-project-summary`,
       ),
+    /** List members of a meeting — feeds Notta-style speaker dropdown. */
+    listMembers: (id: string) =>
+      http<{ meeting_id: string; members: MeetingMember[] }>(
+        "GET", `/api/meetings/${id}/members`,
+      ),
     importTranscript: (
       meetingId: string,
       data: {
@@ -124,6 +130,9 @@ export const api = {
           speaker?: string | null;
           start?: number | null;
           end?: number | null;
+          /** Per-word timestamps (faster-whisper). Persisted on
+           * transcript_segments.words for FE Notta word-accurate sync. */
+          words?: { text: string; start: number; end: number }[] | null;
         }>;
         session_label?: string;
         replace?: boolean;
@@ -205,6 +214,33 @@ export const api = {
       ),
     transcript: (id: string) =>
       http<RecordingTranscript>("GET", `/api/recordings/${id}/transcript`),
+    /** Stream the raw audio file for in-browser playback (Notta-style sync). */
+    audioUrl: (id: string) => `/api/recordings/${id}/audio`,
+    /** Attach (or replace) the source audio for a recording — used to recover
+     * playback when the original transcribe path didn't persist the audio. */
+    uploadAudio: async (id: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/recordings/${id}/audio`, { method: "POST", body: fd });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new ApiError(r.status, j.detail || r.statusText);
+      }
+      return r.json() as Promise<{ recording_id: string; audio_path: string; size_bytes: number }>;
+    },
+    /** Notta-style speaker rename: scope='current' overrides just this segment,
+     * 'all' renames every segment that currently shares this row's label. */
+    patchSegmentSpeaker: (
+      id: string,
+      index: number,
+      speaker: string,
+      scope: "current" | "all",
+    ) =>
+      http<{ renamed: number; scope: string; speaker: string }>(
+        "PATCH",
+        `/api/recordings/${id}/segment-speaker`,
+        { index, speaker, scope },
+      ),
     clean: (id: string, regenerate = false) =>
       http<CleanResponse>(
         "POST",
@@ -252,7 +288,13 @@ export const api = {
   },
 
   // ─── Transcribe upload (one-shot, no DB persistence) ────────────────
-  transcribe: async (file: File, language = "vi", vocabHints = "", attendees = "") => {
+  transcribe: async (
+    file: File,
+    language = "vi",
+    vocabHints = "",
+    attendees = "",
+    recordingId = "",
+  ) => {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("language", language);
@@ -260,6 +302,10 @@ export const api = {
     // Attendees feed into the Whisper prompt (`_build_whisper_prompt`) to bias
     // STT toward correct name spellings + diarization toward expected #speakers.
     if (attendees) fd.append("attendees", attendees);
+    // Tell the backend WHICH recording owns this audio so it can persist the
+    // file under output/audio/<recording_id>.<ext> and patch recording.audio_path.
+    // Enables Notta-style in-browser playback via /api/recordings/{id}/audio.
+    if (recordingId) fd.append("recording_id", recordingId);
     const r = await fetch("/api/transcribe", { method: "POST", body: fd });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -268,7 +314,16 @@ export const api = {
     return (await r.json()) as {
       text: string;
       chunked?: boolean;
-      segments?: { speaker?: string; text: string; start?: number; end?: number }[];
+      segments?: {
+        speaker?: string;
+        text: string;
+        start?: number;
+        end?: number;
+        /** Per-word timestamps (faster-whisper only). [{text, start, end}] in
+         * seconds. Forwarded by FE to /import-transcript → persisted on
+         * transcript_segments.words. */
+        words?: { text: string; start: number; end: number }[];
+      }[];
       /** PhoWhisper-server only — 256-dim embedding per pyannote cluster. */
       cluster_embeddings?: Record<string, number[]>;
       /** Local-pyannote path — base64-encoded 3s WAV per cluster, surfaced

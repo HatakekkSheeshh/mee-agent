@@ -12,9 +12,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
-import type { CleanResponse, MoMJson } from "../types/api";
-import { CleanEditor } from "./CleanEditor";
-import { SpeakerMapper } from "./SpeakerMapper";
+import type { CleanResponse, MoMJson, RawSegment } from "../types/api";
+import { NottaCleanView } from "./NottaCleanView";
 import { useLiveRecording, type LiveSegment } from "../hooks/useLiveRecording";
 
 type ViewMode = "raw" | "clean";
@@ -71,18 +70,24 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     } catch { /* ignore */ }
   }, [currentRecordingId]);
   const [rawText, setRawText] = useState<string>("");
+  // Structured segments with start_ms/end_ms — drives Notta-style audio sync.
+  // Loaded from /api/recordings/{id}/transcript. Empty for live-record before
+  // post-record diarize finishes.
+  const [rawSegments, setRawSegments] = useState<RawSegment[]>([]);
   // null = not loaded yet; [] = loaded but no segments; non-empty = ready.
   // Concrete type rather than `CleanResponse["clean_segments"]` because the
   // response field is now optional (task-id shape carries no segments).
   type CleanSeg = NonNullable<CleanResponse["clean_segments"]>[number];
   const [cleanSegs, setCleanSegs] = useState<CleanSeg[] | null>(null);
-  const [editedHtml, setEditedHtml] = useState<string | null>(null);
+  // editedHtml/preMapped/availableClusters/editorRev are kept in state purely
+  // so the /clean response can populate them — NottaCleanView fetches its
+  // own data from the API endpoints instead. The setters are still used by
+  // the reload/regenerate paths; discarding the values silences TS6133.
+  const [, setEditedHtml] = useState<string | null>(null);
   const [clusterMapping, setClusterMapping] = useState<Record<string, string>>({});
-  const [preMappedClusters, setPreMappedClusters] = useState<string[]>([]);
-  const [availableClusters, setAvailableClusters] = useState<string[]>([]);
-  // Bumped after every voiceprint save → CleanEditor key changes → remount
-  // with fresh content (so renamed speaker labels show up immediately).
-  const [editorRev, setEditorRev] = useState(0);
+  const [, setPreMappedClusters] = useState<string[]>([]);
+  const [, setAvailableClusters] = useState<string[]>([]);
+  const [, setEditorRev] = useState(0);
 
   /** /clean now returns either:
    *  - {cached:true, clean_segments:[...]}             — cache hit, inline result
@@ -341,6 +346,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   useEffect(() => {
     if (!currentRecordingId) {
       setRawText("");
+      setRawSegments([]);
       setCleanSegs(null);
       return;
     }
@@ -350,6 +356,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         const r = await api.recordings.transcript(currentRecordingId);
         if (cancelled) return;
         setRawText(r.transcript || "");
+        setRawSegments(r.segments || []);
         dbTextRef.current = r.transcript || "";
         setCleanSegs(null);    // invalidate clean cache on recording switch
         setEditedHtml(null);
@@ -413,7 +420,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         (currentRec?.vocab_hints || "").trim(),
       ].filter(Boolean);
       const vocabStr = vocabParts.join(", ");
-      const transcribeResp = await api.transcribe(file, "vi", vocabStr, attendeesStr);
+      const transcribeResp = await api.transcribe(
+        file, "vi", vocabStr, attendeesStr, currentRecordingId || "",
+      );
       const text = transcribeResp.text;
       if (!text?.trim()) {
         setStatus({ kind: "error", msg: "Không phát hiện giọng nói." });
@@ -451,6 +460,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           speaker: s.speaker || null,
           start: s.start ?? null,
           end: s.end ?? null,
+          // Forward word-level timestamps when STT returned them
+          // (faster-whisper). Backend persists into transcript_segments.words.
+          words: s.words ?? null,
         })),
         recording_id: currentRecordingId,
         replace: false,
@@ -837,42 +849,18 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
               </div>
             ) : cleanSegs.length === 0 ? (
               <div className="transcript-clean-empty muted">Không có segment nào.</div>
-            ) : (
-              <>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-                  <button
-                    className="btn btn-ghost btn-xs"
-                    type="button"
-                    onClick={regenerateClean}
-                    disabled={busy}
-                    title="LLM clean lại từ raw (giữ nguyên user edits)"
-                  >
-                    ↻ Regenerate
-                  </button>
-                </div>
-                <SpeakerMapper
-                  recordingId={currentRecordingId!}
-                  segments={cleanSegs}
-                  clusterMapping={clusterMapping}
-                  preMappedClusters={preMappedClusters}
-                  availableClusters={availableClusters}
-                  availableSamples={
-                    currentMeeting?.recordings.find(
-                      (r) => r.id === currentRecordingId,
-                    )?.speaker_samples
-                  }
-                  onSaved={reloadClean}
-                />
-                <CleanEditor
-                  key={`${currentRecordingId}-${editorRev}`}
-                  recordingId={currentRecordingId!}
-                  segments={cleanSegs}
-                  editedHtml={editedHtml}
-                  clusterMapping={clusterMapping}
-                  onSaved={(html) => setEditedHtml(html)}
-                />
-              </>
-            )}
+            ) : currentRecordingId && currentMeetingId ? (
+              <NottaCleanView
+                recordingId={currentRecordingId}
+                meetingId={currentMeetingId}
+                cleanSegments={cleanSegs}
+                rawSegments={rawSegments}
+                clusterMapping={clusterMapping}
+                onRegenerate={regenerateClean}
+                onClusterMappingSaved={reloadClean}
+                busy={busy}
+              />
+            ) : null}
           </div>
         )}
 

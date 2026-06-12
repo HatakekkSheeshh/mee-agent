@@ -2524,3 +2524,370 @@ select.mee-modal-input {
 .app > * {
     min-width: 0;
 }
+
+/* ══ Notta-style Clean view ═══════════════════════════════════════════
+ * Layout: toolbar (top) + scrollable segments list + sticky audio player.
+ * Each segment row has timestamp gutter + main column (speaker chip + text).
+ */
+/* When NottaCleanView is rendered inside .transcript-clean, that container
+ * MUST NOT scroll — internal .notta-list is the only scroller. Without
+ * this, the audio player floats with content instead of pinning to the
+ * pane bottom. */
+.transcript-clean:has(.notta-view) {
+    overflow: hidden;
+    padding: 12px 16px 0;
+    display: flex;
+    flex-direction: column;
+}
+.notta-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.notta-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 4px 12px;
+    border-bottom: 1px dashed var(--border);
+    margin-bottom: 10px;
+}
+.notta-toolbar-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+}
+.notta-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+.notta-row {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 14px;
+    padding: 10px 8px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    position: relative;
+}
+.notta-row:hover {
+    background: var(--surface-2, rgba(255,255,255,0.025));
+}
+.notta-row.active {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+.notta-row.active .notta-row-text {
+    color: var(--text);
+    font-weight: 500;
+}
+.notta-row-ts {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-faint);
+    padding-top: 6px;
+    text-align: right;
+}
+.notta-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.notta-row-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.notta-row-text {
+    color: var(--text-muted);
+    line-height: 1.6;
+    font-size: 14px;
+    word-break: break-word;
+}
+/* Each word is its own span so we can highlight the one currentMs lands in.
+ * Active word gets a subtle yellow background + green underline so it stands
+ * out without screaming. */
+.notta-word {
+    display: inline;
+    border-radius: 3px;
+    padding: 0 1px;
+    transition: background-color 80ms linear, color 80ms linear;
+}
+.notta-word.active {
+    background: var(--accent);
+    color: var(--surface);
+    font-weight: 600;
+}
+
+/* Speaker chip (clickable to open dropdown) */
+.notta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px 3px 3px;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    cursor: pointer;
+    color: white;
+    font-weight: 600;
+    font-size: 12.5px;
+    transition: filter var(--dur) var(--ease);
+}
+.notta-chip:hover {
+    filter: brightness(1.1);
+}
+.notta-chip-initials {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.25);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+}
+.notta-chip-name {
+    color: white;
+    letter-spacing: 0.01em;
+}
+.notta-chip-caret {
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+/* Dropdown: search + member suggestions */
+.notta-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 100;
+    width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.notta-dropdown-search {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 13px;
+}
+.notta-dropdown-search:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.notta-dropdown-section-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 4px 6px 2px;
+    letter-spacing: 0.05em;
+}
+/* IMPORTANT: NO overflow here. The submenu uses position:absolute floating
+ * to the right; any overflow value (auto/hidden/scroll) on this container
+ * clips both axes → submenu vanishes. If list grows long, the outer page
+ * scrolls or the dropdown card itself accommodates (max ~10-15 members in
+ * practice). */
+.notta-dropdown-list {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+}
+/* Member row in dropdown. Hovering reveals a floating submenu on the right
+ * (matches Notta UI from user's reference screenshot). The submenu is
+ * absolutely positioned so it appears outside the dropdown card. */
+.notta-dropdown-member {
+    position: relative;
+    border-radius: var(--r-md);
+    margin-bottom: 1px;
+    transition: background var(--dur) var(--ease);
+}
+.notta-dropdown-member:hover,
+.notta-dropdown-member:focus-within {
+    background: var(--surface-2, rgba(255,255,255,0.05));
+}
+.notta-dropdown-member.current .notta-dropdown-name {
+    color: var(--accent);
+    font-weight: 600;
+}
+.notta-dropdown-member.guest .notta-dropdown-name {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.notta-dropdown-member-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: default;
+}
+.notta-dropdown-caret {
+    margin-left: auto;
+    color: var(--text-faint);
+    font-size: 14px;
+    line-height: 1;
+}
+/* Submenu is rendered via React portal at document.body (see component).
+ * Positioned with `position: fixed` so ancestor overflow on the segments
+ * list / dropdown card never hides it. Top/left set inline from the
+ * hovered member's getBoundingClientRect. */
+.notta-submenu-portal {
+    position: fixed;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 1000;
+}
+.notta-dropdown-action {
+    background: transparent;
+    border: none;
+    border-radius: var(--r-md);
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    text-align: left;
+    white-space: nowrap;
+}
+.notta-dropdown-action:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.notta-dropdown-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.notta-dropdown-name {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.notta-dropdown-badge {
+    font-size: 10px;
+    opacity: 0.8;
+}
+.notta-dropdown-check {
+    color: var(--accent);
+    font-weight: 700;
+}
+.notta-dropdown-applyall {
+    font-size: 10px;
+    color: var(--text-faint);
+    opacity: 0.7;
+}
+.notta-dropdown-item:hover .notta-dropdown-applyall {
+    opacity: 1;
+}
+.notta-dropdown-empty {
+    padding: 10px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 12px;
+}
+
+/* Audio player pinned at bottom of pane (flex-end, doesn't scroll) */
+.notta-player {
+    flex-shrink: 0;
+    margin-top: 8px;
+    padding: 10px 14px 12px;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.notta-player-error {
+    font-size: 11.5px;
+    color: var(--warning, #f59e0b);
+    padding: 4px 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border-radius: var(--r-sm);
+}
+.notta-player-slider {
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.notta-player-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+}
+.notta-player-rate {
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.notta-player-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.notta-player-btn:hover {
+    background: var(--surface);
+    border-color: var(--border-2);
+}
+.notta-player-play {
+    width: 40px;
+    height: 40px;
+    background: var(--accent);
+    color: var(--surface);
+    font-size: 14px;
+    border-color: var(--accent);
+}
+.notta-player-play:hover {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+.notta-player-time {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-left: 8px;
+}
+
+
