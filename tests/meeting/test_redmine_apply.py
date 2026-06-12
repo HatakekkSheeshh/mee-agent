@@ -227,3 +227,12 @@ async def test_reject_create_task_applies_nothing(monkeypatch):
     assert not await _interrupted(graph, cfg)
     assert ts.exec.calls == []
     assert result["final_reply"] == chat_graph.REJECT_REPLY
+
+
+# ── Task 8: agent system-prompt Redmine guidance ────────────────────
+def test_agent_prompt_has_redmine_guidance():
+    prompt = chat_graph._agent_system_prompt({"meeting_context": {"title": "GIP"}})
+    assert "list_redmine_issue" in prompt
+    assert "update_redmine_issue" in prompt
+    # create_task vs create_redmine_issue disambiguation present
+    assert "create_redmine_issue" in prompt and "create_task" in prompt
