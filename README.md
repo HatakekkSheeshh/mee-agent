@@ -347,6 +347,15 @@ không qua LLM).
 > Phân loại ghi/đọc dựa trên tập tên ghi tường minh + tiền tố động từ
 > (`create`/`update`/`delete`/`bulk`…), mặc định an toàn (động từ lạ → coi là ghi → cần duyệt).
 
+**Đồng bộ biên bản → Redmine (`create_task`):** khi user yêu cầu "đồng bộ việc
+trong cuộc họp lên Redmine", agent gọi tool `create_task`. Hệ thống dựng danh
+sách việc từ MoM (lọc theo người/ phiên nếu được chỉ định), hỏi **một lần duyệt**
+cho cả lô, rồi **áp trực tiếp qua MCP** trong node `agent_execute`: mỗi việc →
+`create_redmine_issue` (hoặc `update_redmine_issue` nếu việc có `issue_id`), với
+`due_date` truyền thẳng là field thật. Lượt chat kết thúc bằng bản tổng kết
+"đồng bộ N/M việc". Đây là đường mặc định — KHÔNG còn bắc cầu qua pm-agent
+(pm-agent chỉ chạy khi gõ `/pm-agent`).
+
 ---
 
 ## 📂 Cấu trúc thư mục
