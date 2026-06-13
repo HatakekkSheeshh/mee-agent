@@ -64,7 +64,7 @@ def build_chat_graph(
     g.add_conditional_edges(
         "agent_tools",
         route_after_agent_tools,
-        {"agent": "agent", "agent_approve": "agent_approve"},
+        {"agent": "agent", "agent_approve": "agent_approve", "save_reply": "save_reply"},
     )
     g.add_edge("agent_approve", "agent_execute")
     g.add_conditional_edges(

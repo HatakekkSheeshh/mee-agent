@@ -19,6 +19,7 @@ import meeting.services as _services  # default toolset bundle (DI seam)
 from meeting.db import repositories as repo
 from meeting.graphs._chat_llm import _llm_client, _llm_model
 from meeting.graphs._chat_prompts import _to_llm_messages
+from meeting.graphs.chat_graph.redmine_format import format_issue_list, is_formattable
 from meeting.graphs._chat_serde import (
     _json,
     _last_assistant_text,
@@ -251,6 +252,7 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
 
         pending = None
         switched = None
+        executed: list[tuple[str, dict, object]] = []   # (name, args, result) for read calls
         for tc in tool_calls:
             name = tc["function"]["name"]
             args = _inject_meeting(
@@ -283,6 +285,7 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
                 result = await ts.execute_tool(name, args, session=session, user_id=user_id)
             if name == "switch_meeting" and isinstance(result, dict) and result.get("meeting_id"):
                 switched = result["meeting_id"]
+            executed.append((name, args, result))
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _json(result)})
 
         out: dict = {"agent_messages": messages}
@@ -291,6 +294,24 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
         if pending:
             out["pending_tool"] = pending
             out["agent_route"] = "approve"
+        elif (
+            executed
+            and len(executed) == len(tool_calls)
+            and all(is_formattable(name) for name, _, _ in executed)
+        ):
+            # Pure read-display round: render the table(s) in code and finish the
+            # turn — the LLM never re-renders the rows (the #28815 fix). Any render
+            # that can't parse its result (None) makes us fall back to the LLM.
+            renders = [format_issue_list(name, args, result) for name, args, result in executed]
+            if all(r is not None for r in renders):
+                out["final_reply"] = "\n\n".join(renders)
+                out["tool_result"] = {
+                    "status": "ok", "via": "redmine_read",
+                    "tools": [name for name, _, _ in executed],
+                }
+                out["agent_route"] = "done"
+            else:
+                out["agent_route"] = "agent"
         else:
             out["agent_route"] = "agent"
         return out
@@ -427,8 +448,15 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
 def route_after_agent(state: ChatState) -> Literal["agent_tools", "save_reply"]:
     return "agent_tools" if state.get("agent_route") == "tools" else "save_reply"
 
-def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve"]:
-    return "agent_approve" if state.get("agent_route") == "approve" else "agent"
+def route_after_agent_tools(
+    state: ChatState,
+) -> Literal["agent", "agent_approve", "save_reply"]:
+    route = state.get("agent_route")
+    if route == "approve":
+        return "agent_approve"
+    if route == "done":
+        return "save_reply"
+    return "agent"
 
 def route_after_agent_execute(state: ChatState) -> Literal["agent", "save_reply"]:
     """Finish the turn after a rejected side-effect tool or a completed batch
