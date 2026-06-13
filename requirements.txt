@@ -23,4 +23,11 @@ psycopg[binary]
 # === Redmine MCP client (P2) ===
 mcp>=1.25.0
 
+# === Observability — OTel → Jaeger + Langfuse (only used when OTEL_ENABLED / LANGFUSE_ENABLED) ===
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+openinference-instrumentation-openai>=0.1.18
+openinference-instrumentation-langchain>=0.1.29
+
 

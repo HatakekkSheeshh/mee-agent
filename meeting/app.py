@@ -236,8 +236,12 @@ def _build_whisper_prompt(
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Startup: init LangGraph PostgresSaver + discover/register Redmine MCP
-    tools. Shutdown: close pool."""
+    """Startup: init OTel tracing + LangGraph PostgresSaver + discover/register
+    Redmine MCP tools. Shutdown: flush traces + close pool."""
+    # Best-effort, env-gated: no-op unless OTEL_ENABLED / LANGFUSE_ENABLED is set.
+    from meeting.observability import init_tracing, shutdown_tracing
+
+    init_tracing(app)
     await init_checkpointer()
     # Best-effort: registers the deployed Redmine MCP server's tools into the
     # local registry (disk cache → live list_tools). Returns [] + logs if the
@@ -246,6 +250,7 @@ async def _lifespan(app: FastAPI):
     await load_and_register_redmine_tools()
     yield
     await close_checkpointer()
+    shutdown_tracing()
 
 
 def create_app(output_dir: str = None) -> FastAPI:
