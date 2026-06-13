@@ -16,6 +16,7 @@ import { ActionArgsCard } from "./ActionArgsCard";
 import { CreateTaskCard, parseTaskTemplate, type TaskTemplate } from "./CreateTaskCard";
 import { pmAgentOptIn } from "../utils/pmAgent";
 import { slashMatches, type SlashCommand } from "../utils/slashCommands";
+import { ChatInput, type ChatInputHandle } from "./ChatInput";
 
 interface ThreadMsg {
   role: "user" | "agent" | "note" | "card";
@@ -37,7 +38,7 @@ export function ChatPane() {
   // Slash-command menu: highlighted row + an Escape-dismiss flag (reset on edit).
   const [slashIdx, setSlashIdx] = useState(0);
   const [slashClosed, setSlashClosed] = useState(false);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ChatInputHandle>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   // Free-text reply for a pm-agent need_more_info pause.
   const [infoInput, setInfoInput] = useState("");
@@ -383,11 +384,11 @@ export function ChatPane() {
     }
   }, [pending, busy, t]);
 
-  // Slash-command menu state, derived from the input. The menu (while typing the
-  // command) and the floating pill (once committed) are mutually exclusive.
+  // Slash-command menu state, derived from the input. Shown only while the user
+  // is still typing the command token; once committed, the /pm-agent prefix is
+  // highlighted inline inside the input itself (see ChatInput).
   const slashList = slashClosed || busy ? null : slashMatches(input);
   const showSlashMenu = !!slashList;
-  const pillActive = !showSlashMenu && !busy && pmAgentOptIn(input).opted;
   // Reset the highlight as the filtered list changes with each keystroke.
   useEffect(() => setSlashIdx(0), [input]);
 
@@ -397,7 +398,7 @@ export function ChatPane() {
     inputRef.current?.focus();
   }, []);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (showSlashMenu && slashList) {
       const n = slashList.length;
       if (e.key === "ArrowDown") {
@@ -665,12 +666,6 @@ export function ChatPane() {
       </div>
 
       <div className="chat-input-wrap">
-        {pillActive && (
-          <div className="pm-agent-pill" aria-hidden="true">
-            <img className="pm-agent-ava" src="/pm-agent-ava.webp" alt="" />
-            {t("chat.pmAgentChip")}
-          </div>
-        )}
         {showSlashMenu && slashList && (
           <div className="slash-menu" role="listbox" aria-label={t("chat.slash.menuLabel")}>
             {slashList.map((c, i) => (
@@ -693,15 +688,14 @@ export function ChatPane() {
             ))}
           </div>
         )}
-        <textarea
+        <ChatInput
           ref={inputRef}
-          className="chat-input"
-          rows={1}
-          placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
           value={input}
+          placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
+          ariaLabel={t("chat.placeholder")}
           disabled={busy}
-          onChange={(e) => {
-            setInput(e.target.value);
+          onChange={(v) => {
+            setInput(v);
             setSlashClosed(false);
           }}
           onKeyDown={onKeyDown}

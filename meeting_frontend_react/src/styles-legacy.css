@@ -761,6 +761,34 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     letter-spacing: 0;
 }
 
+/* Markdown-rendered chat replies (react-markdown + remark-gfm). GFM tables ARE
+   parsed into real <table>s, but browser defaults render them borderless/cramped
+   so they read as a run-together blob — these rules make them legible. */
+.markdown { overflow-x: auto; }   /* wide tables scroll inside the bubble */
+.markdown table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    overflow: hidden;
+    font-size: 13px;
+    margin: 10px 0;
+}
+.markdown th,
+.markdown td {
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+    border: 1px solid var(--border);
+}
+.markdown th {
+    font-weight: 600;
+    color: var(--text-mute);
+    background: var(--surface);
+    white-space: nowrap;
+}
+.markdown tr:nth-child(even) td { background: var(--surface); }
+
 .agenda-item {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -928,38 +956,7 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     border-color: var(--border-2);
 }
 
-/* /pm-agent command — floating pill above the input + in-bubble chip */
-.pm-agent-pill {
-    position: absolute;
-    bottom: calc(100% - 10px);
-    left: 16px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 11px;
-    border-radius: 999px;
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: -0.005em;
-    color: var(--accent-deep);
-    background: var(--accent-soft);
-    border: 1px solid var(--accent);
-    box-shadow: 0 2px 10px var(--accent-glow);
-    pointer-events: none;
-    animation: pmPillIn 0.18s var(--ease);
-}
-.pm-agent-pill { padding-left: 5px; }
-.pm-agent-ava {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-}
-@keyframes pmPillIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
+/* /pm-agent command — inline prefix highlight (see .chat-input-ce below) + in-bubble chip */
 .pm-chip {
     display: inline-flex;
     align-items: center;
@@ -1662,6 +1659,27 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .chat-input:focus {
     border-color: var(--border-3);
     box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* contenteditable chat editor: plain-text box with an inline /pm-agent highlight */
+.chat-input-ce {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+    cursor: text;
+}
+.chat-input-ce:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-faint);
+    pointer-events: none;
+}
+.chat-input-ce[aria-disabled="true"] {
+    opacity: 0.6;
+    cursor: default;
+}
+/* The literal /pm-agent prefix — coloured in place, no node inserted (IME-safe). */
+::highlight(pm-cmd) {
+    color: var(--accent);
 }
 
 .chat-send {
