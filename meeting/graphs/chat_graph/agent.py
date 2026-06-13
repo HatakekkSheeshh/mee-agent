@@ -134,7 +134,7 @@ async def _build_reconcile_template(
             action_items = await repo.get_mom_action_items(
                 session, uuid.UUID(resolved_meeting_id)
             )
-        items = tools.build_task_items(action_items)
+        items = tools.build_task_items(action_items, description=(args.get("description") or "").strip())
         # "tạo task cho <người>" → keep the {project, items} shape but narrow to
         # that person's items. assignee_matches bridges the Redmine-login ↔
         # display-name gap ("hieunq3" ↔ pic "Hiếu").
@@ -153,7 +153,8 @@ async def _build_reconcile_template(
         if not action_items and mom.get("agenda_items"):
             due = args.get("deadline") or args.get("due_date") or ""
             items = build_agenda_task_items(
-                mom.get("agenda_items") or [], assignee=assignee, due_date=due
+                mom.get("agenda_items") or [], assignee=assignee, due_date=due,
+                description=(args.get("description") or "").strip(),
             )
     else:
         items = []

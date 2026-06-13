@@ -33,15 +33,17 @@ def assignee_matches(query: str, pic: str) -> bool:
     return q in p or p in q
 
 
-def build_task_items(action_items: list[dict]) -> list[dict]:
+def build_task_items(action_items: list[dict], *, description: str = "") -> list[dict]:
     """Normalize MoM action_items ({pic, deadline, item}) → task items
-    ({subject, assignee, due_date, description}). Drops items without text."""
+    ({subject, assignee, due_date, description}). Drops items without text.
+    `description` is an optional note stamped on every built task — MoM action
+    items carry no description of their own, so the agent/user supplies one."""
     return [
         {
             "subject": ai.get("item", ""),
             "assignee": ai.get("pic", ""),
             "due_date": ai.get("deadline", ""),
-            "description": "",
+            "description": description,
         }
         for ai in action_items
         if ai.get("item")
@@ -49,18 +51,19 @@ def build_task_items(action_items: list[dict]) -> list[dict]:
 
 
 def build_agenda_task_items(
-    agenda_items: list[dict], *, assignee: str = "", due_date: str = ""
+    agenda_items: list[dict], *, assignee: str = "", due_date: str = "", description: str = ""
 ) -> list[dict]:
     """Fallback for an agenda-only MoM (agenda_items present, no action_items):
     one candidate task per agenda topic ({subject=agenda, description=detail}).
     `assignee`/`due_date` are editable defaults stamped on every task — an agenda
-    topic has no PIC or deadline of its own. Drops topics without a title."""
+    topic has no PIC or deadline of its own. An explicit `description` overrides
+    the agenda topic's own detail. Drops topics without a title."""
     return [
         {
             "subject": (a.get("agenda") or "").strip(),
             "assignee": assignee,
             "due_date": due_date,
-            "description": (a.get("description") or "").strip(),
+            "description": description or (a.get("description") or "").strip(),
         }
         for a in agenda_items
         if (a.get("agenda") or "").strip()
@@ -141,7 +144,7 @@ async def create_task(args: dict, *, session: AsyncSession, user_id: uuid.UUID) 
         action_items = await repo.get_mom_action_items(session, mid)
         source = "mom"
 
-    tasks = build_task_items(action_items)
+    tasks = build_task_items(action_items, description=(args.get("description") or "").strip())
     assignee = (args.get("assignee") or "").strip()
     if assignee:
         tasks = [t for t in tasks if assignee_matches(assignee, t.get("assignee") or "")]
