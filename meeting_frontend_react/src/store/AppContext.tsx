@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -38,7 +39,7 @@ interface AppState {
   toggleSidebar: () => void;
   lang: Lang;
   setLang: (l: Lang) => void;
-  t: (key: StringKey) => string;
+  t: (key: StringKey, vars?: Record<string, string | number>) => string;
 
   // Per-pane status banners — split so MoM-related ops show in MoMPane
   // (not the pane the button lives in).
@@ -57,6 +58,13 @@ interface AppState {
 
   /** Async confirm — returns true if user clicked confirm, false otherwise. */
   confirm: (opts: ConfirmOpts) => Promise<boolean>;
+
+  // Per-recording generation tracking — lifted to context so the UI shows
+  // "Đang tạo…" + disables the button even after user switches away and
+  // comes back. Backend may still be running while FE forgot it locally.
+  generatingRecordings: Set<string>;
+  markGeneratingRecording: (recordingId: string) => void;
+  unmarkGeneratingRecording: (recordingId: string) => void;
 }
 
 const AppContext = createContext<AppState | null>(null);
@@ -67,6 +75,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
   const [currentMeeting, setCurrentMeeting] = useState<MeetingDetail | null>(null);
   const [currentRecordingId, setCurrentRecordingId] = useState<string | null>(null);
+
+  // Set of recording ids whose MoM/clean is being generated in the background.
+  // Survives recording-switch — when user comes back, UI re-shows "Đang tạo…".
+  const [generatingRecordings, setGeneratingRecordings] = useState<Set<string>>(new Set());
+  const markGeneratingRecording = useCallback((rid: string) => {
+    setGeneratingRecordings((prev) => {
+      const next = new Set(prev);
+      next.add(rid);
+      return next;
+    });
+  }, []);
+  const unmarkGeneratingRecording = useCallback((rid: string) => {
+    setGeneratingRecordings((prev) => {
+      const next = new Set(prev);
+      next.delete(rid);
+      return next;
+    });
+  }, []);
+
+  // Token to discard stale fetch responses when user switches meeting fast.
+  // Without this, the response of meeting Y can arrive AFTER user switched
+  // back to X, overwriting X's data with Y's. Each fetch bumps the token;
+  // the response handler aborts if the token moved on.
+  const meetingFetchTokenRef = useRef(0);
+
+  // Always-fresh mirror of currentMeetingId. Updated SYNCHRONOUSLY by
+  // selectMeeting (not via useEffect) because effects fire async after
+  // render, leaving a microsecond gap where the ref is stale. A background
+  // reloadCurrentMeeting() resolving inside that gap would read the old id
+  // and fetch+commit the wrong project's data — exactly the bug where GIP's
+  // view shows AI Innovation's recordings.
+  const currentMeetingIdRef = useRef(currentMeetingId);
 
   const reloadMeetings = useCallback(async () => {
     setMeetingsLoading(true);
@@ -81,27 +121,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reloadCurrentMeeting = useCallback(async () => {
-    if (!currentMeetingId) {
+    // Read LATEST meeting id via ref, not the value captured when this
+    // callback was first created. Background callers (handleGenerateMom
+    // completion → reloadCurrentMeeting()) ran in a render when meetingId
+    // was X; by the time gen finishes, user is on Y. We don't want to
+    // refetch X and overwrite Y. If user has already switched away, skip
+    // the reload entirely — the current meeting's data is unrelated.
+    const targetId = currentMeetingIdRef.current;
+    if (!targetId) {
       setCurrentMeeting(null);
       return;
     }
+    const token = ++meetingFetchTokenRef.current;
     try {
-      const detail = await api.meetings.get(currentMeetingId);
+      const detail = await api.meetings.get(targetId);
+      // Triple-guard: token bumped → newer fetch in flight, ref changed →
+      // user moved away, response id mismatch → backend returned wrong row.
+      // Any of these means committing this data would corrupt the view.
+      if (meetingFetchTokenRef.current !== token) return;
+      if (currentMeetingIdRef.current !== targetId) return;
+      if (detail.id !== currentMeetingIdRef.current) return;
       setCurrentMeeting(detail);
     } catch (e) {
       console.error("Failed to load meeting detail:", e);
     }
-  }, [currentMeetingId]);
+  }, []);
 
   const selectMeeting = useCallback(async (id: string | null) => {
+    // CRITICAL: update ref SYNC before any await. Async reloadCurrentMeeting
+    // callers resolving right after the click must see the new id immediately,
+    // otherwise they'll fetch the OLD project and clobber the new one.
+    currentMeetingIdRef.current = id;
     setCurrentMeetingId(id);
     setCurrentRecordingId(null);
+    // Clear stale detail IMMEDIATELY so the sidebar doesn't render the
+    // previous meeting's recordings under the newly-clicked meeting's slot
+    // during the ~100ms before the fetch resolves. Sidebar will show its
+    // "Đang tải…" / empty state until detail lands.
+    setCurrentMeeting(null);
     if (!id) {
-      setCurrentMeeting(null);
       return;
     }
+    const token = ++meetingFetchTokenRef.current;
     try {
       const detail = await api.meetings.get(id);
+      // User clicked another meeting between fire and response — discard.
+      if (meetingFetchTokenRef.current !== token) return;
+      if (currentMeetingIdRef.current !== id) return;
       setCurrentMeeting(detail);
     } catch (e) {
       console.error("Failed to load meeting detail:", e);
@@ -165,7 +231,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
   const t = useCallback(
-    (key: StringKey) => (STRINGS[lang] as Record<string, string>)[key] || key,
+    (key: StringKey, vars?: Record<string, string | number>) => {
+      const raw = (STRINGS[lang] as Record<string, string>)[key] || key;
+      if (!vars) return raw;
+      // {name} → vars.name. Unmatched placeholders are left as-is so missing
+      // keys are visible during development.
+      return raw.replace(/\{(\w+)\}/g, (m, k) =>
+        vars[k] !== undefined ? String(vars[k]) : m,
+      );
+    },
     [lang],
   );
 
@@ -220,6 +294,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     freshProjectSummary,
     setProjectSummary,
     confirm,
+    generatingRecordings,
+    markGeneratingRecording,
+    unmarkGeneratingRecording,
   };
 
   return (
@@ -232,6 +309,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         confirmLabel={confirmState?.confirmLabel}
         cancelLabel={confirmState?.cancelLabel}
         danger={confirmState?.danger}
+        accent={confirmState?.accent}
         onConfirm={() => {
           confirmState?.resolve(true);
           setConfirmState(null);

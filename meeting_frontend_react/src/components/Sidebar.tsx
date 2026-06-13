@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store/AppContext";
 import { api } from "../api/client";
+import { PromptDialog } from "./PromptDialog";
 
 export function Sidebar() {
   const {
@@ -27,12 +28,17 @@ export function Sidebar() {
   // Inline rename state (project)
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  // Centered modal for new-project input (replaces native window.prompt).
+  const [creatingProject, setCreatingProject] = useState(false);
 
-  async function handleNewProject() {
-    const title = window.prompt(t("prompt.newProjectTitle"))?.trim();
-    if (!title) return;
+  function startNewProject() {
+    setCreatingProject(true);
+  }
+  async function commitNewProject(title: string) {
+    setCreatingProject(false);
+    if (!title.trim()) return;
     try {
-      const m = await api.meetings.create({ title });
+      const m = await api.meetings.create({ title: title.trim() });
       await reloadMeetings();
       await selectMeeting(m.id);
       setExpanded((s) => new Set(s).add(m.id));
@@ -166,7 +172,8 @@ export function Sidebar() {
         <button
           className="btn btn-primary btn-sm sidebar-new-btn"
           type="button"
-          onClick={handleNewProject}
+          onClick={startNewProject}
+          disabled={creatingProject}
         >
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -175,6 +182,14 @@ export function Sidebar() {
           {t("sidebar.newProject")}
         </button>
       </div>
+
+      <PromptDialog
+        open={creatingProject}
+        title={t("prompt.newProjectModalTitle")}
+        placeholder={t("prompt.newProjectTitle")}
+        onConfirm={commitNewProject}
+        onCancel={() => setCreatingProject(false)}
+      />
 
       <div className="sidebar-body">
         <div className="sidebar-section-label">{t("sidebar.recentProjects")}</div>
@@ -241,12 +256,35 @@ export function Sidebar() {
                       />
                     ) : (
                       <>
-                        <div className="sidebar-meeting-title">
-                          {m.is_pinned && <span style={{ marginRight: 4 }}>📌</span>}
-                          {m.title || t("sidebar.untitledProject")}
+                        <div
+                          className="sidebar-meeting-title"
+                          style={{ display: "flex", alignItems: "center", gap: 6 }}
+                        >
+                          {m.is_pinned && (
+                            <svg
+                              width="11"
+                              height="11"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="var(--accent)"
+                              strokeWidth="2.4"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              style={{ flexShrink: 0 }}
+                              aria-label="Pinned"
+                            >
+                              <line x1="12" y1="17" x2="12" y2="22" />
+                              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                            </svg>
+                          )}
+                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {m.title || t("sidebar.untitledProject")}
+                          </span>
                         </div>
                         <div className="sidebar-meeting-meta">
-                          {m.date || "—"}
+                          {/* Project no longer has its own date (moved to
+                              recordings in migration 0012). Show placeholder. */}
+                          —
                           {m.has_summary && (
                             <span
                               className="sidebar-meeting-badge"

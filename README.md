@@ -50,7 +50,7 @@ flowchart TD
     RS --> GM
     EDT -->|preferred| GM[Click 'Biên bản phiên này']
 
-    GM -->|POST /recordings/{id}/generate-mom| LG[🧠 MomGraph 4 nodes]
+    GM -->|"POST /recordings/{id}/generate-mom"| LG[🧠 MomGraph 4 nodes]
     LG --> N1[load_transcript<br/>edited_text > raw]
     N1 --> N2[read_memory<br/>hybrid retrieval]
     N2 --> N3[generate_mom<br/>Qwen3-8B map-reduce]
@@ -85,7 +85,7 @@ flowchart TD
 
 ---
 
-## 🚀 Cài đặt & chạy
+## Cài đặt & chạy
 
 ### 1. Yêu cầu
 
@@ -95,15 +95,26 @@ flowchart TD
 - Browser hiện đại (Chrome/Firefox/Edge)
 - VNG Cloud MaaS API key HOẶC self-hosted Qwen3 + bge-m3
 
-### 2. Clone & install backend
+### 2. Clone & install backend (Python libs)
 
 ```bash
 git clone <repo-url>
 cd mee-meeting-agent
 
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python -m venv venv                       # tên venv chuẩn của repo là `venv` (KHÔNG phải .venv)
+venv/bin/pip install --upgrade pip
+venv/bin/pip install -r requirements.txt
+
+# BẮT BUỘC: psycopg3 binary cho LangGraph checkpointer (Postgres).
+# Thiếu bước này → server crash: "ImportError: no pq wrapper available / libpq not found".
+venv/bin/pip install "psycopg[binary]"
 ```
+
+> **Lưu ý venv:** mọi lệnh trong README này dùng `venv/bin/...`. Một số script/tài liệu cũ ghi `.venv` —
+> repo đang dùng `venv`. Đừng commit thư mục `venv/` (đã gitignore; commit nhầm → push 50MB → lỗi HTTP 413).
+>
+> **Nếu `psycopg[binary]` không có wheel cho máy bạn**, cài libpq hệ thống thay thế:
+> `sudo apt-get install -y libpq5` (Debian/Ubuntu) hoặc `brew install libpq` (macOS).
 
 ### 3. Cấu hình `.env`
 
@@ -167,17 +178,23 @@ Server khởi động:
 - **HTTP API** ở `http://localhost:8001`
 - **WebSocket transcription** ở `ws://localhost:9091`
 
-### 6. Run React frontend (dev mode, recommended)
+### 6. Run React frontend — UI (cài package Node)
+
+Yêu cầu **Node.js ≥ 18** (kiểm tra: `node -v`). Lần đầu phải `npm install` để tải toàn bộ
+package UI (React 18, Vite, TipTap, …) vào `node_modules/` — chỉ cần chạy lại khi `package.json` đổi.
 
 ```bash
 cd meeting_frontend_react
-npm install
-npm run dev
+npm install        # cài dependencies UI (lần đầu, hoặc khi package.json thay đổi)
+npm run dev        # chạy Vite dev server
 ```
 
 Vite dev server ở `http://localhost:5173`. Proxy `/api` → backend `:8001`, `/ws` → `:9091`.
 
 Build cho production: `npm run build` → `dist/`.
+
+> **Lỗi npm thường gặp:** nếu `npm install` báo xung đột peer-deps → thử `npm install --legacy-peer-deps`.
+> Đừng commit `node_modules/` (đã gitignore). Backend phải chạy trước (`:8001`) thì proxy `/api` mới hoạt động.
 
 Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8001/`.
 
@@ -194,7 +211,7 @@ Server expose `/v1/audio/transcriptions` OpenAI-compatible. Update `WHISPER_BASE
 
 ---
 
-## 🎯 Cách dùng (User flow)
+## Cách dùng (User flow)
 
 ### A. Tạo project + phiên đầu tiên
 
@@ -370,7 +387,7 @@ mee-meeting-agent/
 
 ---
 
-## 🧪 Test workflow nhanh
+## Test workflow nhanh
 
 ```bash
 # Terminal 1: backend

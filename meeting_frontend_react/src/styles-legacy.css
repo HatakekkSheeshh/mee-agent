@@ -47,27 +47,32 @@
 }
 
 [data-theme="light"] {
-    --bg:            #fcfcfc;
-    --bg-2:          #f8f8f8;
+    /* Pink "blush" palette — tuned for visible-but-not-loud. A touch
+     * more saturation than the cream variant so UI elements have enough
+     * contrast to read, without going back to the saturated original. */
+    --bg:            #fdf2f4;
+    --bg-2:          #fae7eb;
     --surface:       #ffffff;
-    --surface-2:     #f4f4f5;
-    --surface-3:     #ebebed;
-    --hover:         #e2e2e5;
+    --surface-2:     #fbedef;
+    --surface-3:     #fae7eb;
+    --hover:         #f5d8df;
 
-    --text:          #18181b;
-    --text-2:        #3f3f46;
-    --text-mute:     #65656b;
-    --text-faint:    #a1a1aa;
+    --text:          #2d1b1f;
+    --text-2:        #4a2a31;
+    --text-mute:     #7d5862;
+    --text-faint:    #b5919a;
 
-    --border:        rgba(0, 0, 0, 0.06);
-    --border-2:      rgba(0, 0, 0, 0.10);
-    --border-3:      rgba(0, 0, 0, 0.18);
+    --border:        rgba(150, 50, 70, 0.09);
+    --border-2:      rgba(150, 50, 70, 0.14);
+    --border-3:      rgba(150, 50, 70, 0.20);
 
-    --accent:        #079669;
-    --accent-h:      #08966c;
-    --accent-deep:   #047857;
-    --accent-soft:   rgba(7, 150, 105, 0.08);
-    --accent-glow:   rgba(7, 150, 105, 0.10);
+    /* Light theme uses a muted rose — pairs with the pink page without
+     * shouting. Dark theme keeps the brand green (see :root). */
+    --accent:        #ea7080;
+    --accent-h:      #f08a98;
+    --accent-deep:   #a8485a;
+    --accent-soft:   rgba(234, 112, 128, 0.11);
+    --accent-glow:   rgba(234, 112, 128, 0.26);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -92,14 +97,50 @@ body::before {
     position: fixed;
     inset: 0;
     background:
-        radial-gradient(900px 480px at 50% -120px, var(--accent-glow), transparent 65%),
+        radial-gradient(900px 140px at 50% 40px, var(--accent-glow), transparent 70%),
         radial-gradient(600px 400px at 100% 100%, rgba(0,232,155,0.04), transparent 70%);
     pointer-events: none;
     z-index: 0;
     opacity: 1;
     transition: opacity var(--dur) var(--ease);
 }
-[data-theme="light"] body::before { opacity: 0.6; }
+/* In light theme, the green radial glow stays visible (user wants the
+ * green hint under the header). Bump opacity slightly so it shows
+ * against the pink background — pink + green = high chroma but easy to
+ * tone down via opacity if it feels loud. */
+[data-theme="light"] .topbar {
+    background: #ffffff;
+    border-color: rgba(150, 50, 70, 0.14);
+    box-shadow: 0 8px 22px -12px rgba(120, 30, 50, 0.18), 0 1px 2px rgba(120, 30, 50, 0.05);
+}
+[data-theme="light"] body::before { opacity: 1; }
+[data-theme="light"] body::before {
+    background:
+        radial-gradient(1100px 160px at 50% 40px, var(--accent-glow), transparent 70%),
+        radial-gradient(600px 400px at 100% 100%, rgba(234,112,128,0.06), transparent 70%);
+}
+
+/* Light-theme refinements for the recording list:
+ * - Selected row text → deeper green for legibility on the pink surface.
+ * - Selected row background → soft light-green tint instead of the pale pink
+ *   that blends into the sidebar (user calls this the "sweep").
+ * - Hover sweep stays in the same green family but even lighter so the
+ *   active row remains the visual anchor. */
+[data-theme="light"] .sidebar-recording.active {
+    background: rgba(234, 112, 128, 0.12);
+    color: var(--accent-deep);
+    border-left-color: var(--accent-deep);
+}
+[data-theme="light"] .sidebar-recording.active .rec-label {
+    color: var(--accent-deep);
+    font-weight: 600;
+}
+[data-theme="light"] .sidebar-recording:hover {
+    background: rgba(234, 112, 128, 0.06);
+}
+[data-theme="light"] .sidebar-recording.active:hover {
+    background: rgba(234, 112, 128, 0.16);
+}
 
 .app { position: relative; z-index: 1; }
 
@@ -110,6 +151,7 @@ button, input, textarea, select {
 }
 button { background: none; border: none; cursor: pointer; outline: none; }
 ::selection { background: var(--accent); color: #000; }
+[data-theme="light"] ::selection { background: rgba(234, 112, 128, 0.22); color: var(--text); }
 
 /* ══════════════════════════════════════════════════════════════
    App shell
@@ -132,11 +174,12 @@ button { background: none; border: none; cursor: pointer; outline: none; }
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    padding: 0 18px;
-    border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--bg) 80%, transparent);
-    backdrop-filter: blur(14px) saturate(120%);
-    -webkit-backdrop-filter: blur(14px) saturate(120%);
+    padding: 0 20px;
+    margin: 12px 16px 6px;
+    border: 1px solid var(--border-2);
+    border-radius: 9999px;
+    background: var(--surface);
+    box-shadow: 0 6px 20px -10px rgba(0, 0, 0, 0.22), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
     z-index: 50;
     position: relative;
 }
@@ -576,14 +619,22 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 
 .pane-header {
     flex-shrink: 0;
-    min-height: 48px;
-    padding: 8px 20px;
+    min-height: 44px;
+    padding: 6px 16px;
+    margin: 10px 12px 4px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
+    border: 1px solid var(--border-2);
+    border-radius: 9999px;
+    background: var(--surface);
+    box-shadow: 0 4px 14px -10px rgba(0, 0, 0, 0.18);
     gap: 10px;
+}
+[data-theme="light"] .pane-header {
+    background: #ffffff;
+    border-color: rgba(150, 50, 70, 0.12);
+    box-shadow: 0 6px 16px -12px rgba(120, 30, 50, 0.16), 0 1px 2px rgba(120, 30, 50, 0.04);
 }
 .pane-title {
     font-family: var(--font-sans);
@@ -652,7 +703,7 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 .transcript-box:hover { border-color: var(--border-2); }
-.transcript-box:focus { border-color: var(--border-3); background: var(--bg-2); }
+.transcript-box:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
 .transcript-box::placeholder { color: var(--text-faint); }
 
 .pane-footer {
@@ -1423,6 +1474,74 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 }
 .pending-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
+/* create_task GATE-1 editable reconcile template card */
+.task-field { display: block; margin-bottom: 12px; }
+.task-label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--text-mute);
+    margin-bottom: 4px;
+}
+.task-project { width: 100%; min-height: 34px; box-sizing: border-box; }
+.task-groups { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.task-group {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    background: var(--bg);
+}
+.task-group-name {
+    width: 100%;
+    min-height: 32px;
+    box-sizing: border-box;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+.task-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.task-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+}
+.task-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.task-mini { display: flex; flex-direction: column; gap: 2px; }
+.task-mini-label {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    letter-spacing: 0.01em;
+}
+.task-subject, .task-due, .task-desc {
+    width: 100%;
+    min-height: 30px;
+    box-sizing: border-box;
+}
+.task-reason { width: 100%; box-sizing: border-box; resize: vertical; min-height: 38px; }
+.task-remove {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    margin-top: 4px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-mute);
+    cursor: pointer;
+    line-height: 1;
+}
+.task-remove:hover:not(:disabled) { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
+.task-remove:disabled { opacity: 0.5; cursor: default; }
+.task-empty { color: var(--text-mute); margin-bottom: 12px; }
+
 .chat-input-wrap {
     padding: 14px 16px 16px;
     display: flex;
@@ -1510,6 +1629,15 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .btn-primary:hover:not(:disabled) {
     background: color-mix(in srgb, var(--text) 90%, var(--bg));
     border-color: color-mix(in srgb, var(--text) 90%, var(--bg));
+}
+.btn-accent {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+}
+.btn-accent:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 88%, var(--bg));
+    border-color: color-mix(in srgb, var(--accent) 88%, var(--bg));
 }
 
 .btn-outline {
@@ -1744,17 +1872,25 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 
 /* Scrollbar */
 .pane-content::-webkit-scrollbar,
-.chat-thread::-webkit-scrollbar { width: 6px; }
+.chat-thread::-webkit-scrollbar,
+.transcript-box::-webkit-scrollbar { width: 6px; }
 .pane-content::-webkit-scrollbar-track,
-.chat-thread::-webkit-scrollbar-track { background: transparent; }
+.chat-thread::-webkit-scrollbar-track,
+.transcript-box::-webkit-scrollbar-track { background: transparent; }
 .pane-content::-webkit-scrollbar-thumb,
-.chat-thread::-webkit-scrollbar-thumb {
+.chat-thread::-webkit-scrollbar-thumb,
+.transcript-box::-webkit-scrollbar-thumb {
     background: var(--border-2);
     border-radius: 999px;
 }
 .pane-content::-webkit-scrollbar-thumb:hover,
-.chat-thread::-webkit-scrollbar-thumb:hover {
+.chat-thread::-webkit-scrollbar-thumb:hover,
+.transcript-box::-webkit-scrollbar-thumb:hover {
     background: var(--border-3);
+}
+.transcript-box {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -2027,8 +2163,9 @@ body.project-overview-mode .resizer { display: none; }
 .mee-modal-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(3px);
+    /* No backdrop-filter: blur re-rasterizes every frame while anything
+       animates behind the modal (constant jank); the dim alone is enough. */
+    background: rgba(0, 0, 0, 0.62);
 }
 .mee-modal-card {
     position: relative;
@@ -2170,3 +2307,587 @@ select.mee-modal-input {
 .mee-toast.error {
     border-left: 2px solid var(--danger);
 }
+
+/* ─── Chat activity trace + message affordances (streaming UX) ─────────── */
+.msg-note {
+    align-self: center;
+    max-width: 90%;
+    padding: 2px 10px;
+    font-size: 0.78rem;
+    color: var(--text-3, #8a8f98);
+    background: transparent;
+    font-style: italic;
+}
+.chat-activity { display: flex; flex-direction: column; gap: 4px; }
+.activity-step {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.82rem;
+    color: var(--text-2, #aab0b8);
+}
+.activity-step.activity-live { color: var(--text, #e8eaed); }
+.activity-check { color: var(--green, #34d399); font-size: 0.75rem; }
+.activity-spinner {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: activity-spin 0.7s linear infinite;
+}
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+.chat-activity-collapsed { margin-bottom: 6px; }
+.chat-activity-collapsed summary {
+    cursor: pointer;
+    color: var(--text-3, #8a8f98);
+    user-select: none;
+}
+.chat-activity-collapsed[open] summary { margin-bottom: 4px; }
+
+.msg-agent { position: relative; }
+.msg-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-3, #8a8f98);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.12s ease;
+}
+.msg-agent:hover .msg-copy { opacity: 1; }
+.msg-copy:hover { color: var(--text, #e8eaed); }
+.msg-copy svg { width: 100%; height: 100%; }
+
+.chat-stop svg { width: 16px; height: 16px; }
+
+.action-args { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.action-arg-input { width: 100%; }
+
+/* ─── Pending-card magnify (zoom into a centered overlay) ─────────────── */
+.card-zoom { position: relative; }
+.card-zoom-host { position: relative; }
+.card-zoom-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    padding: 4px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-3, #8a8f98);
+    cursor: pointer;
+    z-index: 2;
+    transition: color 0.12s ease;
+}
+.card-zoom-btn:hover { color: var(--text, #e8eaed); }
+.card-zoom-btn svg { width: 100%; height: 100%; }
+/* No backdrop-filter here — same per-frame re-rasterization jank as the old
+   modal blur; the dim alone is enough. */
+.card-zoom-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    z-index: 980;
+}
+.card-zoom-open .card-zoom-host {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 990;
+    width: min(720px, 92vw);
+    max-height: 86vh;
+    display: flex;
+}
+.card-zoom-open .card-zoom-host > .msg {
+    width: 100%;
+    max-width: none;
+    max-height: 86vh;
+    overflow: auto;
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   Responsive layout — scale gracefully when viewport shrinks
+   (split-screen, half-width browser window, tablets)
+
+   Strategy:
+     1. Sidebar collapses to icon-only / hidden at narrower widths
+     2. Workspace panes stack vertically below a breakpoint
+     3. Chat slide-in becomes full-overlay instead of inline column
+     4. Topbar wraps / hides non-essential pills
+
+   Breakpoints (mobile-first naming):
+     md  ≤ 1100px  — half-screen on a 14" laptop
+     sm  ≤ 800px   — phone landscape / very narrow window
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── md (≤1100px): narrow sidebar, smaller paddings, tighter type ── */
+@media (max-width: 1100px) {
+    /* Sidebar narrower so workspace gets more room */
+    body.sidebar-open { --sidebar-w: 220px; }
+
+    /* Trim topbar pills + tighten padding so things stop overflowing */
+    .topbar { padding: 0 12px; gap: 6px; }
+    .meeting-switcher { max-width: 180px; }
+
+    /* Detail-panel grid was 1fr 1fr — half-screen makes labels
+       collide with inputs. Stack to single column. */
+    .details-grid { grid-template-columns: 1fr; }
+
+    /* MoM action-items row 130/1fr/100 was too tight — drop pic column */
+    .action-items-table { grid-template-columns: 1fr 100px; }
+    .action-pic { display: none; }
+}
+
+/* ── sm (≤800px): sidebar overlay mode, panes stack vertically ──── */
+@media (max-width: 800px) {
+    /* Sidebar becomes an overlay drawer; main content stays full-width */
+    body.sidebar-open .app,
+    body.sidebar-collapsed .app {
+        grid-template-columns: 0 1fr;
+    }
+    .sidebar {
+        position: fixed;
+        top: var(--topbar-h);
+        bottom: 0;
+        left: 0;
+        width: 280px;
+        z-index: 50;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+        transform: translateX(-100%);
+        transition: transform var(--dur) var(--ease);
+    }
+    body.sidebar-open .sidebar { transform: translateX(0); }
+
+    /* Workspace stacks: Raw above, Clean/MoM below.
+       Resizer becomes horizontal. */
+    .workspace {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: 1fr 1px 1fr;
+    }
+    .workspace.chat-open {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: 1fr 1px 1fr 1px 40vh;
+    }
+    .resizer { cursor: row-resize; height: 1px; }
+    body.resizing, body.resizing * { cursor: row-resize !important; }
+
+    /* Topbar — keep only essentials (logo + project switch + invite) */
+    .topbar { padding: 0 8px; }
+    .tb-sep, .ws-pill { display: none; }
+    .brand-text { display: none; }
+    .meeting-switcher { max-width: 140px; font-size: 13px; }
+
+    /* Detail panel can't be 2-col on phones */
+    .details-grid { grid-template-columns: 1fr; }
+
+    /* Modal dialogs — full-width on small screens */
+    .mee-modal-card { min-width: 0 !important; width: calc(100vw - 32px); }
+
+    /* MoM meta table — labels shrink */
+    .mom-meta-table td:first-child { width: 100px; font-size: 12px; }
+}
+
+/* ── Generic helpers: prevent horizontal scroll when text overflows ── */
+.sidebar-meeting-title,
+.meeting-switcher,
+.tb-status,
+.action-task {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Long URLs / IDs in details — wrap instead of forcing scroll */
+.mom-section pre,
+.mom-section code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* All flex/grid children should be allowed to shrink past content size.
+   Without min-width:0 they refuse to shrink → cause overflow + truncation. */
+.pane > *,
+.workspace > *,
+.app > * {
+    min-width: 0;
+}
+
+/* ══ Notta-style Clean view ═══════════════════════════════════════════
+ * Layout: toolbar (top) + scrollable segments list + sticky audio player.
+ * Each segment row has timestamp gutter + main column (speaker chip + text).
+ */
+/* When NottaCleanView is rendered inside .transcript-clean, that container
+ * MUST NOT scroll — internal .notta-list is the only scroller. Without
+ * this, the audio player floats with content instead of pinning to the
+ * pane bottom. */
+.transcript-clean:has(.notta-view) {
+    overflow: hidden;
+    padding: 12px 16px 0;
+    display: flex;
+    flex-direction: column;
+}
+.notta-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.notta-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 4px 12px;
+    border-bottom: 1px dashed var(--border);
+    margin-bottom: 10px;
+}
+.notta-toolbar-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+}
+.notta-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+.notta-row {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 14px;
+    padding: 10px 8px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    position: relative;
+}
+.notta-row:hover {
+    background: var(--surface-2, rgba(255,255,255,0.025));
+}
+.notta-row.active {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+.notta-row.active .notta-row-text {
+    color: var(--text);
+    font-weight: 500;
+}
+.notta-row-ts {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-faint);
+    padding-top: 6px;
+    text-align: right;
+}
+.notta-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.notta-row-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.notta-row-text {
+    color: var(--text-muted);
+    line-height: 1.6;
+    font-size: 14px;
+    word-break: break-word;
+}
+/* Each word is its own span so we can highlight the one currentMs lands in.
+ * Active word gets a subtle yellow background + green underline so it stands
+ * out without screaming. */
+.notta-word {
+    display: inline;
+    border-radius: 3px;
+    padding: 0 1px;
+    transition: background-color 80ms linear, color 80ms linear;
+}
+.notta-word.active {
+    background: var(--accent);
+    color: var(--surface);
+    font-weight: 600;
+}
+
+/* Speaker chip (clickable to open dropdown) */
+.notta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px 3px 3px;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    cursor: pointer;
+    color: white;
+    font-weight: 600;
+    font-size: 12.5px;
+    transition: filter var(--dur) var(--ease);
+}
+.notta-chip:hover {
+    filter: brightness(1.1);
+}
+.notta-chip-initials {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.25);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+}
+.notta-chip-name {
+    color: white;
+    letter-spacing: 0.01em;
+}
+.notta-chip-caret {
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+/* Dropdown: search + member suggestions */
+.notta-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 100;
+    width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.notta-dropdown-search {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 13px;
+}
+.notta-dropdown-search:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.notta-dropdown-section-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 4px 6px 2px;
+    letter-spacing: 0.05em;
+}
+/* IMPORTANT: NO overflow here. The submenu uses position:absolute floating
+ * to the right; any overflow value (auto/hidden/scroll) on this container
+ * clips both axes → submenu vanishes. If list grows long, the outer page
+ * scrolls or the dropdown card itself accommodates (max ~10-15 members in
+ * practice). */
+.notta-dropdown-list {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+}
+/* Member row in dropdown. Hovering reveals a floating submenu on the right
+ * (matches Notta UI from user's reference screenshot). The submenu is
+ * absolutely positioned so it appears outside the dropdown card. */
+.notta-dropdown-member {
+    position: relative;
+    border-radius: var(--r-md);
+    margin-bottom: 1px;
+    transition: background var(--dur) var(--ease);
+}
+.notta-dropdown-member:hover,
+.notta-dropdown-member:focus-within {
+    background: var(--surface-2, rgba(255,255,255,0.05));
+}
+.notta-dropdown-member.current .notta-dropdown-name {
+    color: var(--accent);
+    font-weight: 600;
+}
+.notta-dropdown-member.guest .notta-dropdown-name {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.notta-dropdown-member-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: default;
+}
+.notta-dropdown-caret {
+    margin-left: auto;
+    color: var(--text-faint);
+    font-size: 14px;
+    line-height: 1;
+}
+/* Submenu is rendered via React portal at document.body (see component).
+ * Positioned with `position: fixed` so ancestor overflow on the segments
+ * list / dropdown card never hides it. Top/left set inline from the
+ * hovered member's getBoundingClientRect. */
+.notta-submenu-portal {
+    position: fixed;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 1000;
+}
+.notta-dropdown-action {
+    background: transparent;
+    border: none;
+    border-radius: var(--r-md);
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    text-align: left;
+    white-space: nowrap;
+}
+.notta-dropdown-action:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.notta-dropdown-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.notta-dropdown-name {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.notta-dropdown-badge {
+    font-size: 10px;
+    opacity: 0.8;
+}
+.notta-dropdown-check {
+    color: var(--accent);
+    font-weight: 700;
+}
+.notta-dropdown-applyall {
+    font-size: 10px;
+    color: var(--text-faint);
+    opacity: 0.7;
+}
+.notta-dropdown-item:hover .notta-dropdown-applyall {
+    opacity: 1;
+}
+.notta-dropdown-empty {
+    padding: 10px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 12px;
+}
+
+/* Audio player pinned at bottom of pane (flex-end, doesn't scroll) */
+.notta-player {
+    flex-shrink: 0;
+    margin-top: 8px;
+    padding: 10px 14px 12px;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.notta-player-error {
+    font-size: 11.5px;
+    color: var(--warning, #f59e0b);
+    padding: 4px 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border-radius: var(--r-sm);
+}
+.notta-player-slider {
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.notta-player-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+}
+.notta-player-rate {
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.notta-player-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.notta-player-btn:hover {
+    background: var(--surface);
+    border-color: var(--border-2);
+}
+.notta-player-play {
+    width: 40px;
+    height: 40px;
+    background: var(--accent);
+    color: var(--surface);
+    font-size: 14px;
+    border-color: var(--accent);
+}
+.notta-player-play:hover {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+.notta-player-time {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-left: 8px;
+}
+
+
