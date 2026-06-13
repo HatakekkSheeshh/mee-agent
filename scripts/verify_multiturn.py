@@ -106,6 +106,20 @@ async def repro_create_task(session, cp, *, uid, meeting_id, label) -> bool:
     return ok
 
 
+async def _resolve_meeting(session, user, arg: str) -> str:
+    """Accept either a meeting UUID or a title; resolve titles to an id."""
+    import uuid
+    try:
+        uuid.UUID(arg)
+        return arg
+    except ValueError:
+        matches = await repo.find_meetings_by_title(session, user.id, arg)
+        if not matches:
+            raise SystemExit(f"No meeting matches title {arg!r} for the dev user")
+        print(f"  resolved meeting {arg!r} → {matches[0].id} ({matches[0].title!r})")
+        return str(matches[0].id)
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--meeting", default=None, help="meeting_id with an agenda-only recording (repro #2)")
@@ -123,10 +137,11 @@ async def main() -> int:
             uid = str(user.id)
             results.append(("email-merge", await repro_email(session, cp, uid=uid)))
             if args.meeting:
+                mid = await _resolve_meeting(session, user, args.meeting)
                 results.append(
                     ("create_task-accumulation",
                      await repro_create_task(session, cp, uid=uid,
-                                             meeting_id=args.meeting, label=args.label))
+                                             meeting_id=mid, label=args.label))
                 )
     finally:
         await close_checkpointer()
