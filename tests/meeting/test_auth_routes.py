@@ -28,3 +28,21 @@ def test_redirect_uri_uses_env_override_when_set(monkeypatch):
 def test_redirect_uri_derives_from_request_without_override(monkeypatch):
     monkeypatch.delenv("MS_REDIRECT_URI", raising=False)
     assert _redirect_uri(_fake_request(scheme="https", netloc="app.example")) == "https://app.example/auth/callback"
+
+
+# ─── voice-enrollment gate (VOICE_ENROLL_OPTIONAL) ──────────────────
+
+from meeting.auth.routes import _enrollment_satisfied
+
+
+def test_enrollment_gate_without_flag(monkeypatch):
+    monkeypatch.delenv("VOICE_ENROLL_OPTIONAL", raising=False)
+    assert _enrollment_satisfied(SimpleNamespace(voice_enrolled=True)) is True
+    assert _enrollment_satisfied(SimpleNamespace(voice_enrolled=False)) is False
+
+
+def test_enrollment_gate_flag_treats_everyone_as_enrolled(monkeypatch):
+    # Deploys without the local pyannote/torch stack set this so login lands on
+    # /app instead of the (unavailable) enrollment flow.
+    monkeypatch.setenv("VOICE_ENROLL_OPTIONAL", "true")
+    assert _enrollment_satisfied(SimpleNamespace(voice_enrolled=False)) is True
