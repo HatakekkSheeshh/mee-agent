@@ -20,10 +20,11 @@ venv/bin/pip install -r requirements.txt
 venv/bin/alembic upgrade head
 venv/bin/alembic revision --autogenerate -m "description"   # new migration
 
-# Run backend — starts BOTH servers: HTTP :8001 and WebSocket :9091
+# Run backend — starts BOTH servers: HTTP :8002 and WebSocket :9091
 venv/bin/python run_meeting.py
 
-# React frontend (recommended) — Vite dev server :5173, proxies /api→:8001, /ws→:9091
+# React frontend (recommended) — Vite dev server :8001, proxies /api+/auth→:8002, /ws→:9091
+# Vite runs on :8001 because that's the host registered as the Azure OAuth callback.
 cd meeting_frontend_react && npm install && npm run dev
 cd meeting_frontend_react && npm run build      # production → dist/
 
@@ -66,7 +67,7 @@ meetings        = a Project  (title, attendees, is_pinned, project_summary_json)
 
 ### Frontends (two of them)
 - `meeting_frontend_react/` — React 18 + TS + Vite + TipTap. **The recommended one.** State in `src/store/AppContext.tsx`, typed API in `src/api/client.ts`, live recording over WebSocket in `src/hooks/useLiveRecording.ts`, i18n VI/EN in `src/i18n.ts`.
-- `meeting_frontend/` — legacy vanilla JS SPA, served directly by FastAPI at `http://localhost:8001/`. Kept as fallback.
+- `meeting_frontend/` — legacy vanilla JS SPA, served directly by FastAPI at `http://localhost:8002/`. Kept as fallback.
 
 ### External AI services (all OpenAI-compatible, configured via `.env`)
 - **STT**: VNG MaaS Whisper, OR self-hosted PhoWhisper+pyannote (`tools/phowhisper-server/`, deploy to an L40 GPU).

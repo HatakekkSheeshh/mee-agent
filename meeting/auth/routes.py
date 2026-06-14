@@ -82,8 +82,18 @@ def _consume_state(state: str) -> bool:
 
 def _redirect_uri(request: Request) -> str:
     """Build the absolute /auth/callback URL Microsoft will redirect to.
-    Honors X-Forwarded-Proto so this works behind a TLS-terminating proxy.
+
+    MS_REDIRECT_URI pins the value to the URL registered in Azure. Required in
+    dev: Vite (:8001) proxies /auth → backend (:8002) with changeOrigin, which
+    rewrites the host to :8002 — so deriving it from the request would produce
+    :8002 and break OAuth's exact-match on the registered :8001 URL.
+
+    Without the override, derive from the request (honors X-Forwarded-* so it
+    still works behind a TLS-terminating proxy in prod).
     """
+    override = os.environ.get("MS_REDIRECT_URI")
+    if override:
+        return override
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.url.netloc
     return f"{scheme}://{host}/auth/callback"

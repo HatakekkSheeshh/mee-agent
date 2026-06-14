@@ -133,6 +133,38 @@ async def test_send_message_builds_jsonrpc_with_api_key():
     assert captured["headers"]["x-api-key"] == KEY
 
 
+async def test_bearer_overrides_authorization_header():
+    """Per-call `bearer` (the logged-in user's OID) drives the Authorization
+    header so pm-agent's direct-oid path receives that user's identity, while
+    the static api_key is no longer what authenticates the request."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        return httpx.Response(200, json=_completed_task())
+
+    client = _make_client(handler)
+    await client.send_message("liệt kê issue", bearer="11111111-2222-3333-4444-555555555555")
+
+    assert captured["headers"]["authorization"] == "Bearer 11111111-2222-3333-4444-555555555555"
+
+
+async def test_no_bearer_keeps_api_key_authorization():
+    """Backward-compatible: without `bearer`, the static api_key still drives
+    both Authorization and X-API-KEY (existing behavior, must not break)."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        return httpx.Response(200, json=_completed_task())
+
+    client = _make_client(handler)
+    await client.send_message("liệt kê issue")
+
+    assert captured["headers"]["authorization"] == f"Bearer {KEY}"
+    assert captured["headers"]["x-api-key"] == KEY
+
+
 async def test_resume_includes_task_id_and_datapart():
     captured: dict = {}
 

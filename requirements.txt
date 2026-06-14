@@ -8,6 +8,7 @@ numpy<2
 openai>=1.30.0
 python-dotenv>=1.0.0
 websockets
+msal>=1.28.0  # real O365 OAuth (Authorization Code flow) for AUTH_PROVIDER=microsoft
 
 # === Database (Phase A) ===
 sqlalchemy[asyncio]>=2.0.30

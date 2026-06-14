@@ -23,10 +23,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from meeting.auth import get_current_user
 from meeting.db import get_session
 from meeting.db import repositories as repo
 from meeting.db.base import AsyncSessionLocal
-from meeting.db.models import PendingAction
+from meeting.db.models import PendingAction, User
 from meeting.graphs import (
     get_checkpointer,
     resume_chat_turn,
@@ -169,9 +170,10 @@ async def _persist_interrupt(
 
 @router.post("/sessions")
 async def create_session(
-    req: SessionCreate, session: AsyncSession = Depends(get_session)
+    req: SessionCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    user = await repo.get_or_create_dev_user(session)
     meeting_uuid = _parse_uuid(req.meeting_id) if req.meeting_id else None
     chat = await repo.create_chat_session(
         session, user_id=user.id, meeting_id=meeting_uuid, title=req.title
@@ -185,8 +187,10 @@ async def create_session(
 
 
 @router.get("/sessions")
-async def list_sessions(session: AsyncSession = Depends(get_session)):
-    user = await repo.get_or_create_dev_user(session)
+async def list_sessions(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     sessions = await repo.list_chat_sessions_for_user(session, user.id)
     return [
         {
@@ -256,6 +260,7 @@ async def send_message(
     session_id: str,
     req: MessageSend,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """
     Send a message → run chat graph.
@@ -270,7 +275,6 @@ async def send_message(
     if not chat:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    user = await repo.get_or_create_dev_user(session)
     checkpointer = get_checkpointer()
 
     result = await run_chat_turn(
@@ -280,6 +284,7 @@ async def send_message(
         meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
         session=session,
         checkpointer=checkpointer,
+        pm_user_oid=user.ms_oid,
     )
 
     if result["status"] == "interrupted":
@@ -301,7 +306,11 @@ def _sse(obj: dict) -> str:
 
 
 @router.post("/sessions/{session_id}/messages/stream")
-async def send_message_stream(session_id: str, req: MessageSend):
+async def send_message_stream(
+    session_id: str,
+    req: MessageSend,
+    user: User = Depends(get_current_user),
+):
     """
     Streaming variant of POST /messages (SSE).
 
@@ -314,6 +323,10 @@ async def send_message_stream(session_id: str, req: MessageSend):
     The blocking /messages endpoint stays as-is (tests + fallback transport).
     """
     sid = _parse_uuid(session_id)
+    # Capture identity as plain values now: `user` is bound to the Depends
+    # session, which is torn down before the StreamingResponse body runs.
+    auth_user_id = user.id
+    pm_user_oid = user.ms_oid
 
     async def gen():
         # Own session: a Depends(get_session) session is torn down BEFORE a
@@ -325,7 +338,9 @@ async def send_message_stream(session_id: str, req: MessageSend):
                 if not chat:
                     yield _sse({"type": "error", "detail": "Session not found"})
                     return
-                user = await repo.get_or_create_dev_user(session)
+                # Re-bind the authenticated user to this generator's own session
+                # (the Depends one is closed) for _persist_interrupt below.
+                user = await session.get(User, auth_user_id)
                 checkpointer = get_checkpointer()
 
                 async for ev in stream_chat_turn(
@@ -335,6 +350,7 @@ async def send_message_stream(session_id: str, req: MessageSend):
                     meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
                     session=session,
                     checkpointer=checkpointer,
+                    pm_user_oid=pm_user_oid,
                 ):
                     if ev.get("type") != "result":
                         yield _sse(ev)
@@ -367,8 +383,10 @@ async def send_message_stream(session_id: str, req: MessageSend):
 # ─── Pending actions (HITL) ───────────────────────────────────────
 
 @router.get("/pending-actions")
-async def list_pending_actions(session: AsyncSession = Depends(get_session)):
-    user = await repo.get_or_create_dev_user(session)
+async def list_pending_actions(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     stmt = (
         select(PendingAction)
         .where(PendingAction.user_id == user.id, PendingAction.status == "pending")
@@ -393,6 +411,7 @@ async def approve_action(
     action_id: str,
     req: ApprovalRequest,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     aid = _parse_uuid(action_id)
     action = await repo.get_pending_action(session, aid)
@@ -427,7 +446,6 @@ async def approve_action(
     # A pm-agent step may interrupt again (need_more_info → need_approval):
     # persist a fresh pending action and surface it like a first-turn interrupt.
     if result["status"] == "interrupted":
-        user = await repo.get_or_create_dev_user(session)
         return await _persist_interrupt(session, action.session_id, user, result)
 
     # Mark as executed
@@ -449,6 +467,7 @@ async def reject_action(
     action_id: str,
     req: RejectionRequest,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     aid = _parse_uuid(action_id)
     action = await repo.get_pending_action(session, aid)
@@ -472,7 +491,6 @@ async def reject_action(
 
     # Rejecting one pm step can still lead to a follow-up prompt — surface it.
     if result["status"] == "interrupted":
-        user = await repo.get_or_create_dev_user(session)
         return await _persist_interrupt(session, action.session_id, user, result)
 
     return {
