@@ -175,7 +175,7 @@ Migrations:
 ```
 
 Server khởi động:
-- **HTTP API** ở `http://localhost:8001`
+- **HTTP API** ở `http://localhost:8002`
 - **WebSocket transcription** ở `ws://localhost:9091`
 
 ### 6. Run React frontend — UI (cài package Node)
@@ -189,14 +189,14 @@ npm install        # cài dependencies UI (lần đầu, hoặc khi package.json
 npm run dev        # chạy Vite dev server
 ```
 
-Vite dev server ở `http://localhost:5173`. Proxy `/api` → backend `:8001`, `/ws` → `:9091`.
+Vite dev server ở `http://localhost:8001` (trùng host callback OAuth đã đăng ký trên Azure). Proxy `/api` + `/auth` → backend `:8002`, `/ws` → `:9091`.
 
 Build cho production: `npm run build` → `dist/`.
 
 > **Lỗi npm thường gặp:** nếu `npm install` báo xung đột peer-deps → thử `npm install --legacy-peer-deps`.
-> Đừng commit `node_modules/` (đã gitignore). Backend phải chạy trước (`:8001`) thì proxy `/api` mới hoạt động.
+> Đừng commit `node_modules/` (đã gitignore). Backend phải chạy trước (`:8002`) thì proxy `/api` mới hoạt động.
 
-Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8001/`.
+Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8002/`.
 
 ### 7. (Optional) Self-host PhoWhisper + pyannote
 
@@ -337,7 +337,7 @@ mee-meeting-agent/
 │
 ├── meeting_frontend_react/           # New React frontend (recommended)
 │   ├── package.json                  # Vite + React 18 + TS + TipTap
-│   ├── vite.config.ts                # Proxy /api → :8001, /ws → :9091
+│   ├── vite.config.ts                # Vite :8001, proxy /api+/auth → :8002, /ws → :9091
 │   ├── public/audioprocessor.js      # AudioWorklet PCM resampler
 │   └── src/
 │       ├── App.tsx

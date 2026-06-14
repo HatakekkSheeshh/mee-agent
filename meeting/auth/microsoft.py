@@ -1,31 +1,61 @@
 """MicrosoftProvider — real O365 OAuth via MSAL.
 
-STUB FOR NOW. When IT grants Azure AD app registration:
-  1. pip install msal
-  2. Set MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT_ID in .env
-  3. Implement the two methods below using msal.ConfidentialClientApplication
-  4. Switch AUTH_PROVIDER=microsoft in .env
+Authorization Code flow against Azure AD:
+  1. get_login_url() → redirect user to login.microsoftonline.com
+  2. Microsoft redirects back to /auth/callback?code=...&state=...
+  3. exchange_code() trades the code for tokens via MSAL, reads the verified
+     id_token_claims to build a UserInfo (email + oid + tid), AND serializes the
+     MSAL token cache (which now holds the refresh token) so the callback can
+     persist it encrypted — that refresh token lets us mint Microsoft Graph
+     access tokens later (see meeting.auth.tokens) to call pm-agent's JWT path.
 
-No other code changes needed — callback, session, voice enrollment all
-work because they consume the same UserInfo dataclass.
+Config (env): MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT_ID. redirect_uri is
+supplied by routes (pinned to MS_REDIRECT_URI). Switch on with
+AUTH_PROVIDER=microsoft.
 
-Reference (MSAL Python docs):
-  https://learn.microsoft.com/en-us/entra/msal/python/
-  https://github.com/Azure-Samples/ms-identity-python-webapp
+Scope is User.Read — MSAL implicitly adds openid/profile/offline_access, so the
+cache gets a refresh token and the access token is a Graph token (what
+pm-agent validates via Graph /me).
 """
 from __future__ import annotations
 
 import os
-from urllib.parse import urlencode
+from typing import Optional
 
 from meeting.auth.base import UserInfo
+
+# MSAL implicitly requests openid/profile/offline_access; User.Read gets us a
+# Graph token (validated by pm-agent's /me call) + a refresh token in the cache.
+SCOPES = ["User.Read"]
+
+
+def _authority(tenant_id: Optional[str] = None) -> str:
+    tid = tenant_id or os.environ.get("MS_TENANT_ID", "common")
+    return f"https://login.microsoftonline.com/{tid}"
+
+
+def build_msal_app(cache=None):
+    """Build a ConfidentialClientApplication bound to an (optional) token cache.
+
+    Used both at login (exchange_code) and later for silent refresh
+    (meeting.auth.tokens) so the same client_id/authority/secret config drives
+    both. Lazy msal import keeps module import cheap.
+    """
+    import msal
+
+    return msal.ConfidentialClientApplication(
+        os.environ["MS_CLIENT_ID"],
+        authority=_authority(),
+        client_credential=os.environ["MS_CLIENT_SECRET"],
+        token_cache=cache,
+    )
 
 
 class MicrosoftProvider:
     name = "microsoft"
     requires_csrf_state = True  # CSRF protection mandatory for real OAuth
 
-    def __init__(self) -> None:
+    def __init__(self, *, msal_app=None) -> None:
         self.client_id = os.environ.get("MS_CLIENT_ID", "")
         self.client_secret = os.environ.get("MS_CLIENT_SECRET", "")
         self.tenant_id = os.environ.get("MS_TENANT_ID", "common")
@@ -34,33 +64,51 @@ class MicrosoftProvider:
                 "MicrosoftProvider needs MS_CLIENT_ID + MS_CLIENT_SECRET env vars. "
                 "Use AUTH_PROVIDER=mock for dev until IT grants Azure AD app."
             )
+        # Injected in tests; in prod each call builds an app bound to its cache.
+        self._injected_app = msal_app
+
+    def _app(self, cache=None):
+        return self._injected_app if self._injected_app is not None else build_msal_app(cache)
 
     def get_login_url(self, state: str, redirect_uri: str) -> str:
-        # Standard Authorization Code flow — when implementing for real,
-        # replace this hand-built URL with msal.ConfidentialClientApplication
-        # .get_authorization_request_url(scopes, state, redirect_uri).
-        params = urlencode({
-            "client_id": self.client_id,
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": "openid email profile User.Read offline_access",
-            "state": state,
-            "response_mode": "query",
-        })
-        return f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/authorize?{params}"
+        return self._app().get_authorization_request_url(
+            SCOPES, state=state, redirect_uri=redirect_uri
+        )
 
     def exchange_code(self, code: str, redirect_uri: str) -> UserInfo:
-        # When implementing:
-        #   1. msal_app.acquire_token_by_authorization_code(code, scopes, redirect_uri)
-        #   2. Decode id_token (validate signature against JWKS at
-        #      https://login.microsoftonline.com/{tenant}/discovery/keys)
-        #   3. Extract claims: email/preferred_username, name, oid, tid
-        #   4. (Optional) Call GET https://graph.microsoft.com/v1.0/me/photo/$value
-        #      for avatar_url
-        #   5. Return UserInfo(email=..., display_name=..., ms_oid=oid,
-        #                      ms_tenant_id=tid, avatar_url=...)
-        raise NotImplementedError(
-            "MicrosoftProvider not implemented yet. Use AUTH_PROVIDER=mock. "
-            "When ready, install msal and complete this method following the "
-            "reference docs at the top of this file."
+        import msal
+
+        cache = msal.SerializableTokenCache()
+        result = self._app(cache).acquire_token_by_authorization_code(
+            code, scopes=SCOPES, redirect_uri=redirect_uri
+        )
+        if not isinstance(result, dict) or "error" in result:
+            detail = ""
+            if isinstance(result, dict):
+                detail = result.get("error_description") or result.get("error") or ""
+            raise ValueError(f"token exchange failed: {detail}".strip())
+
+        claims = result.get("id_token_claims") or {}
+        email = (
+            claims.get("preferred_username")
+            or claims.get("email")
+            or claims.get("upn")
+            or ""
+        ).strip().lower()
+        if not email:
+            raise ValueError("id_token missing email/preferred_username claim")
+
+        oid: Optional[str] = claims.get("oid")
+        tid: Optional[str] = claims.get("tid")
+        name = (claims.get("name") or "").strip() or email.split("@")[0]
+        # Serialize the cache (now holding the refresh token) so the callback
+        # can persist it encrypted. Empty string when nothing was cached
+        # (e.g. injected test app that doesn't populate the cache).
+        token_cache = cache.serialize() if cache.serialize() != "{}" else None
+        return UserInfo(
+            email=email,
+            display_name=name,
+            ms_oid=oid,
+            ms_tenant_id=tid,
+            ms_token_cache=token_cache,
         )

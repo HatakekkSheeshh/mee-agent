@@ -4,7 +4,7 @@ Meeting Note Agent — Main Entry Point
 
 Starts two servers:
 1. WebSocket server (port 9091) — real-time transcription via MaaS
-2. FastAPI HTTP server (port 8001) — web UI + MoM generation API
+2. FastAPI HTTP server (port 8002) — web UI + MoM generation API
 
 Usage:
     python run_meeting.py
@@ -397,7 +397,7 @@ def main():
     parser.add_argument("--maas-key", default=os.getenv("WHISPER_API_KEY", ""))
     parser.add_argument("--maas-model", default=os.getenv("WHISPER_MODEL", "openai/whisper-large-v3"))
     parser.add_argument("--ws-port", type=int, default=9091)
-    parser.add_argument("--http-port", type=int, default=8001)
+    parser.add_argument("--http-port", type=int, default=8002)
     parser.add_argument("--max-clients", type=int, default=4)
     parser.add_argument("--max-connection-time", type=int, default=7200)
     parser.add_argument(

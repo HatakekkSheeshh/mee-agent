@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from meeting.auth.base import AuthProvider
 from meeting.auth.mock import MockProvider, encode_mock_code
 from meeting.auth.base import UserInfo
+from meeting.auth.token_crypto import encrypt_token
 from meeting.auth.session import (
     COOKIE_NAME,
     DEFAULT_TTL_SECONDS,
@@ -82,8 +83,18 @@ def _consume_state(state: str) -> bool:
 
 def _redirect_uri(request: Request) -> str:
     """Build the absolute /auth/callback URL Microsoft will redirect to.
-    Honors X-Forwarded-Proto so this works behind a TLS-terminating proxy.
+
+    MS_REDIRECT_URI pins the value to the URL registered in Azure. Required in
+    dev: Vite (:8001) proxies /auth → backend (:8002) with changeOrigin, which
+    rewrites the host to :8002 — so deriving it from the request would produce
+    :8002 and break OAuth's exact-match on the registered :8001 URL.
+
+    Without the override, derive from the request (honors X-Forwarded-* so it
+    still works behind a TLS-terminating proxy in prod).
     """
+    override = os.environ.get("MS_REDIRECT_URI")
+    if override:
+        return override
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.url.netloc
     return f"{scheme}://{host}/auth/callback"
@@ -302,6 +313,10 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
             user.ms_oid = info.ms_oid
         if info.ms_tenant_id and not user.ms_tenant_id:
             user.ms_tenant_id = info.ms_tenant_id
+        # Refresh the stored MSAL token cache (encrypted) on every login so the
+        # refresh token stays current for minting Graph access tokens later.
+        if info.ms_token_cache:
+            user.refresh_token = encrypt_token(info.ms_token_cache)
         user.last_login_at = datetime.now(timezone.utc)
         return user
 
@@ -311,6 +326,7 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         avatar_url=info.avatar_url,
         ms_oid=info.ms_oid,
         ms_tenant_id=info.ms_tenant_id,
+        refresh_token=encrypt_token(info.ms_token_cache) if info.ms_token_cache else None,
         voice_enrolled=False,
         last_login_at=datetime.now(timezone.utc),
     )

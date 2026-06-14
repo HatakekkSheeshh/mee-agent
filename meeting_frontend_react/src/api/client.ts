@@ -1,5 +1,5 @@
 // Typed fetch wrapper for Mee backend.
-// Vite dev server proxies /api → :8001, so all paths here use relative URLs.
+// Vite dev server (:8001) proxies /api → backend :8002, so all paths here use relative URLs.
 
 import type {
   Meeting,
