@@ -24,8 +24,10 @@ export default defineConfig({
         target: "http://127.0.0.1:8002",
         changeOrigin: true,
       },
+      // /ws is now served by the FastAPI app itself (mounted via
+      // register_ws_route), same as production single-port — no separate :9091.
       "/ws": {
-        target: "ws://127.0.0.1:9091",
+        target: "ws://127.0.0.1:8002",
         ws: true,
         changeOrigin: true,
       },
