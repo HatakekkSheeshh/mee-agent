@@ -13,16 +13,19 @@ export default defineConfig({
   server: {
     port: 8001,
     proxy: {
+      // 127.0.0.1 (not "localhost"): on Windows "localhost" resolves to IPv6
+      // ::1 first, but uvicorn binds IPv4 0.0.0.0 — the explicit IPv4 host
+      // avoids an ECONNREFUSED on the IPv6 attempt.
       "/api": {
-        target: "http://localhost:8002",
+        target: "http://127.0.0.1:8002",
         changeOrigin: true,
       },
       "/auth": {
-        target: "http://localhost:8002",
+        target: "http://127.0.0.1:8002",
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://localhost:9091",
+        target: "ws://127.0.0.1:9091",
         ws: true,
         changeOrigin: true,
       },
