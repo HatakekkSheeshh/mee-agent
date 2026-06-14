@@ -224,9 +224,9 @@ class FakeToolset:
     async def execute_tool(self, name, args, *, session, user_id):
         return await self.exec(name, args, session=session, user_id=user_id)
 
-    def build_task_items(self, items):
+    def build_task_items(self, items, *, description: str = ""):
         from meeting.services import build_task_items as real
-        return real(items)
+        return real(items, description=description)
 
 
 def _toolset_b():
