@@ -135,9 +135,9 @@ class _FakePm:
     def __init__(self, results):
         self._r = list(results); self.calls = []
 
-    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None):
+    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None, bearer=None):
         self.calls.append({"text": text, "task_id": task_id,
-                           "context_id": context_id, "data_part": data_part})
+                           "context_id": context_id, "data_part": data_part, "bearer": bearer})
         return self._r[len(self.calls) - 1]
 
     async def cancel(self, task_id):

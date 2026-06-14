@@ -178,7 +178,7 @@ class ServeClientMaaS(ServeClientBase):
             logging.info(f"[post-record diarize] audio too short ({duration:.1f}s), skip")
             return
 
-        backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
+        backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
         diarize_url = (
             os.getenv("PHOWHISPER_DIARIZE_URL")
             or self.maas_base_url

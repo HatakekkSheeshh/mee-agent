@@ -100,7 +100,7 @@ export default function App() {
             ? <Navigate to="/" replace />
             : !user!.voice_enrolled
               ? <Navigate to="/onboard/voice" replace />
-              : <MainApp />
+              : <MainApp user={user!} />
         }
       />
 
@@ -112,7 +112,7 @@ export default function App() {
 
 /** Bundled because Vite + AppProvider should mount once per session, not every
  * time the user navigates between auth views. */
-function MainApp() {
+function MainApp({ user }: { user: Me }) {
   // Restore body's grid layout that the legacy app expects. AppProvider on its
   // own doesn't set this — the body:has(.lp) override removes the grid for
   // landing, so /app needs to flip it back.
@@ -126,7 +126,7 @@ function MainApp() {
     <AppProvider>
       <Sidebar />
       <div className="app">
-        <Topbar />
+        <Topbar user={user} />
         <MeetingControl />
         <Workspace />
       </div>
