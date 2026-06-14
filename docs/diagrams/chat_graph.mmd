@@ -25,6 +25,7 @@ graph TD;
 	agent_execute -.-> save_reply;
 	agent_tools -.-> agent;
 	agent_tools -.-> agent_approve;
+	agent_tools -.-> save_reply;
 	classify_intent -.-> agent;
 	classify_intent -.-> pm_call;
 	load_context --> classify_intent;
