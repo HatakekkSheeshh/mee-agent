@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Optional
 
@@ -257,11 +258,19 @@ async def clear_session(
 # ─── Messages ─────────────────────────────────────────────────────
 
 async def _graph_token_or_401(user: User, session: AsyncSession):
-    """Acquire the signed-in user's Microsoft Graph access token for pm-agent's
-    JWT auth path. Returns None for non-Microsoft (mock) users — they have no
-    Graph token and never drive pm-agent in real deployments. For real MS users
-    whose stored refresh token is gone/expired, raise 401 so the FE re-logins.
+    """Resolve the bearer chat sends to pm-agent, per PM_AGENT_AUTH_MODE:
+
+    - "jwt" (default): the user's Microsoft Graph access token → pm-agent's JWT
+      path. None for mock users (no Graph token); 401 for real MS users whose
+      stored refresh token is gone/expired (FE re-logins).
+    - "oid" (temporary): the user's raw Azure OID → pm-agent's direct-oid test
+      port. For deploys where real O365 login isn't active yet AND that port is
+      still open. Mock users (no ms_oid) return None, so the client falls back
+      to the static TOKEN_AUTHEN_PM_AGENT OID. No Graph call, never 401.
     """
+    if os.environ.get("PM_AGENT_AUTH_MODE", "jwt").strip().lower() == "oid":
+        return user.ms_oid or None
+
     if not user.ms_oid:
         return None
     try:
