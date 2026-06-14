@@ -33,6 +33,15 @@ async def test_oid_mode_mock_user_returns_none(monkeypatch):
     assert await chat._graph_token_or_401(user, None) is None
 
 
+async def test_oid_mode_non_guid_oid_falls_back_to_none(monkeypatch):
+    # Legacy/dev rows (e.g. ms_oid="dev-local-user") are NOT valid Azure OIDs —
+    # forwarding them hits pm-agent's static-key path → 401. Treat non-GUID as
+    # None so the client falls back to the static TOKEN_AUTHEN_PM_AGENT OID.
+    monkeypatch.setenv("PM_AGENT_AUTH_MODE", "oid")
+    assert await chat._graph_token_or_401(SimpleNamespace(ms_oid="dev-local-user"), None) is None
+    assert await chat._graph_token_or_401(SimpleNamespace(ms_oid="not-a-guid"), None) is None
+
+
 async def test_jwt_mode_acquires_graph_token(monkeypatch):
     monkeypatch.setenv("PM_AGENT_AUTH_MODE", "jwt")
 

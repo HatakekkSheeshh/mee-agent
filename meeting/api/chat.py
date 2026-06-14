@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Optional
 
@@ -39,6 +40,11 @@ from meeting.graphs import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# Azure AD object-id (GUID) shape — what pm-agent's direct-oid path accepts.
+_OID_GUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 
 
 # ─── Schemas ──────────────────────────────────────────────────────
@@ -269,7 +275,12 @@ async def _graph_token_or_401(user: User, session: AsyncSession):
       to the static TOKEN_AUTHEN_PM_AGENT OID. No Graph call, never 401.
     """
     if os.environ.get("PM_AGENT_AUTH_MODE", "jwt").strip().lower() == "oid":
-        return user.ms_oid or None
+        # Only forward a real Azure OID (GUID). Legacy/dev rows like
+        # ms_oid="dev-local-user" aren't GUIDs → pm-agent's direct-oid regex
+        # rejects them and they fall to the static-key path → 401. Return None
+        # for those so the client uses the static TOKEN_AUTHEN_PM_AGENT OID.
+        oid = (user.ms_oid or "").strip()
+        return oid if _OID_GUID_RE.match(oid) else None
 
     if not user.ms_oid:
         return None
