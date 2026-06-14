@@ -4,9 +4,13 @@ import { Dropdown, useDropdown } from "./Dropdown";
 import { VoiceprintsModal } from "./VoiceprintsModal";
 import { api } from "../api/client";
 
-export function Topbar() {
+export function Topbar({ user }: { user: { email: string; display_name: string | null } }) {
   const { theme, setTheme, toggleChat, chatOpen, toggleSidebar, lang, setLang, t } = useApp();
   const [voiceprintsOpen, setVoiceprintsOpen] = useState(false);
+
+  // Display identity from the authenticated session (/auth/me), not a hardcode.
+  const displayName = user.display_name?.trim() || user.email.split("@")[0];
+  const avatarInitial = (displayName || user.email).trim().charAt(0).toUpperCase() || "U";
 
   const settingsRef = useRef<HTMLButtonElement>(null);
   const inviteRef = useRef<HTMLButtonElement>(null);
@@ -80,8 +84,8 @@ export function Topbar() {
         </button>
         <div className="tb-sep"></div>
         <button ref={avatarRef} className="avatar-btn" type="button" onClick={avatar.toggle}>
-          <span className="avatar-img">U</span>
-          <span className="avatar-name">User</span>
+          <span className="avatar-img">{avatarInitial}</span>
+          <span className="avatar-name">{displayName}</span>
           <svg className="caret" viewBox="0 0 12 7" width="9" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
             <path d="M1 1l5 5 5-5" />
           </svg>
@@ -196,10 +200,10 @@ export function Topbar() {
       {/* ─── Avatar dropdown ─── */}
       <Dropdown open={avatar.open} pos={avatar.pos}>
         <div className="dd-user">
-          <span className="avatar-img lg">U</span>
+          <span className="avatar-img lg">{avatarInitial}</span>
           <div className="dd-user-info">
-            <div className="dd-user-name">User</div>
-            <div className="dd-user-email">user@vng.com.vn</div>
+            <div className="dd-user-name">{displayName}</div>
+            <div className="dd-user-email">{user.email}</div>
           </div>
         </div>
         <div className="dd-divider"></div>
