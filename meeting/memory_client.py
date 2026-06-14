@@ -252,6 +252,64 @@ def _namespace(actor_id: str) -> str:
     return f"{PROJECT_FACTS_PREFIX}/{actor_id}"
 
 
+# ── User persona (role) read — namespace user_prefs/{actorId} ───────────────
+USER_PREFS_PREFIX = "user_prefs"
+_ROLE_LINE_RE = re.compile(r"(?:role|vai\s*tr[òo])\s*[:=]\s*(?P<role>.+)", re.IGNORECASE)
+
+
+def _user_prefs_namespace(actor_id: str) -> str:
+    return f"{USER_PREFS_PREFIX}/{actor_id}"
+
+
+def parse_user_role(records: list) -> str | None:
+    """Extract the role from the newest `user_prefs` record, or None.
+
+    Pure newest-wins read: picks the record with the max `created_at`, then finds
+    a `role:` / `vai trò:` line in its text. None if no role line is present.
+    """
+    recs = [r for r in (records or []) if isinstance(r, dict)]
+    if not recs:
+        return None
+    newest = max(recs, key=lambda r: r.get("created_at") or "")
+    text = newest.get("memory") or ""
+    for line in text.splitlines():
+        m = _ROLE_LINE_RE.search(line)
+        if m:
+            role = m.group("role").strip().strip('".')
+            if role:
+                return role
+    return None
+
+
+def get_user_role(
+    actor_id: str = DEFAULT_ACTOR_ID,
+    *,
+    memory_id: str | None = None,
+    token: str | None = None,
+    call=_default_call,
+) -> str | None:
+    """The user's role from AgentBase `user_prefs/{actorId}`, or None.
+
+    Best-effort, mirrors `search_project_record`: never raises — returns None on
+    missing config, a miss, or any network/parse error, so kickoff never blocks.
+    """
+    try:
+        memory_id = memory_id or os.getenv("MEMORY_ID", "")
+        if not memory_id:
+            return None
+        token = token or _get_token()
+        ns = _user_prefs_namespace(actor_id)
+        url = (
+            f"{_MEMORY_BASE}/memories/{memory_id}/memory-records"
+            f"?namespace={ns}&limit=50"
+        )
+        resp = call("GET", url, None, token)
+        return parse_user_role(_records_of(resp))
+    except Exception as e:  # best-effort: never block chat open
+        logger.warning("get_user_role failed: %s", e)
+        return None
+
+
 def search_project_record(
     project_id: str,
     *,

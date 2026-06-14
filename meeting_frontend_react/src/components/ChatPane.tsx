@@ -58,6 +58,9 @@ export function ChatPane() {
   // re-renders without triggering them.
   const sessionIdRef = useRef<string | null>(null);
   const sessionMeetingRef = useRef<string | null>(null);
+  // Which storageKey we've already kicked off, so Mee greets an empty thread
+  // exactly once (survives StrictMode double-mount + re-renders).
+  const kickedOffRef = useRef<string | null>(null);
 
   // Persist the thread per meeting so it survives a page refresh (F5).
   const storageKey = `mee.chat.${currentMeetingId ?? "none"}`;
@@ -65,6 +68,7 @@ export function ChatPane() {
   // Restore on mount / when the bound meeting changes.
   useEffect(() => {
     sessionMeetingRef.current = currentMeetingId;
+    let restoredEmpty = false;
     try {
       const raw = localStorage.getItem(storageKey);
       const saved = raw
@@ -77,10 +81,44 @@ export function ChatPane() {
       sessionIdRef.current = saved?.sessionId ?? null;
       setMessages(saved?.messages ?? []);
       setPending(saved?.pending ?? null);
+      restoredEmpty = !saved?.messages?.length && !saved?.pending;
     } catch {
       sessionIdRef.current = null;
       setMessages([]);
       setPending(null);
+      restoredEmpty = true;
+    }
+
+    // Proactive kickoff: on a fresh, empty thread, Mee speaks first with a
+    // role-tailored greeting. Best-effort — a failure leaves the thread empty
+    // (the WelcomeBanner stays as the fallback) and never blocks chat.
+    if (restoredEmpty && kickedOffRef.current !== storageKey) {
+      kickedOffRef.current = storageKey;
+      setBusy(true);
+      void (async () => {
+        try {
+          let sid = sessionIdRef.current;
+          if (!sid) {
+            const s = await api.chat.createSession(currentMeetingId ?? "");
+            sid = s.id;
+            sessionIdRef.current = s.id;
+            sessionMeetingRef.current = currentMeetingId;
+          }
+          // v1 has no login: the role is a deploy-time constant from the env
+          // (VITE_KICKOFF_ROLE), passed through to the kickoff endpoint.
+          const kickoffRole = (
+            import.meta as unknown as { env: Record<string, string | undefined> }
+          ).env.VITE_KICKOFF_ROLE;
+          const res = await api.chat.kickoff(sid, kickoffRole);
+          if (res.reply) {
+            setMessages((m) => [...m, { role: "agent", text: res.reply as string }]);
+          }
+        } catch {
+          /* best-effort — WelcomeBanner remains as the fallback */
+        } finally {
+          setBusy(false);
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMeetingId]);

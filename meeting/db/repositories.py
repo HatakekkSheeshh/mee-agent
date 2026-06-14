@@ -23,6 +23,7 @@ from meeting.db.models import (
     MemoryEventRow,
     PendingAction,
     Recording,
+    Role,
     SpeakerVoiceprint,
     TranscriptSegment,
     User,
@@ -46,6 +47,20 @@ async def get_or_create_dev_user(session: AsyncSession) -> User:
     session.add(user)
     await session.flush()
     return user
+
+
+# ─── Roles (persona pool) ─────────────────────────────────────────
+
+async def get_role(session: AsyncSession, name: str) -> Optional[Role]:
+    """Fetch one role from the pool by its unique name, or None on miss."""
+    stmt = select(Role).where(Role.name == name)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_roles(session: AsyncSession) -> Sequence[Role]:
+    """All roles in the pool, oldest first (stable enumeration order)."""
+    stmt = select(Role).order_by(Role.created_at)
+    return (await session.execute(stmt)).scalars().all()
 
 
 # ─── Meeting ──────────────────────────────────────────────────────

@@ -33,6 +33,10 @@ from meeting.graphs import (
     run_chat_turn,
     stream_chat_turn,
 )
+from meeting.graphs._chat_llm import _llm_client, _llm_model
+from meeting.memory_client import DEFAULT_ACTOR_ID, get_user_role
+from meeting.services.kickoff import run_kickoff
+from meeting.services.redmine_mcp_client import get_redmine_mcp_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -47,6 +51,20 @@ class SessionCreate(BaseModel):
 
 class MessageSend(BaseModel):
     text: str
+
+
+class KickoffRequest(BaseModel):
+    # v1 has no login, so the FE supplies the role from VITE_KICKOFF_ROLE.
+    # Optional — falls back to the AgentBase persona, then a generic greeting.
+    role: Optional[str] = None
+
+
+def _pick_role_name(
+    request_role: Optional[str], persona_role: Optional[str]
+) -> Optional[str]:
+    """The role for a kickoff: the FE-provided role wins, else the persona,
+    else None (→ generic greeting)."""
+    return (request_role or "").strip() or persona_role
 
 
 class ApprovalRequest(BaseModel):
@@ -223,6 +241,55 @@ async def get_session_detail(
             for m in messages
         ],
     }
+
+
+@router.post("/sessions/{session_id}/kickoff")
+async def kickoff_session(
+    session_id: str,
+    req: KickoffRequest = KickoffRequest(),
+    session: AsyncSession = Depends(get_session),
+):
+    """Mee speaks first: a role-tailored, data-grounded greeting on an empty
+    thread. Idempotent — if the thread already has messages, do nothing. Never
+    raises on a kickoff failure; `run_kickoff` degrades to a generic greeting.
+    """
+    sid = _parse_uuid(session_id)
+    chat = await repo.get_chat_session(session, sid)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Only kick off an empty thread (the FE also guards; this is the backstop).
+    existing = await repo.list_chat_messages(session, sid, limit=1)
+    if existing:
+        return {"reply": None, "skipped": True}
+
+    user = await repo.get_or_create_dev_user(session)
+    role_name = _pick_role_name(req.role, get_user_role(DEFAULT_ACTOR_ID))
+    role = await repo.get_role(session, role_name) if role_name else None
+    user_name = (user.display_name or "").strip() or "bạn"
+
+    async def _call_tool(name: str) -> dict:
+        return await get_redmine_mcp_client().call_tool(name, {})
+
+    def _generate(messages: list[dict]) -> str:
+        client = _llm_client()
+        resp = client.chat.completions.create(
+            model=_llm_model(), messages=messages, temperature=0.7, max_tokens=400,
+        )
+        return resp.choices[0].message.content or ""
+
+    greeting = await run_kickoff(
+        role=role, user_name=user_name, call_tool=_call_tool, generate=_generate,
+    )
+
+    await repo.add_chat_message(
+        session,
+        session_id=sid,
+        role="agent",
+        content={"text": greeting},
+        metadata={"intent": "kickoff", "role": role_name},
+    )
+    return {"reply": greeting, "role": role_name}
 
 
 @router.post("/sessions/{session_id}/clear")

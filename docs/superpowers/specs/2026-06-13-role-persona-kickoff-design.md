@@ -31,19 +31,22 @@ user's **role**, grounded in that user's live data. Two motivating examples:
 
 ## Architecture / components (each small + testable)
 
-1. **`roles` table + repo** — schema `{id, name UNIQUE, description,
+1. **`roles` table + repo** — schema `{id, name UNIQUE, description, data_plan,
    kickoff_prompt, created_at}`; `repo.get_role(name)`, `repo.list_roles()`.
-   Alembic migration + a seed (Applied AI Intern, BA) — see Migration note.
+   `data_plan` ∈ {`own_tasks`, `cross_project`, `minimal`} makes the pool fully
+   data-driven (add a role = insert a row, no code change). Alembic migration +
+   a seed of the 10 company roles — see Seed + Migration notes.
 2. **Persona read** — extend `meeting/memory_client.py`:
    `get_user_role(actor_id) -> str | None` reading AgentBase
    `user_prefs/{actorId}` (mirror the existing `search_project_record`
    pattern: sync urllib in a thread, best-effort, returns None on miss/error).
-3. **Role→data mapping** — pure function `role_data_plan(role_name) -> spec`
-   choosing which Redmine MCP reads to run:
-   - intern → own assigned tasks (`get_workload_by_assignee` / `list_redmine_issue`)
-   - BA → cross-project new/unassigned (`list_redmine_issue` across projects /
-     `get_unassigned_issues`)
-   - default/unknown → minimal (no data) generic greeting.
+3. **Role→data mapping** — pure function `role_data_plan(role) -> spec` that
+   reads `role.data_plan` (a column, not hardcoded names) and chooses the Redmine
+   MCP reads to run:
+   - `own_tasks` → own assigned tasks (`get_workload_by_assignee` / `list_redmine_issue`)
+   - `cross_project` → cross-project new/unassigned (`list_redmine_issue` across
+     projects / `get_unassigned_issues`)
+   - `minimal` (also default/unknown role) → no data; generic greeting.
    Reuses existing Redmine MCP read tools (see `redmine-mcp-migration-plan`).
 4. **Kickoff builder** — `build_kickoff_messages(role, data) -> messages` (pure
    prompt assembly) + a single LLM call (reuse `_llm_client`/`_llm_model`, strip
@@ -82,7 +85,7 @@ open chat → ensureSession → thread empty?
 
 - `repo.get_role` / `list_roles` against a seeded test row.
 - `get_user_role` — parses role from a fake `user_prefs` record; None on miss/error.
-- `role_data_plan` — pure: correct read-set per role + default.
+- `role_data_plan` — pure: correct read-set per `data_plan` value + minimal default.
 - `build_kickoff_messages` — pure: includes description + kickoff_prompt + data;
   shape stable.
 - kickoff endpoint — happy path (greeting persisted + returned) and each
@@ -103,7 +106,7 @@ generate the migration, confirm the repo head lineage, and document/apply the
 
 - Single dev user; role read from `user_prefs/{actorId}` (settable — seed it via
   a small write or the existing memory write path).
-- **2 roles seeded** (Applied AI Intern, BA) + a default fallback.
+- **10 company roles seeded** across 3 depts (see Seed section) + a default fallback.
 - Auto-kickoff on empty thread only (not on every message).
 - **Deferred:** real multi-user identity/auth; a pool-admin UI; per-org role
   customization; richer per-role data templates.
@@ -140,19 +143,106 @@ Viết MỘT lời chào mở đầu bằng tiếng Việt:
 - 2–4 câu, tự nhiên, không markdown nặng, không liệt kê dài.
 ```
 
-### Seed `roles.kickoff_prompt` values
+### Seed `roles` rows (10 company roles, 3 depts)
 
-- **Applied AI Intern** — `description`: "Adopt LLMs to build comprehensive
-  production systems."
+`name` is the seed key (UNIQUE). `description` is the company's VI description.
+`data_plan` drives `role_data_plan`. ("Intern"/"Associate"/"Lead" etc. carry
+seniority only — the **role name is the unit**, not the person.)
+
+**User→role is decoupled from the seed** — it's settable persona data
+(`user_prefs/{actorId}`), not baked into the role pool. The build focuses on the
+role + kickoff behavior, NOT on hardcoding which user has which role. Illustrative
+only (not authoritative): annd2 → Software Engineer, hieunq3/nhihb → AI Applied,
+locdt4 → AI Engineer.
+
+#### Dept: Engineer
+
+- **AI Applied** — `data_plan`: `own_tasks`
+  `description`: "Nghiên cứu và ứng dụng các mô hình trí tuệ nhân tạo vào sản
+  phẩm thực tế, tối ưu hóa thuật toán để giải quyết các bài toán cụ thể của
+  doanh nghiệp."
   `kickoff_prompt`: "Tập trung vào CÔNG VIỆC CỦA RIÊNG người dùng: điểm qua các
-  task đang được giao cho họ, gợi ý nên ưu tiên việc nào trước (dựa trên hạn/độ
-  quan trọng). Giọng đồng hành, khích lệ, gọn."
+  task nghiên cứu/ứng dụng mô hình đang được giao, gợi ý ưu tiên theo hạn và mức
+  độ quan trọng. Giọng đồng hành, khích lệ, gọn."
 
-- **BA** — `description`: "Business Analyst — owns requirements across multiple
-  projects."
+- **AI Engineer** — `data_plan`: `own_tasks`
+  `description`: "Xây dựng, thử nghiệm và triển khai các hệ thống/mô hình AI
+  (Machine Learning, Deep Learning), chịu trách nhiệm về kiến trúc hạ tầng dữ
+  liệu và mô hình."
+  `kickoff_prompt`: "Tập trung vào CÔNG VIỆC CỦA RIÊNG người dùng: điểm qua các
+  task xây dựng/triển khai mô hình & hạ tầng dữ liệu đang được giao, gợi ý nên
+  làm việc nào trước theo hạn/độ quan trọng. Giọng kỹ thuật, đồng hành, gọn."
+
+- **Software Engineer** — `data_plan`: `own_tasks`
+  `description`: "Lập trình, phát triển và bảo trì các ứng dụng phần mềm, hệ
+  thống theo yêu cầu kỹ thuật của dự án."
+  `kickoff_prompt`: "Tập trung vào CÔNG VIỆC CỦA RIÊNG người dùng: điểm qua các
+  task phát triển/bảo trì đang được giao, gợi ý ưu tiên theo hạn và độ quan
+  trọng. Giọng đồng hành, gọn."
+
+- **Associate System Manager** — `data_plan`: `own_tasks`
+  `description`: "Hỗ trợ quản lý, vận hành và giám sát hệ thống hạ tầng CNTT,
+  đảm bảo tính ổn định, bảo mật và hiệu năng của hệ thống."
+  `kickoff_prompt`: "Tập trung vào CÔNG VIỆC CỦA RIÊNG người dùng: điểm qua các
+  task vận hành/giám sát hệ thống đang được giao, lưu ý việc gấp hoặc ảnh hưởng
+  ổn định hệ thống trước. Giọng cẩn trọng, ưu tiên việc khẩn."
+
+- **Lead System Engineer** — `data_plan`: `cross_project`
+  `description`: "Trưởng nhóm kỹ sư hệ thống, chịu trách nhiệm thiết kế kiến
+  trúc hạ tầng lớn, dẫn dắt đội ngũ kỹ thuật và giải quyết các sự cố hệ thống
+  phức tạp."
+  `kickoff_prompt`: "Cho người dùng cái nhìn TỔNG QUAN các project hệ thống họ
+  phụ trách: task mới, sự cố đang mở, và mời rà soát phân công cho đội. Giọng
+  tổng hợp, ưu tiên rủi ro và bức tranh toàn cảnh hơn chi tiết."
+
+- **Business Analyst** — `data_plan`: `cross_project`
+  `description`: "Phân tích yêu cầu nghiệp vụ từ khách hàng hoặc các bên liên
+  quan, chuyển hóa thành tài liệu kỹ thuật để đội ngũ phát triển phần mềm thực
+  hiện."
   `kickoff_prompt`: "Cho người dùng cái nhìn TỔNG QUAN nhiều project họ liên
   quan: số task mới, project nào vừa có thay đổi, và mời họ rà soát. Giọng tổng
   hợp, súc tích, ưu tiên bức tranh toàn cảnh hơn chi tiết từng task."
 
-- **(default fallback, no role/data)** — "Chào ngắn gọn, giới thiệu Mee là trợ
-  lý cuộc họp và mời người dùng hỏi hoặc giao việc."
+- **Lead QC Engineer** — `data_plan`: `cross_project`
+  `description`: "Trưởng nhóm kiểm thử chất lượng phần mềm, lên kế hoạch kiểm
+  thử (test plan), giám sát quy trình QC và đảm bảo chất lượng đầu ra của sản
+  phẩm."
+  `kickoff_prompt`: "Cho người dùng cái nhìn TỔNG QUAN chất lượng across project:
+  task kiểm thử/bug đang mở, hạng mục chờ QC, và mời rà soát kế hoạch test. Giọng
+  tổng hợp, ưu tiên rủi ro chất lượng và việc đang nghẽn."
+
+#### Dept: Product
+
+- **Lead Software Engineer** — `data_plan`: `cross_project`
+  `description`: "Trưởng nhóm lập trình phần mềm, chịu trách nhiệm chính về kiến
+  trúc mã nguồn, định hướng kỹ thuật cho dự án và quản lý năng suất của các kỹ sư
+  phần mềm."
+  `kickoff_prompt`: "Cho người dùng cái nhìn TỔNG QUAN các project họ dẫn dắt:
+  task mới, việc của đội đang nghẽn, mời rà soát phân công/kiến trúc. Giọng tổng
+  hợp, ưu tiên điểm nghẽn của đội."
+
+- **Associate Product Growth Executive** — `data_plan`: `cross_project`
+  _(⚠️ borderline — flip to `own_tasks` if this role works off a personal task
+  queue rather than a product-wide view)_
+  `description`: "Chuyên viên hỗ trợ tăng trưởng sản phẩm, tham gia vào việc
+  phân tích dữ liệu người dùng, tối ưu hóa trải nghiệm và thực hiện các chiến
+  dịch thúc đẩy người dùng sử dụng sản phẩm."
+  `kickoff_prompt`: "Cho người dùng cái nhìn TỔNG QUAN các hạng mục sản
+  phẩm/tăng trưởng họ liên quan: task mới, chiến dịch/thử nghiệm đang chạy, mời
+  rà soát ưu tiên. Giọng tổng hợp, hướng dữ liệu, súc tích."
+
+#### Dept: GreenNode HR & Admin
+
+- **L&D Executive** — `data_plan`: `minimal`
+  _(⚠️ borderline — flip to `own_tasks` if L&D work is tracked in Redmine)_
+  `description`: "Chuyên viên Đào tạo và Phát triển (Learning & Development),
+  chịu trách nhiệm xây dựng lộ trình học tập, tổ chức các khóa đào tạo nâng cao
+  kỹ năng và phát triển năng lực cho nhân sự."
+  `kickoff_prompt`: "Chào ngắn gọn theo vai trò L&D, giới thiệu Mee là trợ lý
+  cuộc họp và mời người dùng hỏi hoặc giao việc (không bịa số liệu task)."
+
+#### Default fallback (no role / unknown role)
+
+- **(default)** — `data_plan`: `minimal`
+  `kickoff_prompt`: "Chào ngắn gọn, giới thiệu Mee là trợ lý cuộc họp và mời
+  người dùng hỏi hoặc giao việc."

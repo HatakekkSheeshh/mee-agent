@@ -56,6 +56,28 @@ class User(Base):
     __table_args__ = (Index("idx_users_email", "email"),)
 
 
+class Role(Base):
+    """Role-persona catalog: the authoritative, enumerable pool of roles.
+
+    Each row drives Mee's proactive chat kickoff — ``data_plan`` selects which
+    Redmine reads to run (own_tasks | cross_project | minimal), ``kickoff_prompt``
+    steers the greeting's tone. Adding a role = inserting a row (no code change).
+    """
+
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    data_plan: Mapped[str] = mapped_column(Text, nullable=False, default="minimal")
+    kickoff_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Meeting(Base):
     __tablename__ = "meetings"
 

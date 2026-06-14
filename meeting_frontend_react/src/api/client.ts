@@ -227,6 +227,14 @@ export const api = {
       http<{ id: string; meeting_id: string | null; title: string; created_at: string }>(
         "POST", "/api/chat/sessions", { meeting_id: meetingId },
       ),
+    // Proactive kickoff: Mee speaks first on an empty thread. Returns the
+    // greeting (already persisted as an agent message), or {reply:null,
+    // skipped:true} if the thread already had messages. Never throws server-side.
+    kickoff: (sessionId: string, role?: string) =>
+      http<{ reply: string | null; role?: string | null; skipped?: boolean }>(
+        "POST", `/api/chat/sessions/${sessionId}/kickoff`,
+        role ? { role } : undefined,
+      ),
     // Backend MessageSend expects `text` (NOT `message`); returns a status envelope.
     send: (sessionId: string, text: string) =>
       http<ChatTurnResult>(
