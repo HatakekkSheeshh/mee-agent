@@ -102,9 +102,16 @@ builds on it later.
 - `_upsert_user` (`meeting/auth/routes.py`): after fetching the profile, resolve
   `role_id` from `info.position` and set `role_id`. **Refreshed on every login**
   (new user → set on create; returning user → re-resolve and update).
-- **Alembic `0017`** (single migration): add `users.role_id`, `roles.aliases`
-  (`text[]` default `'{}'`), **+ idempotent reseed** of aliases into existing
-  role rows by name (`UPDATE … WHERE name = …`).
+- **Migration chain fix (prerequisite):** the merge (`a2c61fb`) left **two
+  migrations with revision id `"0016"`** — `0016_roles_pool` (this branch) and
+  `0016_speaker_sample_paths` (master) — so alembic errors on any command. Fix by
+  re-parenting `0016_roles_pool` to the end of the chain: rename → `0019`,
+  `down_revision = "0018"`. Result: `0015 → 0016(speaker) → 0017(users_auth) →
+  0018(word_ts) → 0019(roles_pool)`. The `roles` table is standalone, so moving
+  it is safe.
+- **New Alembic revision `0020`** (down_revision `0019`): add `users.role_id`
+  (FK→`roles.id`), `roles.aliases` (`text[]` default `'{}'`), **+ idempotent
+  reseed** of aliases into existing role rows by name (`UPDATE … WHERE name = …`).
 
 ### D. Kickoff re-wire — `meeting/api/chat.py`
 - `kickoff_session` switches from `repo.get_or_create_dev_user` to
@@ -161,10 +168,13 @@ open chat → POST /sessions/{id}/kickoff (empty thread)
 
 - Backend runs on **:8002** (Vite **:8001** proxies `/api`,`/auth`→8002, `/ws`→9091).
 - **Redmine MCP stays on the shared `REDMINE_API_KEY`** (per-user token deferred).
-- **Don't auto-run `alembic upgrade`** — the shared DB is stamped past repo head
-  (`db-alembic-drift-remote-ahead`). `0017` is authored against repo head and
-  **applied out-of-band**, carefully (consider an idempotent apply for the column
-  adds + alias reseed).
+- **Migrations run normally by the user.** Same DB server; the env already holds
+  the connection string (`DATABASE_URL_SYNC`, or derived from `DATABASE_URL` by
+  `alembic/env.py`, psycopg2 sync). After the dup-`0016` re-parent + the new
+  `0020`, the chain is single-headed and the user runs `alembic upgrade head`.
+  Migration DDL is written idempotently (column adds + alias reseed) so a re-run
+  is safe. (Supersedes the earlier out-of-band/stamp approach from
+  `db-alembic-drift-remote-ahead` — the post-merge DB tracks the repo head.)
 
 ## Open input (fill when real Entra strings arrive)
 
