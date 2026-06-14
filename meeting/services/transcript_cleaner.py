@@ -82,7 +82,8 @@ ràng là mistranscription tech term.
 {transcript}
 
 ## Nhiệm vụ
-Re-format raw transcript ở trên thành **dạng có cấu trúc** với speaker labels:
+Format lại raw transcript thành **VERBATIM** với speaker labels (giống Notta.ai):
+giữ NGUYÊN cách nói tự nhiên, KHÔNG paraphrase, KHÔNG gộp ý, KHÔNG tóm tắt.
 
 1. **Detect speaker** cho mỗi câu/đoạn — theo thứ tự ưu tiên:
    a) **Pre-mapped**: nếu raw có nhãn "SPEAKER_NN" mà nhãn đó đã có trong
@@ -107,15 +108,34 @@ Re-format raw transcript ở trên thành **dạng có cấu trúc** với speak
    tùy ý từ ví dụ trong prompt này, từ kiến thức training, hoặc đoán mò. Nếu
    raw transcript là độc thoại không có ai gọi tên ai → mặc định Unknown,
    KHÔNG được điền "Linh", "Tuấn", "Mai" hay bất kỳ tên thông dụng nào khác.
-2. **Group consecutive sentences** của CÙNG 1 speaker thành 1 block
-   - QUAN TRỌNG: Nếu block dài (>3 câu), thêm `\\n\\n` (xuống dòng kép) để
-     tách thành PARAGRAPHS theo SUB-TOPIC. Ví dụ: 1 paragraph nói về deploy,
-     paragraph khác nói về testing. Mỗi paragraph 2-4 câu là đẹp.
-   - Nếu speaker chuyển chủ đề rõ ràng (vd "OK chuyển qua chủ đề khác") → paragraph mới
-   - Mục tiêu: text DỄ ĐỌC, không phải 1 đoạn dài lê thê
-3. **Bỏ filler words**: "ờ", "um", "à", "dạ", "thì là", "kiểu", "anh nghĩ là", "kiểu như"
-4. **Add punctuation** đúng (dấu chấm, hỏi, phẩy) + normalize wording nhẹ
-5. **Tag mỗi block** với category nếu rõ ràng (mảng rỗng nếu không chắc):
+
+2. **MỖI TURN = 1 SEGMENT** — không gộp turns
+   - 1 turn = 1 lần ai đó nói trước khi người khác chen vào (hoặc trước khi
+     có pause rõ ràng > 1.5s).
+   - KHÔNG gộp 2-3 turns cùng speaker thành 1 segment chỉ vì "cho gọn". Mỗi
+     lần speaker nói xong là 1 segment — kể cả turn chỉ có 1 từ "Vâng." hay "OK."
+   - Notta.ai làm vậy: turn ngắn cũng giữ riêng → audio sync chính xác.
+
+3. **GIỮ NGUYÊN từ ngữ — verbatim, không paraphrase**:
+   - GIỮ filler particles có nghĩa turn-taking: "dạ", "vâng", "ờ", "à", "ừ",
+     "thì", "là", "ạ", "nha", "nhỉ", "đấy", "đó", "luôn", "mà", "nè"...
+     Đây là cách nói tự nhiên tiếng Việt → để tăng độ chân thực.
+   - CHỈ bỏ những lặp lại rõ ràng do speech disfluency: "thì thì thì", "cái
+     cái cái" liên tiếp → bỏ 1 lần là đủ.
+   - GIỮ run-on sentences, hesitations, repetitions có nghĩa.
+   - KHÔNG đổi từ: "luồng" thành "flow", "cái phần" thành "phần", "đường" thành
+     "module"... Người nói sao thì viết vậy.
+
+4. **CHỈ sửa lỗi STT (Whisper mistranscription)**:
+   - Sửa từ tiếng Việt vô nghĩa thành thuật ngữ kỹ thuật (theo phonetic mapping ở trên).
+   - Sửa lỗi đánh máy hiển nhiên: "GGICLab" → "Gitlab", "tử" → "PM"... CHỈ KHI
+     đoán chắc 100% từ context.
+   - KHÔNG SỬA gì khác. Nghi ngờ → để nguyên.
+
+5. **Add punctuation tối thiểu**: chỉ dấu chấm + dấu hỏi + phẩy theo nhịp nói tự
+   nhiên. KHÔNG cần dấu phẩy mỗi 5-10 từ — câu dài thì để dài.
+
+6. **Tag mỗi block** với category nếu rõ ràng (mảng rỗng nếu không chắc):
    - `commitment` — ai cam kết làm gì (vd "em sẽ làm xong cuối tuần")
    - `decision` — đã chốt cái gì (vd "chúng ta dùng Postgres")
    - `blocker` — đang stuck (vd "database migration đang block")
@@ -123,26 +143,47 @@ Re-format raw transcript ở trên thành **dạng có cấu trúc** với speak
    - `update` — báo cáo tình trạng (vd "v1 deploy thành công")
 
 ## QUY TẮC TUYỆT ĐỐI VỀ ĐỘ DÀI (đọc trước tiên!)
-🚨 **NHIỆM VỤ LÀ FORMAT LẠI, KHÔNG PHẢI TÓM TẮT** 🚨
-- Tổng số ký tự output phải ≈ tổng số ký tự raw (chênh lệch ±20% chấp nhận
-  do bỏ filler + thêm dấu câu). KHÔNG được rút ngắn còn 50% hay ít hơn.
-- MỌI câu trong raw PHẢI xuất hiện trong output (có thể merge 2-3 câu liền
-  cùng speaker thành 1 paragraph, nhưng KHÔNG được bỏ câu).
-- KHÔNG được gộp 5-10 câu thành 1 câu tóm tắt. Mỗi ý nói trong raw phải
-  có câu tương ứng trong output.
-- KHÔNG diễn giải/paraphrase tự do. Giữ NGUYÊN từ ngữ raw, chỉ sửa lỗi
-  Whisper transcription + thêm dấu câu + bỏ filler.
+🚨 **VERBATIM — không tóm tắt, không paraphrase, không gộp turns** 🚨
+- Tổng ký tự output ≈ raw (chênh lệch ±5% — chỉ do thêm dấu câu).
+- Số segments output ≈ số turns trong raw. KHÔNG được gộp turns.
+- MỌI câu/cụm trong raw PHẢI xuất hiện trong output (không bỏ).
+- KHÔNG được paraphrase, đổi từ ngữ, đổi cách diễn đạt.
+- KHÔNG được "làm cho hay hơn" — giữ NGUYÊN cách nói tự nhiên.
 
-VÍ DỤ ĐÚNG (giữ chi tiết):
-Raw: "anh em đã demo kết tạo sắp cây kém rồi được rồi em anh vũ rồi thì
-      cái đó ok rồi thì cái mấy cái tác kế tiếp là..."
-Output đúng: "Em đã demo kết tạo, sắp xong rồi. Anh Vũ duyệt rồi thì cái
-              đó OK. Các task kế tiếp là..."
-Output SAI (tóm tắt): "Em đã demo và các task tiếp theo là..." ← MẤT chi tiết
+## Ví dụ chuẩn (theo phong cách Notta.ai)
+
+Raw (Whisper, có SPEAKER_NN):
+```
+SPEAKER_00: Cái phần mình hiện tại nó đang load.
+SPEAKER_01: Cái task ID là nó unique trên toàn bộ project đúng không?
+SPEAKER_00: Dạ đúng rồi. Nếu mà anh tạo thì nó sẽ tự động cái số cái tiếp theo,
+  cái số lớn nhất. Thì khi mà push lên thì nó sẽ chuyển sang in progress như
+  thế này.
+```
+
+Output ĐÚNG (verbatim, giữ y nguyên):
+```json
+[
+  {{"speaker": "SPEAKER_00", "text": "Cái phần hiện tại nó đang load.", "tags": []}},
+  {{"speaker": "SPEAKER_01", "text": "Cái task ID là nó unique trên toàn bộ project đúng không?", "tags": ["question"]}},
+  {{"speaker": "SPEAKER_00", "text": "Dạ đúng rồi. Nếu mà anh tạo thì nó sẽ tự động cái số cái tiếp theo, cái số lớn nhất. Thì khi mà push lên thì nó sẽ chuyển sang in progress như thế này.", "tags": []}}
+]
+```
+
+Output SAI (paraphrase + gộp):
+```json
+[
+  {{"speaker": "SPEAKER_00", "text": "Phần này đang loading.", "tags": []}},
+  {{"speaker": "SPEAKER_01", "text": "Task ID unique cho toàn project?", "tags": ["question"]}},
+  {{"speaker": "SPEAKER_00", "text": "Đúng rồi, task ID tự động tăng. Push lên sẽ chuyển sang in progress.", "tags": []}}
+]
+```
+SAI vì: đổi "đang load" thành "loading", bỏ "dạ", bỏ "anh tạo", gộp 2 câu cuối,
+mất "cái số lớn nhất", mất "như thế này" — toàn bộ cảm giác conversational mất.
 
 ## Lưu ý khác
 - Giữ nguyên các từ tiếng Anh kỹ thuật: deploy, API, sprint, backlog, v.v.
-- Không tự bịa thông tin. Nếu raw không rõ, để text gần với raw nhất.
+- Không tự bịa thông tin. Nếu raw không rõ, để nguyên text raw — KHÔNG đoán mò.
 
 ## Output format
 Trả về CHỈ JSON hợp lệ (không markdown fences):

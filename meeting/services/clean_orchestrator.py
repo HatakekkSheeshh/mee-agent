@@ -32,7 +32,66 @@ from meeting.services.transcript_cleaner import clean_transcript
 
 logger = logging.getLogger(__name__)
 
-_active_tasks: dict[str, asyncio.Task] = {}
+# Holds EITHER an asyncio.Task (in-process fallback) or a Celery AsyncResult
+# (preferred path when RabbitMQ is up). Readers go through is_inflight() /
+# wait_for_inflight() so they don't need to know which type is in there.
+_active_tasks: dict[str, object] = {}
+
+
+# Registry of in-process "local tasks" so /api/tasks/{id} can report
+# state when Celery is unreachable. Keyed by a uuid we hand back to FE
+# from the dispatching endpoint — FE polls the same way it does for
+# Celery task_ids. Entry value: {"state", "error", "result"}.
+_local_task_state: dict[str, dict] = {}
+
+
+def dispatch_local_task(coro_factory, prefix: str = "local") -> str:
+    """Spawn a background asyncio task + register it so FE can poll status.
+
+    `coro_factory` is a zero-arg async callable so we can defer coroutine
+    creation until inside the running loop (matters when callers build
+    closures around request-scoped state).
+
+    Returns a task_id string the endpoint hands back to FE. FE polls
+    /api/tasks/{id} which dispatches to `get_local_task_state` below.
+    """
+    import asyncio
+    task_id = f"{prefix}-{uuid.uuid4().hex}"
+    _local_task_state[task_id] = {"state": "PENDING"}
+
+    async def _wrapped():
+        _local_task_state[task_id] = {"state": "STARTED"}
+        try:
+            result = await coro_factory()
+            _local_task_state[task_id] = {"state": "SUCCESS", "result": result}
+        except Exception as e:
+            logger.exception(f"[local_task {task_id}] failed")
+            _local_task_state[task_id] = {"state": "FAILURE", "error": str(e)}
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (called from non-async path). Bail — caller
+        # should be inside a FastAPI request which always has one.
+        _local_task_state[task_id] = {
+            "state": "FAILURE",
+            "error": "no event loop available",
+        }
+        return task_id
+    loop.create_task(_wrapped())
+    return task_id
+
+
+def get_local_task_state(task_id: str) -> dict | None:
+    """Return Celery-compatible {state, result?, error?} for a local task.
+
+    Returns None if task_id isn't in the local registry (caller should
+    then try the Celery backend).
+    """
+    entry = _local_task_state.get(task_id)
+    if entry is None:
+        return None
+    return {"task_id": task_id, **entry}
 
 # Per-recording progress info for the FE progress bar.
 # {recording_id: {phase, current_chunk, total_chunks, started_at_ms}}
@@ -45,20 +104,103 @@ def get_progress(recording_id: str) -> dict | None:
     return _progress.get(recording_id)
 
 
+def is_inflight(recording_id: str) -> bool:
+    """True when a background clean is still running for this recording.
+
+    Handles both task types in `_active_tasks`. Also prunes finished
+    Celery handles — they have no done-callback to clean up themselves
+    the way asyncio.Task does.
+    """
+    t = _active_tasks.get(recording_id)
+    if t is None:
+        return False
+    # asyncio.Task — has .done()
+    if hasattr(t, "done"):
+        if t.done():  # type: ignore[attr-defined]
+            _active_tasks.pop(recording_id, None)
+            return False
+        return True
+    # Celery AsyncResult — has .ready()
+    if hasattr(t, "ready"):
+        if t.ready():  # type: ignore[attr-defined]
+            _active_tasks.pop(recording_id, None)
+            return False
+        return True
+    # Unknown — pretend not running so caller doesn't deadlock.
+    return False
+
+
+async def wait_for_inflight(recording_id: str, timeout_s: float = 600.0) -> None:
+    """Block until the active clean for this recording finishes (or timeout).
+
+    Used by /clean endpoint to share a single in-flight clean across
+    multiple user clicks. Handles both asyncio.Task and Celery AsyncResult.
+    Swallows exceptions — the background task logs them itself, and the
+    caller will fall through to a fresh /clean attempt after this returns.
+    """
+    t = _active_tasks.get(recording_id)
+    if t is None:
+        return
+    if hasattr(t, "done"):  # asyncio.Task
+        try:
+            await asyncio.wait_for(t, timeout=timeout_s)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        return
+    if hasattr(t, "ready"):  # Celery AsyncResult — poll
+        import time as _time
+        deadline = _time.monotonic() + timeout_s
+        while _time.monotonic() < deadline:
+            if t.ready():  # type: ignore[attr-defined]
+                _active_tasks.pop(recording_id, None)
+                return
+            await asyncio.sleep(2.0)
+
+
 def trigger_background(recording_id: str) -> None:
-    """Fire-and-forget. Start cleaner in background if not already running.
-    Returns immediately. Safe to call multiple times for the same recording."""
+    """Fire-and-forget. Hand the cleaner off to the Celery worker so the
+    LLM call (slow + flaky 504s from MaaS) doesn't block the FastAPI event
+    loop or this request. Returns immediately. Safe to call multiple times
+    for the same recording — Celery doesn't dedupe so we still check the
+    in-process registry, but the registry now just tracks "dispatched"
+    rather than "running here".
+
+    Falls back to the old in-process asyncio path when RabbitMQ is down,
+    so dev setups without Docker still work.
+    """
     if recording_id in _active_tasks:
         logger.info(
-            f"[clean_orchestrator] {recording_id} already running, skip trigger"
+            f"[clean_orchestrator] {recording_id} already dispatched, skip trigger"
         )
         return
+
+    # Preferred path: dispatch to Celery worker. Same task as /clean uses
+    # → identical retry + timeout behaviour.
+    try:
+        from meeting.celery_app import is_broker_reachable
+        if is_broker_reachable():
+            from meeting.tasks import clean_recording_task
+            ar = clean_recording_task.delay(recording_id, False)
+            logger.info(
+                f"[clean_orchestrator] dispatched clean_recording_task "
+                f"id={ar.id} for {recording_id} (background pre-clean)"
+            )
+            # Mark as dispatched — get_progress / clean-status still need
+            # to report "running" until the worker finishes. Store an
+            # async-result handle so cleanup can drop the entry.
+            _active_tasks[recording_id] = ar  # type: ignore[assignment]
+            return
+    except Exception as e:
+        logger.warning(
+            f"[clean_orchestrator] Celery dispatch failed ({e}), "
+            f"falling back to in-process asyncio"
+        )
+
+    # Fallback: original in-process asyncio path. Used when broker is
+    # unreachable (eg. dev setup without RabbitMQ).
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # Called from a non-async context (eg. sync thread). Schedule via
-        # the FastAPI loop if available; else just bail (caller is in a
-        # request context normally, so this path is unusual).
         logger.warning(
             f"[clean_orchestrator] no running loop, skip background trigger "
             f"for {recording_id}"
@@ -73,7 +215,10 @@ def trigger_background(recording_id: str) -> None:
         _progress.pop(recording_id, None)
 
     task.add_done_callback(_cleanup)
-    logger.info(f"[clean_orchestrator] triggered background clean for {recording_id}")
+    logger.info(
+        f"[clean_orchestrator] triggered IN-PROCESS background clean "
+        f"for {recording_id} (broker unreachable)"
+    )
 
 
 async def _run_clean(recording_id: str) -> None:

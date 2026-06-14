@@ -39,10 +39,19 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    ms_oid: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    email: Mapped[str] = mapped_column(Text, nullable=False)
+    # Microsoft Object ID (sub from O365 JWT). Nullable so MockProvider users
+    # don't need fake ones. Real-O365 users populate this in /auth/callback.
+    ms_oid: Mapped[Optional[str]] = mapped_column(Text, unique=True)
+    ms_tenant_id: Mapped[Optional[str]] = mapped_column(Text)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     display_name: Mapped[Optional[str]] = mapped_column(Text)
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token: Mapped[Optional[str]] = mapped_column(Text)  # AES-256 encrypted
+    # True once user records the enrollment phrase post-login. Matching
+    # voiceprint row lives in `voiceprints` with label="enrollment".
+    voice_enrolled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -226,6 +235,12 @@ class Recording(Base):
     # examples — replaces the static hardcoded list. Regenerated when
     # vocab_hints changes (vocab_hash mismatch).
     phonetic_examples_json: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Filesystem paths to 3s voice sample WAVs per pyannote cluster (migration
+    # 0016). Shape: {"SPEAKER_00": "output/<rid>/spk_SPEAKER_00.wav", ...}. Set
+    # by /diarize-result when sample_audio_b64 is provided. Served via
+    # GET /api/recordings/{id}/speaker-sample/{label} so SpeakerMapper can
+    # play a clip before the user confirms the speaker name.
+    speaker_sample_paths: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     meeting: Mapped[Meeting] = relationship(back_populates="recordings")
     segments: Mapped[list["TranscriptSegment"]] = relationship(
@@ -254,6 +269,13 @@ class TranscriptSegment(Base):
     speaker: Mapped[Optional[str]] = mapped_column(Text)
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     edited_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Per-word timestamps from STT backends that support `word_timestamps`
+    # (faster-whisper via DTW). Shape: [{"text", "start", "end"}] in absolute
+    # seconds. NULL when the STT didn't return word-level data (VNG MaaS,
+    # PhoWhisper with word ts disabled). FE Notta view falls back to even-
+    # distribute approximation when this is NULL.
+    # Migration: 0018_segment_word_timestamps.
+    words: Mapped[Optional[list]] = mapped_column(JSONB)
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     edited_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     is_deleted: Mapped[bool] = mapped_column(

@@ -7,7 +7,10 @@ __pycache__/
 .dockerignore
 venv
 temp
+slides
 .claude/
 .pytest_cache/
 cache/
 .mcp_redmine_tools_cache.json
+
+benchmarks

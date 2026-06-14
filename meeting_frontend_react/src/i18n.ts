@@ -243,6 +243,7 @@ export const STRINGS = {
     "speakerMapper.save": "Lưu",
     "speakerMapper.saveTitle": "Lưu tên + voiceprint (lần sau tự nhận diện giọng này)",
     "speakerMapper.saveError": "Lưu voiceprint lỗi: {msg}",
+    "speakerMapper.playTitle": "Nghe 3s mẫu giọng của speaker này",
     // CleanEditor speaker picker
     "speakerPicker.title": "Đổi speaker",
     "speakerPicker.empty": "Chưa có speaker khác. Edit thẳng text.",
@@ -494,6 +495,7 @@ export const STRINGS = {
     "speakerMapper.save": "Save",
     "speakerMapper.saveTitle": "Save name + voiceprint (next time this voice is auto-recognized)",
     "speakerMapper.saveError": "Voiceprint save error: {msg}",
+    "speakerMapper.playTitle": "Play a 3s sample of this speaker's voice",
     // CleanEditor speaker picker
     "speakerPicker.title": "Reassign speaker",
     "speakerPicker.empty": "No other speakers. Edit text directly.",

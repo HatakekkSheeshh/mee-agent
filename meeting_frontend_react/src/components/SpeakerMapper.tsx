@@ -11,7 +11,7 @@
 // Clusters without embedding (audio gone) get a disabled "⚠ Không nhận diện
 // được" badge — text rename for those still happens via the inline dropdown
 // in CleanEditor ("+ Tên khác…"), not through this panel.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { useApp } from "../store/AppContext";
 
@@ -25,6 +25,11 @@ interface Props {
   /** Clusters that have stored embeddings — Save button only works for these.
    * If missing, recording was uploaded before Phase 2 or audio was too short. */
   availableClusters?: string[];
+  /** Clusters that have a stored 3s WAV sample on disk. Used to decide
+   * whether to render the ▶ play button per row. Comes from
+   * recording.speaker_samples (set by /diarize-result + /import-transcript
+   * when sample_audio_b64 is present). */
+  availableSamples?: string[];
   /** Called after a successful save — parent should refetch /clean to pick
    * up the renamed segments + cluster_mapping. */
   onSaved?: () => void;
@@ -35,6 +40,7 @@ interface Row {
   inferredName: string;
   preMatched: boolean;
   hasEmbedding: boolean;
+  hasSample: boolean;
 }
 
 export function SpeakerMapper({
@@ -43,6 +49,7 @@ export function SpeakerMapper({
   clusterMapping,
   preMappedClusters,
   availableClusters,
+  availableSamples,
   onSaved,
 }: Props) {
   const { t } = useApp();
@@ -56,6 +63,8 @@ export function SpeakerMapper({
     const availProvided = availableClusters !== undefined;
     const availSet = new Set(availableClusters || []);
     const hasEmb = (cid: string) => !availProvided || availSet.has(cid);
+    const sampleSet = new Set(availableSamples || []);
+    const hasSample = (cid: string) => sampleSet.has(cid);
     // Primary: use cluster_mapping keys (LLM gave us full picture)
     if (clusterMapping && Object.keys(clusterMapping).length > 0) {
       return Object.entries(clusterMapping)
@@ -66,6 +75,7 @@ export function SpeakerMapper({
           inferredName: name === "Unknown" ? "" : name,
           preMatched: preSet.has(clusterId),
           hasEmbedding: hasEmb(clusterId),
+          hasSample: hasSample(clusterId),
         }));
     }
     // Fallback: extract from segments
@@ -78,12 +88,15 @@ export function SpeakerMapper({
       inferredName: "",
       preMatched: preSet.has(cid),
       hasEmbedding: hasEmb(cid),
+      hasSample: hasSample(cid),
     }));
-  }, [clusterMapping, preMappedClusters, availableClusters, segments]);
+  }, [clusterMapping, preMappedClusters, availableClusters, availableSamples, segments]);
 
   const [names, setNames] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [saved, setSaved] = useState<Set<string>>(new Set());
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Reset state on recording switch or new mapping load
   useEffect(() => {
@@ -94,7 +107,28 @@ export function SpeakerMapper({
     setNames(initial);
     setSavingId(null);
     setSaved(new Set());
+    // Stop any previewing clip when the recording changes — the URL points
+    // to a different recording's audio after the switch.
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+    }
+    setPlayingId(null);
   }, [recordingId, rows]);
+
+  function togglePlay(clusterId: string) {
+    const a = audioRef.current;
+    if (!a) return;
+    // Re-clicking the currently playing row pauses it.
+    if (playingId === clusterId && !a.paused) {
+      a.pause();
+      setPlayingId(null);
+      return;
+    }
+    a.src = api.speakerSampleUrl(recordingId, clusterId);
+    setPlayingId(clusterId);
+    a.play().catch(() => setPlayingId(null));
+  }
 
   async function handleSave(clusterId: string) {
     const name = (names[clusterId] || "").trim();
@@ -166,6 +200,31 @@ export function SpeakerMapper({
               >
                 {r.clusterId}
               </code>
+              {r.hasSample && (
+                <button
+                  type="button"
+                  onClick={() => togglePlay(r.clusterId)}
+                  title={t("speakerMapper.playTitle")}
+                  aria-label={t("speakerMapper.playTitle")}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: "50%",
+                    border: "1px solid var(--border-2)",
+                    background: "var(--surface)",
+                    color: "var(--accent-deep)",
+                    fontSize: 11,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  {playingId === r.clusterId ? "❚❚" : "▶"}
+                </button>
+              )}
               <span style={{ color: "var(--text-mute)" }}>→</span>
               <input
                 type="text"
@@ -220,6 +279,13 @@ export function SpeakerMapper({
           );
         })}
       </div>
+      {/* Shared playback element — one per panel, swap src on play. */}
+      <audio
+        ref={audioRef}
+        onEnded={() => setPlayingId(null)}
+        onPause={() => setPlayingId((prev) => (audioRef.current?.paused ? null : prev))}
+        style={{ display: "none" }}
+      />
     </div>
   );
 }

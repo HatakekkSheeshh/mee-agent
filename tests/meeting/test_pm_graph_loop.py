@@ -50,9 +50,9 @@ class FakeClient:
         self.calls: list[dict] = []
         self.cancelled = None
 
-    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None):
+    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None, bearer=None):
         self.calls.append(
-            {"text": text, "task_id": task_id, "context_id": context_id, "data_part": data_part}
+            {"text": text, "task_id": task_id, "context_id": context_id, "data_part": data_part, "bearer": bearer}
         )
         idx = len(self.calls) - 1
         if idx < len(self._results):
@@ -259,7 +259,7 @@ class RaiseThenOk:
         self._result = result
         self.calls: list[dict] = []
 
-    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None):
+    async def send_message(self, text, *, task_id=None, context_id=None, data_part=None, bearer=None):
         self.calls.append(
             {"text": text, "task_id": task_id, "context_id": context_id, "data_part": data_part}
         )

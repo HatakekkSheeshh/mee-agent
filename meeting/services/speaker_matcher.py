@@ -28,14 +28,14 @@ async def match_clusters_to_names(
     *,
     user_id: uuid.UUID,
     speaker_embeddings: Optional[dict],
-    threshold: float = 0.30,
+    threshold: float = 0.45,
 ) -> dict[str, str]:
     """Resolve cluster ids → known names from the user's voiceprint DB.
 
     Args:
         speaker_embeddings: {"SPEAKER_00": [...256 floats...], ...} or None
         threshold: cosine distance cutoff (0 = identical, 2 = opposite).
-                   ~0.30 ≈ 0.7 cosine similarity → strong match.
+                   ~0.45 ≈ 0.55 cosine similarity → strong match.
 
     Returns:
         {"SPEAKER_00": "Linh", "SPEAKER_01": "Tuấn"} — only includes matches.

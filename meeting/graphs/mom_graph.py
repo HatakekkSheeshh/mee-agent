@@ -103,25 +103,90 @@ def make_load_transcript(session: AsyncSession):
         #      filler-stripped, and structured. Big quality bump over raw.
         #   3. Raw joined segments from DB — Whisper output with no cleanup.
         clean = recording.clean_segments or {}
-        edited = (clean.get("edited_text") or "").strip()
         clean_segs = clean.get("segments") or []
+
+        # Race-condition guard: when the user clicks Generate MoM while the
+        # background cleaner is still running on this recording, clean_segments
+        # is null → we'd otherwise fall through to raw segments (no
+        # cluster_mapping → MoM cites "SPEAKER_NN" instead of names). Wait
+        # for the cleaner if it's in-flight, then re-fetch.
+        if not clean_segs:
+            try:
+                from meeting.services.clean_orchestrator import (
+                    is_inflight, wait_for_inflight,
+                )
+                if is_inflight(recording_id):
+                    logger.info(
+                        f"[Node load_transcript] cleaner is in-flight, "
+                        f"waiting up to 5 min before reading transcript"
+                    )
+                    await wait_for_inflight(recording_id, timeout_s=300)
+                    await session.refresh(recording)
+                    clean = recording.clean_segments or {}
+                    clean_segs = clean.get("segments") or []
+                    logger.info(
+                        f"[Node load_transcript] cleaner done, "
+                        f"got {len(clean_segs)} clean segments"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[Node load_transcript] wait_for_cleaner failed "
+                    f"(non-fatal): {e}"
+                )
+
+        edited = (clean.get("edited_text") or "").strip()
+        # cluster_mapping maps raw pyannote cluster id ("SPEAKER_00") →
+        # human name ("Duy Anh"). Populated by the cleaner LLM (context
+        # inference) + by user save in SpeakerMapper (voiceprint bind).
+        # Apply BEFORE passing to MoM LLM so attribution lands on real
+        # names — without this, MoM output cites raw "SPEAKER_00" labels
+        # which is the bug users see after renaming.
+        cluster_mapping = clean.get("cluster_mapping") or {}
+
+        def _resolve_speaker(raw: str) -> str:
+            if not raw:
+                return "Unknown"
+            mapped = cluster_mapping.get(raw)
+            # Empty string / "Unknown" mapping → fall back to raw cluster id
+            # so the LLM still has SOME label for that turn.
+            return mapped if mapped and mapped != "Unknown" else raw
+
         if edited:
+            # Apply cluster_mapping to edited_text too — TipTap export may
+            # carry raw "SPEAKER_NN: text" labels even when the rendered UI
+            # showed mapped names (depends on how the editor serialises).
+            # Regex-replace each cluster id at line-start to its mapped name.
             transcript = edited
+            if cluster_mapping:
+                import re as _re
+                for raw_id, name in cluster_mapping.items():
+                    if not name or name == "Unknown":
+                        continue
+                    # "SPEAKER_00: ..." → "Huyền: ..." (anchor to line start
+                    # + literal colon so we don't replace mid-sentence).
+                    transcript = _re.sub(
+                        rf"(^|\n){_re.escape(raw_id)}\s*:",
+                        rf"\1{name}:",
+                        transcript,
+                    )
             logger.info(
-                f"[Node load_transcript] using user-edited clean ({len(edited)} chars)"
+                f"[Node load_transcript] using user-edited clean "
+                f"({len(edited)} chars, applied {len(cluster_mapping)} mappings)"
             )
         elif clean_segs:
             # Assemble "Speaker: text" lines from the LLM-cleaned segments.
             # MoM-gen LLM finds attribution + decisions + action items much
             # easier from this than from raw.
             transcript = "\n".join(
-                f"{(seg.get('speaker') or 'Unknown')}: {seg.get('text', '').strip()}"
+                f"{_resolve_speaker(seg.get('speaker') or '')}: "
+                f"{seg.get('text', '').strip()}"
                 for seg in clean_segs
                 if seg.get("text", "").strip()
             )
             logger.info(
                 f"[Node load_transcript] using LLM-cleaned segments "
-                f"({len(clean_segs)} blocks, {len(transcript)} chars)"
+                f"({len(clean_segs)} blocks, {len(transcript)} chars, "
+                f"cluster_mapping={cluster_mapping})"
             )
         else:
             transcript = await repo.join_recording_transcript(
@@ -198,7 +263,17 @@ def make_read_memory(memory_service: MemoryService, session: AsyncSession):
 
 
 async def generate_mom(state: MomState) -> dict:
-    """Node 3: LLM call với transcript + memory_context."""
+    """Node 3: LLM call với transcript + memory_context.
+
+    CRITICAL: generate_meeting_notes uses the OpenAI SDK *synchronously*
+    (it's not async). Calling it directly here would block FastAPI's event
+    loop for the entire 1-3 minute LLM run — every concurrent request (other
+    users, clean-status polls, sidebar fetches, even just clicking another
+    project) would pile up pending and the UI would freeze. Wrap in
+    asyncio.to_thread so the blocking call runs in the thread pool while
+    the event loop stays free to serve other requests.
+    """
+    import asyncio as _aio
     meta = state.get("meeting_meta", {})
     logger.info(
         f"[Node generate_mom] title={meta.get('title')!r}, "
@@ -209,7 +284,8 @@ async def generate_mom(state: MomState) -> dict:
     # MoM language resolver: recording → meeting → request body → "vi"
     # (the state's "mom_language" is set by run_mom_graph caller).
     lang = state.get("mom_language") or "vi"
-    notes = generate_meeting_notes(
+    notes = await _aio.to_thread(
+        generate_meeting_notes,
         transcript=state["transcript"],
         title=meta.get("title", ""),
         purpose=meta.get("purpose", ""),

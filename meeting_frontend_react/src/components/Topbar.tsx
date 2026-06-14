@@ -2,10 +2,15 @@ import { useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { Dropdown, useDropdown } from "./Dropdown";
 import { VoiceprintsModal } from "./VoiceprintsModal";
+import { api } from "../api/client";
 
-export function Topbar() {
+export function Topbar({ user }: { user: { email: string; display_name: string | null } }) {
   const { theme, setTheme, toggleChat, chatOpen, toggleSidebar, lang, setLang, t } = useApp();
   const [voiceprintsOpen, setVoiceprintsOpen] = useState(false);
+
+  // Display identity from the authenticated session (/auth/me), not a hardcode.
+  const displayName = user.display_name?.trim() || user.email.split("@")[0];
+  const avatarInitial = (displayName || user.email).trim().charAt(0).toUpperCase() || "U";
 
   const settingsRef = useRef<HTMLButtonElement>(null);
   const inviteRef = useRef<HTMLButtonElement>(null);
@@ -79,8 +84,8 @@ export function Topbar() {
         </button>
         <div className="tb-sep"></div>
         <button ref={avatarRef} className="avatar-btn" type="button" onClick={avatar.toggle}>
-          <span className="avatar-img">U</span>
-          <span className="avatar-name">User</span>
+          <span className="avatar-img">{avatarInitial}</span>
+          <span className="avatar-name">{displayName}</span>
           <svg className="caret" viewBox="0 0 12 7" width="9" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
             <path d="M1 1l5 5 5-5" />
           </svg>
@@ -195,10 +200,10 @@ export function Topbar() {
       {/* ─── Avatar dropdown ─── */}
       <Dropdown open={avatar.open} pos={avatar.pos}>
         <div className="dd-user">
-          <span className="avatar-img lg">U</span>
+          <span className="avatar-img lg">{avatarInitial}</span>
           <div className="dd-user-info">
-            <div className="dd-user-name">User</div>
-            <div className="dd-user-email">user@vng.com.vn</div>
+            <div className="dd-user-name">{displayName}</div>
+            <div className="dd-user-email">{user.email}</div>
           </div>
         </div>
         <div className="dd-divider"></div>
@@ -213,12 +218,21 @@ export function Topbar() {
         <button
           className="dd-item danger"
           type="button"
-          onClick={() => {
+          onClick={async () => {
             avatar.close();
-            if (confirm(t("avatar.signOut") + "?")) {
-              localStorage.clear();
-              location.reload();
+            if (!confirm(t("avatar.signOut") + "?")) return;
+            // Clear server-side session cookie FIRST so the page below
+            // lands on /auth/me → 401 → landing. Without this we'd wipe
+            // localStorage but keep the cookie and bounce right back in.
+            try {
+              await api.auth.logout();
+            } catch {
+              /* ignore — best-effort; still clear local + redirect */
             }
+            localStorage.clear();
+            // Hard redirect (not Router) so AppProvider unmounts cleanly
+            // and the next mount hits /auth/me fresh from the server.
+            location.href = "/";
           }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

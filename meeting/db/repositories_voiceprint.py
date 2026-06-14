@@ -66,7 +66,7 @@ async def find_similar_voiceprint(
     *,
     user_id: uuid.UUID,
     embedding: list[float],
-    threshold: float = 0.30,  # cosine DISTANCE (lower = closer); ~0.3 ≈ 0.7 similarity
+    threshold: float = 0.45,  # cosine DISTANCE (lower = closer); ~0.45 ≈ 0.55 similarity
     limit: int = 1,
 ) -> list[tuple[SpeakerVoiceprint, float]]:
     """Find top-K voiceprints closest to `embedding` for the given user.
@@ -136,7 +136,7 @@ async def bulk_match(
     *,
     user_id: uuid.UUID,
     cluster_embeddings: dict[str, list[float]],
-    threshold: float = 0.30,
+    threshold: float = 0.45,
 ) -> dict[str, tuple[str, float]]:
     """Match many cluster_id → name using the user's voiceprint DB.
 

@@ -19,7 +19,7 @@ import uuid
 from datetime import date as date_type
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,13 +83,25 @@ class RecordingCreate(BaseModel):
     session_label: Optional[str] = None
 
 
+class WordTimestamp(BaseModel):
+    """One word with absolute start/end seconds. Returned by faster-whisper
+    (DTW from attention) and used by the FE Notta view for word-by-word
+    playback highlight. Absent for STT backends without word_timestamps."""
+    text: str
+    start: float
+    end: float
+
+
 class TranscriptSegmentIn(BaseModel):
-    """One segment from PhoWhisper response. start/end in seconds (float).
-    Backend converts to ms when saving."""
+    """One segment from PhoWhisper / faster-whisper response. start/end in
+    seconds (float). Backend converts to ms when saving."""
     text: str
     speaker: Optional[str] = None
     start: Optional[float] = None  # seconds
     end: Optional[float] = None    # seconds
+    # Per-word timestamps (only present when STT supports word_timestamps —
+    # e.g. faster-whisper). Saved to transcript_segments.words for FE sync.
+    words: Optional[list[WordTimestamp]] = None
 
 
 class TranscriptImport(BaseModel):
@@ -109,6 +121,15 @@ class TranscriptImport(BaseModel):
     # VNG MaaS Whisper doesn't produce these). Stored on recording.speaker_embeddings
     # for the Clean step's speaker matcher.
     cluster_embeddings: Optional[dict] = None
+    # Base64-encoded 3s WAV per cluster — same shape as /diarize-result.
+    # Persisted to disk + recording.speaker_sample_paths so SpeakerMapper can
+    # play a sample per cluster before the user confirms the name.
+    sample_audio_b64: Optional[dict[str, str]] = None
+    # Chunked upload path: full WAV staged to output/_pending_diarize/*.wav.
+    # When set, backend dispatches Celery diarize_recording_task to compute
+    # speaker turns + embeddings + sample clips asynchronously (CPU pyannote
+    # on hour-long files = 30-60 min). Returned task_id lets FE poll.
+    pending_diarize_path: Optional[str] = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -206,6 +227,7 @@ async def get_meeting_endpoint(
                 "segment_count": len([s for s in r.segments if not s.is_deleted]),
                 "mom_json": r.mom_json,
                 "has_clean": r.clean_segments is not None,
+                "speaker_samples": list((r.speaker_sample_paths or {}).keys()),
             }
             for r in meeting.recordings
         ],
@@ -288,6 +310,107 @@ async def download_meeting_summary(
     )
 
 
+@router.get("/meetings/{meeting_id}/members")
+async def list_meeting_members(
+    meeting_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return the list of members for this meeting — feeds the Notta-style
+    speaker dropdown in the Clean view.
+
+    Three sources merged into one list:
+    1. `meeting_members` rows (real users with O365/mock auth)
+    2. Meeting creator (always included even without an explicit row)
+    3. Attendees on the recordings of this meeting (free-text names from
+       the recording form — "7 người" shown in the header)
+
+    Attendee-only entries get a synthetic `user_id` of `attendee:<name>` so
+    the FE can render them in the dropdown without needing real user rows.
+    They're flagged `voice_enrolled=false` since no voiceprint exists.
+    """
+    from sqlalchemy import select
+    from meeting.db.models import MeetingMember, User as UserM, Recording as RecordingM
+
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    rows = (
+        await session.execute(
+            select(MeetingMember, UserM)
+            .join(UserM, UserM.id == MeetingMember.user_id)
+            .where(MeetingMember.meeting_id == mid)
+            .where(MeetingMember.revoked_at.is_(None))
+        )
+    ).all()
+
+    members = [
+        {
+            "user_id": str(u.id),
+            "email": u.email,
+            "display_name": u.display_name or u.email.split("@")[0],
+            "avatar_url": u.avatar_url,
+            "voice_enrolled": u.voice_enrolled,
+            "role": mm.role,
+        }
+        for mm, u in rows
+    ]
+
+    # Always include the creator even if they don't have an explicit
+    # meeting_members row (DB schema doesn't auto-add them).
+    if meeting.user_id:
+        creator = (
+            await session.execute(
+                select(UserM).where(UserM.id == meeting.user_id)
+            )
+        ).scalar_one_or_none()
+        if creator and not any(m["user_id"] == str(creator.id) for m in members):
+            members.insert(0, {
+                "user_id": str(creator.id),
+                "email": creator.email,
+                "display_name": creator.display_name or creator.email.split("@")[0],
+                "avatar_url": creator.avatar_url,
+                "voice_enrolled": creator.voice_enrolled,
+                "role": "owner",
+            })
+
+    # Pull every distinct attendee name from this meeting's recordings.
+    # `attendees` is a JSONB list of {name, dept?, title?}. De-dupe by
+    # name (case-insensitive) and skip names already in `members` so the
+    # creator + invited users aren't duplicated.
+    rec_rows = (
+        await session.execute(
+            select(RecordingM.attendees).where(RecordingM.meeting_id == mid)
+        )
+    ).all()
+    member_name_set = {m["display_name"].lower() for m in members}
+    seen_attendees: set[str] = set()
+    for (att,) in rec_rows:
+        if not att:
+            continue
+        for entry in att:
+            if not isinstance(entry, dict):
+                continue
+            name = (entry.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in member_name_set or key in seen_attendees:
+                continue
+            seen_attendees.add(key)
+            members.append({
+                "user_id": f"attendee:{name}",
+                "email": "",
+                "display_name": name,
+                "avatar_url": None,
+                "voice_enrolled": False,
+                "role": "viewer",
+            })
+
+    return {"meeting_id": meeting_id, "members": members}
+
+
 @router.get("/meetings/{meeting_id}/transcript")
 async def get_meeting_transcript_endpoint(
     meeting_id: str, session: AsyncSession = Depends(get_session)
@@ -352,6 +475,8 @@ async def get_recording_transcript_endpoint(
             "speaker": s.speaker,
             "start_ms": s.start_time_ms,
             "end_ms": s.end_time_ms,
+            # Optional per-word timestamps (faster-whisper). NULL for VNG MaaS.
+            "words": s.words,
         }
         for s in db_segs
     ]
@@ -464,6 +589,10 @@ class DiarizeResult(BaseModel):
 
     cluster_embeddings: dict[str, list[float]]
     diarized_text: Optional[str] = None
+    # Optional: base64-encoded 3s WAV per cluster, produced by local_diarize.
+    # When present, backend decodes + writes to disk and stores paths so
+    # SpeakerMapper can play a clip per speaker before confirming the name.
+    sample_audio_b64: Optional[dict[str, str]] = None
 
 
 @router.post("/recordings/{recording_id}/diarize-result")
@@ -483,6 +612,38 @@ async def diarize_result_endpoint(
     flag_modified(recording, "speaker_embeddings")
     if req.diarized_text and req.diarized_text.strip():
         recording.diarized_text = req.diarized_text
+
+    # Decode + write per-speaker sample WAVs. Stored under output/<rid>/ so
+    # the cleanup path is the same as the rest of the recording artifacts.
+    if req.sample_audio_b64:
+        import base64
+        import os as _os
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))),
+            "output",
+        )
+        rec_dir = _os.path.join(output_dir, recording_id)
+        _os.makedirs(rec_dir, exist_ok=True)
+        paths: dict[str, str] = {}
+        for label, b64 in req.sample_audio_b64.items():
+            try:
+                data = base64.b64decode(b64)
+                fname = f"spk_{label}.wav"
+                fpath = _os.path.join(rec_dir, fname)
+                with open(fpath, "wb") as f:
+                    f.write(data)
+                # Store path RELATIVE to output_dir so moving the output
+                # directory doesn't break lookup. Endpoint resolves back to
+                # absolute via the same OUTPUT_DIR env at serve time.
+                paths[label] = _os.path.relpath(fpath, output_dir)
+            except Exception as e:
+                import logging as _lg
+                _lg.warning(
+                    f"[diarize-result] failed to write sample for {label}: {e}"
+                )
+        if paths:
+            recording.speaker_sample_paths = paths
+            flag_modified(recording, "speaker_sample_paths")
     # NOTE: We deliberately DO NOT null out clean_segments here.
     # If user has already cleaned (possibly with manual SpeakerMapper edits),
     # wiping the cache would force a re-run on next click + lose user edits.
@@ -505,6 +666,218 @@ async def diarize_result_endpoint(
     }
 
 
+class SegmentSpeakerPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/segment-speaker`.
+
+    `index` is the position in `recording.clean_segments`. `speaker` is the
+    new display name (or empty string to clear). `scope='current'` overrides
+    just this one segment; `scope='all'` would normally reuse the
+    voiceprints.bind endpoint instead — we keep it as a server-side fallback
+    so the FE can call one endpoint regardless of scope.
+    """
+    index: int
+    speaker: str
+    scope: str = "current"  # 'current' | 'all'
+
+
+@router.patch("/recordings/{recording_id}/segment-speaker")
+async def patch_segment_speaker(
+    recording_id: str,
+    req: SegmentSpeakerPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename the speaker on one (or all matching) clean segment(s)."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    segs = recording.clean_segments or {}
+    seg_list = segs.get("segments") if isinstance(segs, dict) else segs
+    if not isinstance(seg_list, list):
+        raise HTTPException(status_code=400, detail="Recording has no clean segments yet")
+    if not (0 <= req.index < len(seg_list)):
+        raise HTTPException(status_code=400, detail=f"Segment index {req.index} out of range")
+
+    new_name = (req.speaker or "").strip()
+    if req.scope == "all":
+        # Rename every segment whose CURRENT speaker matches this row's
+        # speaker. Lets the FE do the "apply all" UX without a separate call.
+        target_label = (seg_list[req.index].get("speaker") or "").strip()
+        renamed = 0
+        for s in seg_list:
+            if (s.get("speaker") or "").strip() == target_label:
+                s["speaker"] = new_name
+                renamed += 1
+    else:
+        seg_list[req.index]["speaker"] = new_name
+        renamed = 1
+
+    # JSONB column needs explicit flag — SQLAlchemy can't auto-detect dict mutation.
+    flag_modified(recording, "clean_segments")
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "renamed": renamed,
+        "scope": req.scope,
+        "speaker": new_name,
+    }
+
+
+@router.post("/recordings/{recording_id}/audio")
+async def upload_recording_audio(
+    recording_id: str,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """Upload (or re-upload) the source audio for an existing recording.
+
+    Two scenarios this covers:
+
+    1. Recovery: recording was created/transcribed BEFORE we started saving
+       audio to disk (the transcribe path used to discard bytes). User clicks
+       "Upload audio" in the player → file lands here → Notta playback works.
+    2. Replacement: user wants to swap the audio after the fact (e.g.
+       uploaded the wrong file initially).
+
+    Saves to `output/audio/<recording_id>.<ext>` and updates `audio_path`.
+    Does NOT re-trigger transcription — that's a separate `/api/transcribe`
+    call. Use this when you only want to attach audio for playback.
+    """
+    import os as _os
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+    output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+    audio_dir = _os.path.join(output_dir, "audio")
+    _os.makedirs(audio_dir, exist_ok=True)
+
+    filename = file.filename or "audio.wav"
+    ext = _os.path.splitext(filename)[1].lower() or ".wav"
+    if ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+        ext = ".wav"
+    saved_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
+
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
+
+    with open(saved_path, "wb") as f:
+        f.write(audio_bytes)
+    recording.audio_path = _os.path.relpath(saved_path, project_root)
+    await session.commit()
+
+    return {
+        "recording_id": recording_id,
+        "audio_path": recording.audio_path,
+        "size_bytes": len(audio_bytes),
+    }
+
+
+@router.get("/recordings/{recording_id}/audio")
+async def get_recording_audio(
+    recording_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Serve the recording's original audio file for in-browser playback.
+
+    Used by TranscriptPane to enable Notta-style audio sync: the <audio>
+    element streams from this endpoint while the transcript highlights the
+    segment whose [start_time_ms, end_time_ms] contains audio.currentTime.
+
+    Returns 404 when recording has no audio_path (live-record path before
+    save) or when the file is missing on disk.
+    """
+    import os as _os
+    from fastapi.responses import FileResponse
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+    fpath: Optional[str] = None
+    if recording.audio_path:
+        candidate = recording.audio_path
+        if not _os.path.isabs(candidate):
+            candidate = _os.path.join(project_root, candidate)
+        if _os.path.exists(candidate):
+            fpath = candidate
+
+    # Fallback: scan output/audio/<recording_id>.<ext> for files saved before
+    # we started tracking audio_path in DB (or after a DB restore). Auto-heal
+    # the DB if a match exists so subsequent requests skip the scan.
+    if fpath is None:
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+        audio_dir = _os.path.join(output_dir, "audio")
+        if _os.path.isdir(audio_dir):
+            for ext in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                candidate = _os.path.join(audio_dir, f"{recording_id}{ext}")
+                if _os.path.exists(candidate):
+                    fpath = candidate
+                    # Persist the discovery so next call doesn't scan again.
+                    recording.audio_path = _os.path.relpath(candidate, project_root)
+                    await session.commit()
+                    break
+
+    if fpath is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Recording has no audio file — upload again to enable playback",
+        )
+    ext = _os.path.splitext(fpath)[1].lower()
+    media_type = {
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".flac": "audio/flac",
+        ".webm": "audio/webm",
+        ".ogg": "audio/ogg",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(fpath, media_type=media_type, filename=_os.path.basename(fpath))
+
+
+@router.get("/recordings/{recording_id}/speaker-sample/{label}")
+async def speaker_sample_endpoint(
+    recording_id: str,
+    label: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Serve a per-cluster 3s WAV. Used by SpeakerMapper play button so the
+    user can verify the speaker → name mapping by ear before saving the
+    voiceprint. 404 when the cluster has no stored sample (pre-0016
+    recording, PhoWhisper path, or extraction failed at diarize time)."""
+    import os as _os
+    from fastapi.responses import FileResponse
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    paths = recording.speaker_sample_paths or {}
+    rel = paths.get(label)
+    if not rel:
+        raise HTTPException(status_code=404, detail="No sample for this cluster")
+    output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))),
+        "output",
+    )
+    fpath = rel if _os.path.isabs(rel) else _os.path.join(output_dir, rel)
+    # Defensive: prevent path traversal — resolved path must stay under
+    # output_dir even if recording.speaker_sample_paths got tampered with.
+    if not _os.path.realpath(fpath).startswith(_os.path.realpath(output_dir)):
+        raise HTTPException(status_code=400, detail="Invalid sample path")
+    if not _os.path.exists(fpath):
+        raise HTTPException(status_code=404, detail="Sample file missing on disk")
+    return FileResponse(fpath, media_type="audio/wav")
+
+
 @router.get("/recordings/{recording_id}/clean-status")
 async def clean_status_endpoint(
     recording_id: str,
@@ -518,9 +891,8 @@ async def clean_status_endpoint(
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    from meeting.services.clean_orchestrator import _active_tasks, get_progress
-    task = _active_tasks.get(recording_id)
-    is_running = task is not None and not task.done()
+    from meeting.services.clean_orchestrator import is_inflight, get_progress
+    is_running = is_inflight(recording_id)
     has_clean = recording.clean_segments is not None and bool(
         recording.clean_segments
     )
@@ -567,13 +939,11 @@ async def clean_recording_endpoint(
     # Share in-flight background clean if any — avoid duplicate LLM call when
     # user clicks Clean before the post-import background task finishes.
     if not regenerate:
-        from meeting.services.clean_orchestrator import _active_tasks
-        inflight = _active_tasks.get(recording_id)
-        if inflight is not None and not inflight.done():
-            try:
-                await inflight
-            except Exception:
-                pass  # background task logs its own errors
+        from meeting.services.clean_orchestrator import (
+            is_inflight, wait_for_inflight,
+        )
+        if is_inflight(recording_id):
+            await wait_for_inflight(recording_id)
             # Re-fetch — background task may have populated clean_segments
             await session.refresh(recording)
 
@@ -592,6 +962,137 @@ async def clean_recording_endpoint(
             "edited_html": cached.get("edited_html"),
             "edited_text": cached.get("edited_text"),
         }
+
+    # Cache miss (or forced regenerate). Dispatch to Celery so this HTTP
+    # request returns IMMEDIATELY — the LLM call may take 2-4 min and
+    # the MaaS gateway times out earlier with 504 anyway. FE polls
+    # /api/tasks/{id}; on SUCCESS it re-calls /clean and hits the cache.
+    try:
+        from meeting.celery_app import is_broker_reachable
+        if is_broker_reachable():
+            from meeting.tasks import clean_recording_task
+            ar = clean_recording_task.delay(recording_id, regenerate)
+            logger.info(
+                f"[/clean] dispatched clean_recording_task id={ar.id} for "
+                f"recording={recording_id} regenerate={regenerate}"
+            )
+            return {
+                "recording_id": recording_id,
+                "cached": False,
+                "task_id": ar.id,
+                "status": "queued",
+                "mode": "celery",
+                "available_clusters": available_clusters,
+            }
+    except Exception as e:
+        logger.warning(f"[/clean] dispatch failed, falling back local: {e}")
+
+    # Fallback path — broker unreachable. Spawn an in-process asyncio task
+    # so the HTTP request still returns IMMEDIATELY (UX parity with the
+    # Celery path). Heavy LLM work runs in background; FE polls
+    # /api/tasks/{local_task_id}. The endpoint registers state into
+    # _local_task_state via clean_orchestrator.
+    from meeting.services.clean_orchestrator import dispatch_local_task
+    from meeting.services.transcript_cleaner import clean_transcript as _clean_fn
+    from meeting.services.speaker_matcher import match_clusters_to_names
+    from meeting.services.model_registry import resolve_llm
+    from meeting.services.phonetic_generator import (
+        generate_phonetic_mappings, needs_regeneration,
+    )
+    from sqlalchemy.orm.attributes import flag_modified
+
+    # Capture parameters now — the coroutine runs later in a fresh session.
+    target_rid_str = recording_id
+    target_regenerate = regenerate
+
+    async def _run_inline_clean():
+        from meeting.db.base import AsyncSessionLocal
+        async with AsyncSessionLocal() as s2:
+            r = await repo.get_recording(s2, _parse_uuid(target_rid_str))
+            if not r:
+                return {"error": "recording not found"}
+            raw = (r.diarized_text or "").strip()
+            if not raw:
+                raw = await repo.join_recording_transcript(
+                    s2, _parse_uuid(target_rid_str),
+                )
+            if not raw.strip():
+                return {"error": "no transcript"}
+            m = await repo.get_meeting(s2, r.meeting_id)
+            attendees = ""
+            if r.attendees:
+                attendees = ", ".join(
+                    a.get("name", "") for a in r.attendees if isinstance(a, dict)
+                )
+            pm: dict[str, str] = {}
+            if r.speaker_embeddings:
+                u = await repo.get_or_create_dev_user(s2)
+                pm = await match_clusters_to_names(
+                    s2, user_id=u.id, speaker_embeddings=r.speaker_embeddings,
+                )
+            vocab_parts = [
+                (m.vocab_hints or "").strip() if m else "",
+                (r.vocab_hints or "").strip(),
+            ]
+            merged = ", ".join(p for p in vocab_parts if p) or None
+            llmp = resolve_llm(
+                recording_choice=r.llm_model,
+                meeting_choice=getattr(m, "llm_model", None) if m else None,
+            )
+            phons: list[dict] = []
+            if merged:
+                cached = r.phonetic_examples_json or {}
+                if needs_regeneration(merged, cached):
+                    import asyncio as _aio2
+                    np_data = await _aio2.to_thread(
+                        generate_phonetic_mappings, merged, llm_profile=llmp,
+                    )
+                    await repo.save_recording_phonetic(
+                        s2, _parse_uuid(target_rid_str), np_data,
+                    )
+                    phons = np_data.get("mappings", [])
+                else:
+                    phons = cached.get("mappings", [])
+            import asyncio as _aio3
+            result = await _aio3.to_thread(
+                _clean_fn,
+                raw_text=raw, attendees=attendees, pre_mapped=pm or None,
+                vocab_hints=merged, phonetic_examples=phons or None,
+                llm_profile=llmp,
+            )
+            if "error" in result or not result.get("segments"):
+                return {"error": result.get("error") or "cleaner produced 0 segments"}
+            existing = r.clean_segments or {}
+            existing["segments"] = result["segments"]
+            existing["cluster_mapping"] = result.get("cluster_mapping", {})
+            for cid, name in pm.items():
+                existing["cluster_mapping"][cid] = name
+            r.clean_segments = existing
+            flag_modified(r, "clean_segments")
+            await s2.commit()
+            return {
+                "recording_id": target_rid_str,
+                "segments_count": len(result["segments"]),
+            }
+
+    local_task_id = dispatch_local_task(_run_inline_clean, prefix="clean-local")
+    logger.info(
+        f"[/clean] dispatched LOCAL asyncio task id={local_task_id} for "
+        f"recording={recording_id} regenerate={regenerate}"
+    )
+    return {
+        "recording_id": recording_id,
+        "cached": False,
+        "task_id": local_task_id,
+        "status": "queued",
+        "mode": "asyncio",
+        "available_clusters": available_clusters,
+    }
+
+    # Note: the synchronous inline path below is now unreachable for the
+    # cache-miss case. Kept temporarily for reference; will be removed
+    # after this fallback is verified stable.
+    logger.info(f"[/clean] running inline (broker unreachable) for {recording_id}")
 
     # Source priority for the cleaner LLM input:
     #   1. recording.diarized_text — PhoWhisper-tagged "SPEAKER_NN: text" format
@@ -675,7 +1176,12 @@ async def clean_recording_endpoint(
         else:
             phonetic_mappings = cached_phon.get("mappings", [])
 
-    result = clean_transcript(
+    # Same threading rationale as mom_graph.generate_mom: clean_transcript
+    # uses sync OpenAI SDK → wrap in to_thread so it doesn't block the event
+    # loop for 2-3 min while every other request piles up pending.
+    import asyncio as _aio_clean
+    result = await _aio_clean.to_thread(
+        clean_transcript,
         raw_text=raw_text,
         attendees=attendees_str,
         pre_mapped=pre_mapped or None,
@@ -750,6 +1256,43 @@ async def save_clean_edited_endpoint(
         raise HTTPException(status_code=400, detail="Empty edited text")
 
     existing = recording.clean_segments or {}
+
+    # ─── Learn from user corrections ────────────────────────────────
+    # Diff the original LLM-cleaned segments vs this new edited text to
+    # extract single-word fixes the user made. Save them into the global
+    # vocab pool — both Whisper (next upload, any project) and the
+    # cleaner LLM will see these as phonetic hints. Cross-project.
+    # Best-effort: never fails the save itself.
+    try:
+        # Strip "Speaker:" prefixes from edited text so diff doesn't see
+        # those as fake corrections. Cleaner segments are pure body text,
+        # but TipTap output renders the speaker label inline.
+        import re as _re
+        edited_for_diff = _re.sub(
+            r"^[^\n]+?:\s+", "", text, flags=_re.MULTILINE,
+        )
+        original_text = "\n".join(
+            (s.get("text") or "").strip()
+            for s in (existing.get("segments") or [])
+            if (s.get("text") or "").strip()
+        )
+        if original_text:
+            from meeting.vocab_store import (
+                extract_corrections_from_edit, bulk_add_corrections,
+            )
+            pairs = extract_corrections_from_edit(
+                original_text, edited_for_diff,
+            )
+            if pairs:
+                added = bulk_add_corrections(pairs)
+                logger.info(
+                    f"[clean-edited] learned {added} new corrections "
+                    f"from {len(pairs)} candidates: "
+                    f"{[(p['wrong'], p['correct']) for p in pairs[:5]]}…"
+                )
+    except Exception as e:
+        logger.warning(f"[clean-edited] vocab learn failed (non-fatal): {e}")
+
     existing["edited_html"] = html
     existing["edited_text"] = text
     recording.clean_segments = existing
@@ -815,6 +1358,13 @@ async def import_transcript_endpoint(
         raise HTTPException(status_code=400, detail="Empty transcript text")
 
     deleted_count = 0
+    # transcript_changed: when re-importing into an existing recording, compare
+    # the new payload to what's already in DB. If unchanged (FE calls
+    # /import-transcript on every Gen MoM click as a "sync to DB" step even
+    # when nothing edited), skip the wipe-clean + re-trigger-cleaner side
+    # effects. Without this guard, every Gen MoM click forces an unnecessary
+    # 60-90s LLM re-clean of the same content.
+    transcript_changed = True
     if req.recording_id:
         # Target an EXISTING recording → overwrite its segments. No new recording
         # is created. `replace` flag ignored (it's about deleting OTHER recordings).
@@ -824,15 +1374,36 @@ async def import_transcript_endpoint(
         recording = await repo.get_recording(session, rid)
         if not recording or recording.meeting_id != mid:
             raise HTTPException(status_code=404, detail="Recording not found in this meeting")
-        # Wipe old segments of this recording
-        await session.execute(
-            sa_delete(TranscriptSegment).where(TranscriptSegment.recording_id == rid)
-        )
-        # Update label if changed
+
+        # Diff incoming text vs the existing transcript (sum of segment texts).
+        # Normalize both sides: strip leading FE source-indicator badges
+        # ("[upload] ", "[record] ", "[live] ", "[mic] ") and collapse
+        # whitespace. The FE textarea may prefix these to show data source
+        # while DB stores raw text — without stripping, the Gen MoM resync
+        # would always look "changed" and re-trigger the cleaner.
+        import re as _re_norm
+        _BADGE_RX = _re_norm.compile(r"^\s*\[(?:upload|record|live|mic)\]\s*")
+        existing_text = await repo.join_recording_transcript(session, rid)
+        new_text = (req.text or "").strip()
+        existing_norm = " ".join(_BADGE_RX.sub("", existing_text).split())
+        new_norm = " ".join(_BADGE_RX.sub("", new_text).split())
+        if existing_norm and existing_norm == new_norm:
+            transcript_changed = False
+            logger.info(
+                f"[/import-transcript] {rid} payload matches existing "
+                f"transcript ({len(new_norm)} chars) — skip wipe + cleaner trigger"
+            )
+
+        if transcript_changed:
+            # Wipe old segments of this recording
+            await session.execute(
+                sa_delete(TranscriptSegment).where(TranscriptSegment.recording_id == rid)
+            )
+            # Invalidate cached clean view since transcript changed
+            recording.clean_segments = None
+        # Update label if changed (independent of transcript content)
         if req.session_label and req.session_label != recording.session_label:
             recording.session_label = req.session_label
-        # Invalidate cached clean view since transcript changed
-        recording.clean_segments = None
     else:
         if req.replace:
             deleted_count = await repo.delete_all_recordings_for_meeting(session, mid)
@@ -843,49 +1414,62 @@ async def import_transcript_endpoint(
 
     # Prefer structured segments from caller (PhoWhisper response with speaker
     # + timestamps). Falls back to splitting plain text when not provided.
+    # Skip rewriting when payload matches existing transcript — segments weren't
+    # wiped above so writing again would create duplicates.
     structured_count = 0
-    if req.segments:
-        for seq, seg in enumerate(req.segments, start=1):
-            text = (seg.text or "").strip()
-            if not text:
-                continue
-            await repo.add_segment(
-                session,
-                recording_id=recording.id,
-                seq=seq,
-                original_text=text,
-                speaker=(seg.speaker or "").strip() or None,
-                start_time_ms=(
-                    int(seg.start * 1000) if seg.start is not None else None
-                ),
-                end_time_ms=(
-                    int(seg.end * 1000) if seg.end is not None else None
-                ),
-            )
-            structured_count += 1
-        lines = [s.text for s in req.segments if s.text and s.text.strip()]
-    else:
-        # Plain-text fallback: split by newline then sentence boundary.
-        lines = [s.strip() for s in req.text.split("\n") if s.strip()]
-        if len(lines) <= 1:
-            import re
-            lines = [s.strip() for s in re.split(r"(?<=[.!?])\s+", req.text) if s.strip()]
-        for seq, line in enumerate(lines, start=1):
-            await repo.add_segment(
-                session,
-                recording_id=recording.id,
-                seq=seq,
-                original_text=line,
-            )
+    lines: list[str] = []
+    if transcript_changed:
+        if req.segments:
+            for seq, seg in enumerate(req.segments, start=1):
+                text = (seg.text or "").strip()
+                if not text:
+                    continue
+                # Preserve word-level timestamps when STT returned them
+                # (faster-whisper). Stored as JSONB on transcript_segments.
+                words_payload = None
+                if seg.words:
+                    words_payload = [
+                        {"text": w.text, "start": w.start, "end": w.end}
+                        for w in seg.words
+                    ]
+                await repo.add_segment(
+                    session,
+                    recording_id=recording.id,
+                    seq=seq,
+                    original_text=text,
+                    speaker=(seg.speaker or "").strip() or None,
+                    start_time_ms=(
+                        int(seg.start * 1000) if seg.start is not None else None
+                    ),
+                    end_time_ms=(
+                        int(seg.end * 1000) if seg.end is not None else None
+                    ),
+                    words=words_payload,
+                )
+                structured_count += 1
+            lines = [s.text for s in req.segments if s.text and s.text.strip()]
+        else:
+            # Plain-text fallback: split by newline then sentence boundary.
+            lines = [s.strip() for s in req.text.split("\n") if s.strip()]
+            if len(lines) <= 1:
+                import re
+                lines = [s.strip() for s in re.split(r"(?<=[.!?])\s+", req.text) if s.strip()]
+            for seq, line in enumerate(lines, start=1):
+                await repo.add_segment(
+                    session,
+                    recording_id=recording.id,
+                    seq=seq,
+                    original_text=line,
+                )
 
-    # Set duration_sec — caller-provided (live record / audio file) takes priority.
-    # Otherwise estimate from text: 150 words/min Vietnamese ≈ 2.5 wps.
-    if req.duration_sec and req.duration_sec > 0:
-        recording.duration_sec = req.duration_sec
-    else:
-        word_count = sum(len(l.split()) for l in lines)
-        # 2.5 words/sec average → seconds = words / 2.5
-        recording.duration_sec = max(1, int(word_count / 2.5)) if word_count > 0 else None
+        # Set duration_sec — caller-provided (live record / audio file) takes priority.
+        # Otherwise estimate from text: 150 words/min Vietnamese ≈ 2.5 wps.
+        if req.duration_sec and req.duration_sec > 0:
+            recording.duration_sec = req.duration_sec
+        else:
+            word_count = sum(len(l.split()) for l in lines)
+            # 2.5 words/sec average → seconds = words / 2.5
+            recording.duration_sec = max(1, int(word_count / 2.5)) if word_count > 0 else None
 
     # Persist cluster_embeddings if caller passed them (PhoWhisper-server path)
     if req.cluster_embeddings:
@@ -893,15 +1477,99 @@ async def import_transcript_endpoint(
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(recording, "speaker_embeddings")
 
+    # Persist per-cluster 3s WAV samples (local pyannote path). Same write
+    # logic as /diarize-result — kept inline rather than extracted because
+    # we have only two call sites and the env lookup is short.
+    if req.sample_audio_b64:
+        import base64
+        import os as _os
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))),
+            "output",
+        )
+        rec_dir = _os.path.join(output_dir, str(recording.id))
+        _os.makedirs(rec_dir, exist_ok=True)
+        paths: dict[str, str] = {}
+        for label, b64 in req.sample_audio_b64.items():
+            try:
+                data = base64.b64decode(b64)
+                fpath = _os.path.join(rec_dir, f"spk_{label}.wav")
+                with open(fpath, "wb") as f:
+                    f.write(data)
+                paths[label] = _os.path.relpath(fpath, output_dir)
+            except Exception as e:
+                import logging as _lg
+                _lg.warning(
+                    f"[import-transcript] failed to write sample for {label}: {e}"
+                )
+        if paths:
+            recording.speaker_sample_paths = paths
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(recording, "speaker_sample_paths")
+
     await session.flush()
     # Commit explicitly so the background cleaner sees the new segments
     # (it opens its own fresh session and would otherwise read stale state).
     await session.commit()
 
-    # Kick off background cleaner. By the time user clicks Clean tab,
-    # the LLM result is usually already in DB → instant load.
-    from meeting.services.clean_orchestrator import trigger_background
-    trigger_background(str(recording.id))
+    # Kick off background cleaner only when transcript actually changed.
+    # The Gen MoM flow re-imports the same text on every click; without this
+    # guard, the cleaner would re-run 60-90s per click for identical content
+    # and Gen MoM would wait for it. When unchanged, the existing
+    # clean_segments cache is still valid → Gen MoM uses it directly.
+    if transcript_changed:
+        from meeting.services.clean_orchestrator import trigger_background
+        trigger_background(str(recording.id))
+
+    # Dispatch async pyannote when caller staged a WAV for diarization
+    # (chunked upload path). The task writes speaker_embeddings + sample
+    # paths + diarized_text back to this recording when it finishes.
+    diarize_task_id: Optional[str] = None
+    if req.pending_diarize_path:
+        try:
+            from meeting.celery_app import is_broker_reachable
+            if is_broker_reachable():
+                from meeting.tasks import diarize_recording_task
+                ar = diarize_recording_task.delay(
+                    str(recording.id), req.pending_diarize_path,
+                )
+                diarize_task_id = ar.id
+                import logging as _lg
+                _lg.info(
+                    f"[import-transcript] dispatched diarize_recording_task "
+                    f"id={diarize_task_id} for recording={recording.id}"
+                )
+            else:
+                # Broker down — spawn in-process asyncio task as fallback.
+                # Same heavy CPU work, just runs inside the FastAPI worker
+                # thread pool instead of a Celery worker. The endpoint
+                # itself still returns immediately (we don't await).
+                import asyncio as _aio
+                import logging as _lg
+                _lg.info(
+                    "[import-transcript] RabbitMQ unreachable — running "
+                    "diarize INLINE via asyncio.create_task (will block "
+                    "1 FastAPI worker for the duration)"
+                )
+                rid_str = str(recording.id)
+                pending_path = req.pending_diarize_path
+
+                async def _inline_diarize():
+                    # Reuse the Celery task body but invoke it directly.
+                    # The task function is a sync callable — wrap in to_thread
+                    # so it doesn't block the FastAPI event loop.
+                    from meeting.tasks import diarize_recording_task
+                    try:
+                        await _aio.to_thread(
+                            diarize_recording_task.run, rid_str, pending_path,
+                        )
+                    except Exception as ex:
+                        _lg.exception(f"[inline diarize] failed: {ex}")
+
+                _aio.create_task(_inline_diarize())
+        except Exception as e:
+            import logging as _lg
+            _lg.exception(f"[import-transcript] dispatch failed: {e}")
 
     return {
         "meeting_id": meeting_id,
@@ -909,6 +1577,9 @@ async def import_transcript_endpoint(
         "segments_count": len(lines),
         "duration_sec": recording.duration_sec,
         "deleted_recordings": deleted_count,
+        # When set, FE polls /api/tasks/{id} for diarize progress and
+        # reloads the meeting when state turns SUCCESS.
+        "diarize_task_id": diarize_task_id,
     }
 
 
@@ -967,7 +1638,9 @@ async def clean_transcript_endpoint(
                 names.add(a["name"])
     attendees_str = ", ".join(sorted(names))
 
-    result = clean_transcript(
+    import asyncio as _aio_clean2
+    result = await _aio_clean2.to_thread(
+        clean_transcript,
         raw_text=raw_text,
         attendees=attendees_str,
         vocab_hints=getattr(meeting, "vocab_hints", None),
@@ -1009,41 +1682,98 @@ async def generate_recording_mom_endpoint(
     ui_lang: str = "vi",
 ):
     """
-    Generate per-recording MoM (biên bản phiên họp) via LangGraph:
-        load_transcript → read_memory → generate_mom → save_results
+    Enqueue MoM generation via Celery and return a task_id IMMEDIATELY (202).
 
-    Output saved to recordings.mom_json. thread_id = recording_id so each
-    recording has its own resume state on the PostgresSaver checkpointer.
+    FE polls /api/tasks/{task_id} to check progress + collect result. This
+    replaces the old inline `await run_mom_graph()` path so the HTTP request
+    doesn't have to wait 2-3 minutes (which was blocking the FE response
+    handlers).
 
-    `ui_lang` (query param): caller's current UI language, used as the final
-    fallback when neither recording.mom_language nor meeting.mom_language is
-    set. FE passes its current `lang` setting so MoM matches user's UI.
+    Falls back to inline execution when the broker is unreachable (dev mode
+    convenience — `docker compose up -d rabbitmq` not run yet). Inline path
+    still uses asyncio.to_thread for the LLM call so it doesn't block the
+    event loop.
     """
     _parse_uuid(recording_id)  # validate format only
 
+    from meeting.celery_app import is_broker_reachable
+    from meeting.tasks import gen_mom_task
+
+    if is_broker_reachable():
+        # Happy path — enqueue task, return task_id. FE polls /tasks/{id}.
+        async_result = gen_mom_task.delay(recording_id, ui_lang)
+        logger.info(
+            f"[/generate-mom] enqueued Celery task {async_result.id} "
+            f"for recording {recording_id}"
+        )
+        return {
+            "task_id": async_result.id,
+            "recording_id": recording_id,
+            "status": "queued",
+            "mode": "celery",
+        }
+
+    # Fallback — broker down. Dispatch via in-process asyncio so HTTP
+    # request returns immediately + FE polls /api/tasks/{id} like with
+    # Celery. Keeps UX consistent regardless of broker availability.
+    logger.warning(
+        "[/generate-mom] Celery broker unreachable — falling back to LOCAL "
+        "asyncio task. Start broker with: docker compose up -d rabbitmq"
+    )
     output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output"
     )
-    checkpointer = get_checkpointer()
+    target_rid = recording_id
+    target_lang = ui_lang
 
-    final_state = await run_mom_graph(
-        recording_id=recording_id,
-        session=session,
-        output_dir=output_dir,
-        checkpointer=checkpointer,
-        mom_language=ui_lang,
-    )
+    async def _run_inline_mom():
+        from meeting.db.base import AsyncSessionLocal
+        async with AsyncSessionLocal() as s2:
+            ckpt = get_checkpointer()
+            fs = await run_mom_graph(
+                recording_id=target_rid,
+                session=s2,
+                output_dir=output_dir,
+                checkpointer=ckpt,
+                mom_language=target_lang,
+            )
+            if fs.get("error") and not fs.get("mom_json"):
+                return {"error": fs["error"]}
+            return {
+                "recording_id": target_rid,
+                "meeting_id": fs.get("meeting_id"),
+                "notes": fs.get("mom_json", {}),
+                "saved_paths": fs.get("saved_paths", {}),
+                "memory_context_count": len(fs.get("memory_context", [])),
+            }
 
-    if final_state.get("error") and not final_state.get("mom_json"):
-        raise HTTPException(status_code=500, detail=final_state["error"])
-
+    from meeting.services.clean_orchestrator import dispatch_local_task
+    local_task_id = dispatch_local_task(_run_inline_mom, prefix="mom-local")
     return {
         "recording_id": recording_id,
-        "meeting_id": final_state.get("meeting_id"),
-        "notes": final_state.get("mom_json", {}),
-        "saved_paths": final_state.get("saved_paths", {}),
-        "memory_context_count": len(final_state.get("memory_context", [])),
+        "task_id": local_task_id,
+        "status": "queued",
+        "mode": "asyncio",
     }
+
+
+@router.get("/tasks/{task_id}")
+async def task_status_endpoint(task_id: str):
+    """Poll task state. FE polls this for both Celery-dispatched tasks
+    AND in-process asyncio fallback tasks — uniform interface.
+
+    Returns {state, result?, error?} — state in PENDING / STARTED /
+    SUCCESS / FAILURE / RETRY. Local task_ids carry a `local-` prefix.
+    """
+    # Local (in-process asyncio) tasks first — cheap dict lookup, and
+    # local task_ids have a distinct prefix so we can route quickly.
+    if task_id.startswith(("local-", "clean-local-", "mom-local-")):
+        from meeting.services.clean_orchestrator import get_local_task_state
+        state = get_local_task_state(task_id)
+        if state is not None:
+            return state
+    from meeting.tasks import get_task_state
+    return get_task_state(task_id)
 
 
 @router.get("/recordings/{recording_id}/mom")
@@ -1154,8 +1884,8 @@ async def bind_voiceprint_endpoint(
         # "same voice stored under multiple names" bug when the user changes
         # their mind about a speaker's label and re-saves.
         #
-        # Threshold 0.15 ≈ 0.85 cosine similarity — comfortably above the
-        # default 0.30 match threshold; only fires when we're highly confident
+        # Threshold 0.15 ≈ 0.85 cosine similarity — comfortably tighter than the
+        # default 0.45 match threshold; only fires when we're highly confident
         # it's literally the same voice.
         close = await find_similar_voiceprint(
             session, user_id=user.id, embedding=emb, threshold=0.15, limit=5,

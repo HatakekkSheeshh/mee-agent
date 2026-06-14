@@ -114,8 +114,15 @@ class PmAgentClient:
         task_id: Optional[str] = None,
         context_id: Optional[str] = None,
         data_part: Optional[dict] = None,
+        bearer: Optional[str] = None,
     ) -> PmAgentResult:
-        """One `message/send` call. Idempotent per invocation (never auto-resumes)."""
+        """One `message/send` call. Idempotent per invocation (never auto-resumes).
+
+        `bearer`, when set, is the per-request identity token (the logged-in
+        user's OID for pm-agent's direct-oid path, or a Graph JWT later). It
+        overrides the static api_key on the Authorization header so each user's
+        request carries their own identity. When None, falls back to api_key.
+        """
         parts: list[dict] = [{"kind": "text", "text": text}]
         if data_part is not None:
             parts.append({"kind": "data", "data": data_part})
@@ -133,7 +140,7 @@ class PmAgentClient:
         if context_id:
             message["contextId"] = context_id
 
-        result = await self._rpc("message/send", {"message": message})
+        result = await self._rpc("message/send", {"message": message}, bearer=bearer)
         return self._parse_result(result)
 
     async def cancel(self, task_id: str) -> None:
@@ -145,7 +152,7 @@ class PmAgentClient:
 
     # ─── transport ───────────────────────────────────────────────
 
-    async def _rpc(self, method: str, params: dict) -> dict:
+    async def _rpc(self, method: str, params: dict, *, bearer: Optional[str] = None) -> dict:
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -156,8 +163,12 @@ class PmAgentClient:
         # `Authorization: Bearer <token>` (verified: X-API-KEY → 401, Bearer →
         # 200). A locally-run pm-agent uses X-API-KEY = API_SEC_KEY. Send both
         # so the client works against either; the server reads whichever it wants.
+        #
+        # `bearer` (per-request user identity — e.g. the logged-in user's OID)
+        # takes priority on Authorization so each user's request reaches
+        # pm-agent's direct-oid path as themselves; falls back to api_key.
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {bearer or self._api_key}",
             "X-API-KEY": self._api_key,
             "Content-Type": "application/json",
         }

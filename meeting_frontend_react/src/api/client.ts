@@ -1,9 +1,10 @@
 // Typed fetch wrapper for Mee backend.
-// Vite dev server proxies /api → :8001, so all paths here use relative URLs.
+// Vite dev server (:8001) proxies /api → backend :8002, so all paths here use relative URLs.
 
 import type {
   Meeting,
   MeetingDetail,
+  MeetingMember,
   Recording,
   RecordingTranscript,
   CleanResponse,
@@ -48,6 +49,29 @@ async function http<T>(
   return (await r.json()) as T;
 }
 
+// ─── Celery task polling ─────────────────────────────────────────────
+export type CeleryState =
+  | "PENDING"
+  | "STARTED"
+  | "RETRY"
+  | "SUCCESS"
+  | "FAILURE"
+  | "REVOKED";
+
+export interface TaskStatusResponse {
+  task_id: string;
+  state: CeleryState;
+  result?: {
+    recording_id: string;
+    meeting_id?: string;
+    notes?: MoMJson;
+    saved_paths?: { md?: string; memory_events?: number };
+    memory_context_count?: number;
+    error?: string;
+  };
+  error?: string;
+}
+
 // ─── Model registry (STT + LLM profiles for the picker) ──────────────
 export interface ModelProfile {
   id: string;
@@ -67,6 +91,12 @@ export interface ModelsResponse {
 
 // ─── Meetings ──────────────────────────────────────────────────────
 export const api = {
+  tasks: {
+    /** Poll Celery task state by id. Returns PENDING/STARTED while running,
+     * SUCCESS with `result` payload when done, FAILURE with `error` on fail. */
+    status: (taskId: string) =>
+      http<TaskStatusResponse>("GET", `/api/tasks/${taskId}`),
+  },
   models: {
     list: () => http<ModelsResponse>("GET", "/api/models"),
   },
@@ -83,6 +113,11 @@ export const api = {
       http<{ meeting_id: string; summary: ProjectSummary }>(
         "POST", `/api/meetings/${id}/generate-project-summary`,
       ),
+    /** List members of a meeting — feeds Notta-style speaker dropdown. */
+    listMembers: (id: string) =>
+      http<{ meeting_id: string; members: MeetingMember[] }>(
+        "GET", `/api/meetings/${id}/members`,
+      ),
     importTranscript: (
       meetingId: string,
       data: {
@@ -95,6 +130,9 @@ export const api = {
           speaker?: string | null;
           start?: number | null;
           end?: number | null;
+          /** Per-word timestamps (faster-whisper). Persisted on
+           * transcript_segments.words for FE Notta word-accurate sync. */
+          words?: { text: string; start: number; end: number }[] | null;
         }>;
         session_label?: string;
         replace?: boolean;
@@ -103,6 +141,14 @@ export const api = {
         /** Per-cluster voice embeddings from PhoWhisper server. Stored on
          * recording.speaker_embeddings for later voiceprint matching. */
         cluster_embeddings?: Record<string, number[]> | null;
+        /** Local-pyannote-only: base64 3s sample WAV per cluster. Backend
+         * decodes + writes to output/<rid>/spk_<label>.wav so SpeakerMapper
+         * can play a clip. PhoWhisper path leaves this null. */
+        sample_audio_b64?: Record<string, string> | null;
+        /** Chunked upload path: full cleaned WAV staged server-side. Backend
+         * dispatches a Celery task to run pyannote on it and writes the
+         * speaker_embeddings + sample paths back when done. */
+        pending_diarize_path?: string | null;
       },
     ) =>
       http<{
@@ -110,6 +156,9 @@ export const api = {
         recording_id: string;
         segments_count: number;
         deleted_recordings?: number;
+        /** Set when pending_diarize_path was provided + Celery is reachable.
+         * FE polls /api/tasks/{id} → reloads meeting when SUCCESS. */
+        diarize_task_id?: string | null;
       }>("POST", `/api/meetings/${meetingId}/import-transcript`, data),
   },
 
@@ -165,6 +214,33 @@ export const api = {
       ),
     transcript: (id: string) =>
       http<RecordingTranscript>("GET", `/api/recordings/${id}/transcript`),
+    /** Stream the raw audio file for in-browser playback (Notta-style sync). */
+    audioUrl: (id: string) => `/api/recordings/${id}/audio`,
+    /** Attach (or replace) the source audio for a recording — used to recover
+     * playback when the original transcribe path didn't persist the audio. */
+    uploadAudio: async (id: string, file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/recordings/${id}/audio`, { method: "POST", body: fd });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new ApiError(r.status, j.detail || r.statusText);
+      }
+      return r.json() as Promise<{ recording_id: string; audio_path: string; size_bytes: number }>;
+    },
+    /** Notta-style speaker rename: scope='current' overrides just this segment,
+     * 'all' renames every segment that currently shares this row's label. */
+    patchSegmentSpeaker: (
+      id: string,
+      index: number,
+      speaker: string,
+      scope: "current" | "all",
+    ) =>
+      http<{ renamed: number; scope: string; speaker: string }>(
+        "PATCH",
+        `/api/recordings/${id}/segment-speaker`,
+        { index, speaker, scope },
+      ),
     clean: (id: string, regenerate = false) =>
       http<CleanResponse>(
         "POST",
@@ -182,14 +258,27 @@ export const api = {
       http<{ recording_id: string; deleted: boolean }>(
         "DELETE", `/api/recordings/${id}`,
       ),
+    /** Enqueue MoM generation. Returns either:
+     *   - `{task_id, status:"queued", mode:"celery"}` — FE polls /tasks/{id}
+     *   - `{notes, ...}` (legacy inline shape) — broker down, ran inline
+     * Caller should branch on the presence of `task_id`. */
     generateMom: (id: string, uiLang: string = "vi") =>
-      http<{
-        recording_id: string;
-        meeting_id: string;
-        notes: MoMJson;
-        saved_paths: { md?: string; memory_events?: number };
-        memory_context_count: number;
-      }>("POST", `/api/recordings/${id}/generate-mom?ui_lang=${encodeURIComponent(uiLang)}`),
+      http<
+        | {
+            task_id: string;
+            recording_id: string;
+            status: "queued";
+            mode: "celery";
+          }
+        | {
+            recording_id: string;
+            meeting_id: string;
+            notes: MoMJson;
+            saved_paths: { md?: string; memory_events?: number };
+            memory_context_count: number;
+            mode: "inline";
+          }
+      >("POST", `/api/recordings/${id}/generate-mom?ui_lang=${encodeURIComponent(uiLang)}`),
     getMom: (id: string) =>
       http<{ recording_id: string; mom_json: MoMJson }>(
         "GET", `/api/recordings/${id}/mom`,
@@ -199,7 +288,13 @@ export const api = {
   },
 
   // ─── Transcribe upload (one-shot, no DB persistence) ────────────────
-  transcribe: async (file: File, language = "vi", vocabHints = "", attendees = "") => {
+  transcribe: async (
+    file: File,
+    language = "vi",
+    vocabHints = "",
+    attendees = "",
+    recordingId = "",
+  ) => {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("language", language);
@@ -207,6 +302,10 @@ export const api = {
     // Attendees feed into the Whisper prompt (`_build_whisper_prompt`) to bias
     // STT toward correct name spellings + diarization toward expected #speakers.
     if (attendees) fd.append("attendees", attendees);
+    // Tell the backend WHICH recording owns this audio so it can persist the
+    // file under output/audio/<recording_id>.<ext> and patch recording.audio_path.
+    // Enables Notta-style in-browser playback via /api/recordings/{id}/audio.
+    if (recordingId) fd.append("recording_id", recordingId);
     const r = await fetch("/api/transcribe", { method: "POST", body: fd });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -215,10 +314,59 @@ export const api = {
     return (await r.json()) as {
       text: string;
       chunked?: boolean;
-      segments?: { speaker?: string; text: string; start?: number; end?: number }[];
+      segments?: {
+        speaker?: string;
+        text: string;
+        start?: number;
+        end?: number;
+        /** Per-word timestamps (faster-whisper only). [{text, start, end}] in
+         * seconds. Forwarded by FE to /import-transcript → persisted on
+         * transcript_segments.words. */
+        words?: { text: string; start: number; end: number }[];
+      }[];
       /** PhoWhisper-server only — 256-dim embedding per pyannote cluster. */
       cluster_embeddings?: Record<string, number[]>;
+      /** Local-pyannote path — base64-encoded 3s WAV per cluster, surfaced
+       * so we can ship them with the /diarize-result POST and let the
+       * backend persist them for SpeakerMapper playback. */
+      sample_audio_b64?: Record<string, string>;
+      /** Chunked path — server-side relative path to the cleaned WAV staged
+       * for async pyannote. FE forwards to /import-transcript so backend can
+       * dispatch the diarize Celery task. */
+      pending_diarize_path?: string | null;
     };
+  },
+
+  /** URL for the per-cluster 3s sample WAV stored under recording.speaker_sample_paths.
+   * Returns a usable <audio src=…> URL; falls back to 404 when the recording
+   * has no sample for that cluster (FE should hide the play button via
+   * recording.speaker_samples list). */
+  speakerSampleUrl: (recordingId: string, label: string) =>
+    `/api/recordings/${recordingId}/speaker-sample/${encodeURIComponent(label)}`,
+
+  // ─── Auth ──────────────────────────────────────────────────────────
+  // Cookie flows: /auth/login + /auth/callback are full-page redirects, NOT
+  // fetches — we let the browser navigate so the session cookie lands on the
+  // same origin. /auth/me and /auth/logout are fetched after the browser is
+  // already back on the React app.
+  auth: {
+    /** Get current user. 401 → not authenticated. */
+    me: () =>
+      http<{
+        id: string;
+        email: string;
+        display_name: string | null;
+        avatar_url: string | null;
+        voice_enrolled: boolean;
+        provider: "mock" | "microsoft";
+      }>("GET", "/auth/me"),
+    /** Clear server-side session cookie. */
+    logout: () => http<{ ok: boolean }>("POST", "/auth/logout"),
+    /** Full-page redirect to start the OAuth flow. `next` is bounced back to
+     * after successful login (defaults to the current path so the user lands
+     * back where they started). */
+    loginUrl: (next: string = window.location.pathname) =>
+      `/auth/login?next=${encodeURIComponent(next)}`,
   },
 
   // ─── Chat ──────────────────────────────────────────────────────────

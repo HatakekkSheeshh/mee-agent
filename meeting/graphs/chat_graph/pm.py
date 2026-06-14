@@ -40,6 +40,11 @@ def make_pm_call(pm_client):
         task_id = state.get("pm_task_id")
         context_id = state.get("pm_context_id")
         kind = payload.get("kind")
+        # Per-request identity: the signed-in user's Microsoft Graph access token
+        # (JWT), forwarded as the A2A bearer so pm-agent's JWT path validates it
+        # via Graph /me and acts as this user. None for unauthenticated/legacy
+        # callers → client falls back to its static api_key.
+        bearer = state.get("pm_user_token")
 
         # Guard empty text: a bare "/pm-agent" opt-in strips to an empty
         # user_message, and pm-agent rejects empty text ("Message.text cannot be
@@ -67,6 +72,7 @@ def make_pm_call(pm_client):
                 result = await client.send_message(
                     payload.get("text", ""),
                     task_id=task_id, context_id=context_id, data_part=data_part,
+                    bearer=bearer,
                 )
             elif kind == "approval":
                 data_part = {
@@ -74,14 +80,16 @@ def make_pm_call(pm_client):
                     "approval_input": payload.get("approval_input", ""),
                 }
                 result = await client.send_message(
-                    "", task_id=task_id, context_id=context_id, data_part=data_part
+                    "", task_id=task_id, context_id=context_id, data_part=data_part,
+                    bearer=bearer,
                 )
             else:
                 # kind in ("start", "text"). DEFERRED SEAM (spec §5): transcript
                 # context for the chat's bound meeting/recording could be folded
                 # into `text` here. Trigger/shape TBD — no behavior added in v1.
                 result = await client.send_message(
-                    payload.get("text", ""), task_id=task_id, context_id=context_id
+                    payload.get("text", ""), task_id=task_id, context_id=context_id,
+                    bearer=bearer,
                 )
         except PmAgentError as e:
             logger.exception("[Node pm_call] pm-agent call failed")

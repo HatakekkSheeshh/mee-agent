@@ -191,9 +191,32 @@ services:
       NEXTAUTH_URL: ${LANGFUSE_HOST:-http://localhost:3000}
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme-dev-nextauth}
 
+  # ─── RabbitMQ broker for Celery (background MoM gen) ─────────────────
+  # Always-on (no profile) so `docker compose up -d rabbitmq` starts it.
+  # When stopped, /api/recordings/{id}/generate-mom falls back to inline
+  # asyncio.to_thread (legacy behaviour) — see fallback in the endpoint.
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: mee-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-mee}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-mee_dev_password}
+    ports:
+      - "5672:5672"     # AMQP — broker port (Celery connects here)
+      - "15672:15672"   # Management UI — http://localhost:15672 (user/pass above)
+    volumes:
+      - mee_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   mee_pg_data:
   langfuse_pg_data:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
+  mee_rabbitmq_data:
