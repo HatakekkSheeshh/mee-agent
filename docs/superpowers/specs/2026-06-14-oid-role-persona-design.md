@@ -64,12 +64,10 @@ builds on it later.
    - `user_prefs/{OID}` per-user keying matters **only for Feature 2** — and even
      there, only `user_prefs`, never `project_facts`.
 
-4. **Domain = stored, not gated.** `MS_TENANT_ID` already restricts login to the
-   Entra tenant at the OAuth layer, so domain-based gating is redundant. Fetch
-   `domain` (from `mail`/`upn`) and store it on the user row for future multi-org
-   / reporting; no gating logic now. *(Minor: `domain` is derivable from the
-   already-stored `email`; the column is redundant today but chosen for future
-   multi-org readiness.)*
+4. **Domain = not stored.** `MS_TENANT_ID` already restricts login to the Entra
+   tenant at the OAuth layer, so domain-based gating is redundant; and `domain`
+   is derivable from the already-stored `email` (`email.split("@")[1]`) if ever
+   needed. **No `domain` column, no gating logic.**
 
 5. **Resolve at login, write once per login** (refresh on each login — jobTitle
    can change in the IdP), not per-kickoff.
@@ -78,16 +76,16 @@ builds on it later.
 
 ### A. Graph profile fetch — `meeting/auth/microsoft.py`
 - `MicrosoftProvider.fetch_profile(access_token) -> dict` →
-  `{job_title, department, mail, upn}` via
-  `GET https://graph.microsoft.com/v1.0/me?$select=jobTitle,department,mail,userPrincipalName`
+  `{job_title, department}` via
+  `GET https://graph.microsoft.com/v1.0/me?$select=jobTitle,department`
   with `Authorization: Bearer <access_token>`.
 - The access token from `acquire_token_by_authorization_code` is already a Graph
   token (`User.Read` scope) → **no new consent**.
 - Called inside `exchange_code` after the token result; the resulting fields are
   added to `UserInfo`.
 - **Best-effort:** any Graph error → `job_title=None` (login must never break).
-- Extend `UserInfo` (`meeting/auth/base.py`) with `position: Optional[str]`,
-  `department: Optional[str]`, `domain: Optional[str]`.
+- Extend `UserInfo` (`meeting/auth/base.py`) with `position: Optional[str]` (the
+  `jobTitle`). `department` may be fetched for logging but is not persisted.
 
 ### B. Mapping — `meeting/services/role_mapping.py` (pure)
 - `normalize(title) -> str` — lowercase, collapse whitespace/punctuation.
@@ -99,15 +97,14 @@ builds on it later.
 ### C. Repo + persistence
 - Repo: `resolve_role_by_title(session, title) -> str | None` — loads roles
   (`list_roles`), delegates to the pure `resolve_role`.
-- `User` model (`meeting/db/models.py`): add `role_id` (nullable FK→`roles.id`),
-  `domain` (nullable text), and a `role` relationship.
+- `User` model (`meeting/db/models.py`): add `role_id` (nullable FK→`roles.id`)
+  and a `role` relationship.
 - `_upsert_user` (`meeting/auth/routes.py`): after fetching the profile, resolve
-  `role_id` from `info.position` and set `role_id` + `domain`. **Refreshed on
-  every login** (new user → set on create; returning user → re-resolve and
-  update).
-- **Alembic `0017`** (single migration): add `users.role_id`, `users.domain`,
-  `roles.aliases` (`text[]` default `'{}'`), **+ idempotent reseed** of aliases
-  into existing role rows by name (`UPDATE … WHERE name = …`).
+  `role_id` from `info.position` and set `role_id`. **Refreshed on every login**
+  (new user → set on create; returning user → re-resolve and update).
+- **Alembic `0017`** (single migration): add `users.role_id`, `roles.aliases`
+  (`text[]` default `'{}'`), **+ idempotent reseed** of aliases into existing
+  role rows by name (`UPDATE … WHERE name = …`).
 
 ### D. Kickoff re-wire — `meeting/api/chat.py`
 - `kickoff_session` switches from `repo.get_or_create_dev_user` to
@@ -132,7 +129,6 @@ O365 login → exchange_code
   └─ UserInfo{email, oid, tid, position, department, domain, token_cache}
 callback → _upsert_user(info)
   └─ resolve_role_by_title(info.position) → role_name → roles.id → users.role_id
-  └─ users.domain = info.domain
   └─ commit (same txn as user upsert)
 
 open chat → POST /sessions/{id}/kickoff (empty thread)
@@ -155,8 +151,8 @@ open chat → POST /sessions/{id}/kickoff (empty thread)
 - **`test_auth_microsoft`** (extend): `fetch_profile` parses a mocked Graph JSON
   response; `exchange_code` degrades to `position=None` when the Graph call errors.
 - **`test_roles_repo`** (extend): `resolve_role_by_title` against seeded aliases.
-- **`test_auth_routes`** (extend): `_upsert_user` sets `role_id` + `domain` from
-  `UserInfo.position`/`domain`; returning-user refresh path updates them.
+- **`test_auth_routes`** (extend): `_upsert_user` sets `role_id` from
+  `UserInfo.position`; returning-user refresh path updates it.
 - **`test_kickoff_role_source`** (update): kickoff uses the authenticated
   `user.role_id`; the optional `KickoffRequest.role` override is still honored.
 - **`test_seed_roles`** (extend): aliases present on seeded role rows.
