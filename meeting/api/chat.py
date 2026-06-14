@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.auth import get_current_user
+from meeting.auth.tokens import ReauthRequired, get_graph_access_token
 from meeting.db import get_session
 from meeting.db import repositories as repo
 from meeting.db.base import AsyncSessionLocal
@@ -255,6 +256,23 @@ async def clear_session(
 
 # ─── Messages ─────────────────────────────────────────────────────
 
+async def _graph_token_or_401(user: User, session: AsyncSession):
+    """Acquire the signed-in user's Microsoft Graph access token for pm-agent's
+    JWT auth path. Returns None for non-Microsoft (mock) users — they have no
+    Graph token and never drive pm-agent in real deployments. For real MS users
+    whose stored refresh token is gone/expired, raise 401 so the FE re-logins.
+    """
+    if not user.ms_oid:
+        return None
+    try:
+        return await get_graph_access_token(user, session)
+    except ReauthRequired:
+        raise HTTPException(
+            status_code=401,
+            detail="Phiên Microsoft đã hết hạn — vui lòng đăng nhập lại.",
+        )
+
+
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -276,6 +294,7 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Session not found")
 
     checkpointer = get_checkpointer()
+    pm_token = await _graph_token_or_401(user, session)
 
     result = await run_chat_turn(
         session_id=session_id,
@@ -284,7 +303,7 @@ async def send_message(
         meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
         session=session,
         checkpointer=checkpointer,
-        pm_user_oid=user.ms_oid,
+        pm_user_token=pm_token,
     )
 
     if result["status"] == "interrupted":
@@ -323,10 +342,9 @@ async def send_message_stream(
     The blocking /messages endpoint stays as-is (tests + fallback transport).
     """
     sid = _parse_uuid(session_id)
-    # Capture identity as plain values now: `user` is bound to the Depends
+    # Capture identity as a plain value now: `user` is bound to the Depends
     # session, which is torn down before the StreamingResponse body runs.
     auth_user_id = user.id
-    pm_user_oid = user.ms_oid
 
     async def gen():
         # Own session: a Depends(get_session) session is torn down BEFORE a
@@ -339,9 +357,14 @@ async def send_message_stream(
                     yield _sse({"type": "error", "detail": "Session not found"})
                     return
                 # Re-bind the authenticated user to this generator's own session
-                # (the Depends one is closed) for _persist_interrupt below.
+                # (the Depends one is closed) for token refresh + _persist_interrupt.
                 user = await session.get(User, auth_user_id)
                 checkpointer = get_checkpointer()
+                try:
+                    pm_token = await _graph_token_or_401(user, session)
+                except HTTPException as e:
+                    yield _sse({"type": "error", "detail": e.detail, "status": e.status_code})
+                    return
 
                 async for ev in stream_chat_turn(
                     session_id=session_id,
@@ -350,7 +373,7 @@ async def send_message_stream(
                     meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
                     session=session,
                     checkpointer=checkpointer,
-                    pm_user_oid=pm_user_oid,
+                    pm_user_token=pm_token,
                 ):
                     if ev.get("type") != "result":
                         yield _sse(ev)

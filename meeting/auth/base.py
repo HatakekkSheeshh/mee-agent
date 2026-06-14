@@ -23,6 +23,11 @@ class UserInfo:
     avatar_url: Optional[str] = None
     ms_oid: Optional[str] = None
     ms_tenant_id: Optional[str] = None
+    # Serialized MSAL token cache (plaintext JSON) captured at code-exchange.
+    # Holds the refresh token used to mint Graph access tokens later. The
+    # callback encrypts this before persisting to users.refresh_token. None for
+    # MockProvider (no real Microsoft tokens).
+    ms_token_cache: Optional[str] = None
 
 
 class AuthProvider(Protocol):

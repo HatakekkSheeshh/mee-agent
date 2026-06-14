@@ -40,11 +40,11 @@ def make_pm_call(pm_client):
         task_id = state.get("pm_task_id")
         context_id = state.get("pm_context_id")
         kind = payload.get("kind")
-        # Per-request identity: the signed-in user's real Azure OID, forwarded as
-        # the A2A bearer so pm-agent's direct-oid path acts as this user (not a
-        # static env OID). None for unauthenticated/legacy callers → client
-        # falls back to its static api_key.
-        bearer = state.get("pm_user_oid")
+        # Per-request identity: the signed-in user's Microsoft Graph access token
+        # (JWT), forwarded as the A2A bearer so pm-agent's JWT path validates it
+        # via Graph /me and acts as this user. None for unauthenticated/legacy
+        # callers → client falls back to its static api_key.
+        bearer = state.get("pm_user_token")
 
         try:
             client = pm_client or get_pm_agent_client()

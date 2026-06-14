@@ -1,8 +1,9 @@
-"""pm_call forwards the logged-in user's OID as the per-request bearer.
+"""pm_call forwards the logged-in user's token as the per-request bearer.
 
-This is the per-user authorization seam: the chat turn carries pm_user_oid (the
-real Azure OID of the signed-in user), and pm_call hands it to the A2A client so
-pm-agent's direct-oid path receives that user's identity — not a static env OID.
+This is the per-user authorization seam: the chat turn carries pm_user_token
+(the signed-in user's Microsoft Graph access token), and pm_call hands it to the
+A2A client so pm-agent's JWT path validates it as that user — not a static env
+token.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ async def test_pm_call_forwards_user_oid_as_bearer():
 
     state = {
         "user_message": "liệt kê issue overdue",
-        "pm_user_oid": oid,
+        "pm_user_token": oid,
         "pm_rounds": 0,
     }
     await pm_call(state)

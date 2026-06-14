@@ -55,7 +55,7 @@ class ChatState(TypedDict, total=False):
     # ── pm-agent A2A branch (intent == "pm_task") ──
     # All checkpointed (thread_id = session_id) so a multi-step pm-agent
     # conversation survives across approve/reject round-trips on one thread.
-    pm_user_oid: Optional[str]     # signed-in user's Azure OID → A2A bearer (per-user auth)
+    pm_user_token: Optional[str]   # signed-in user's Graph access token (JWT) → A2A bearer (per-user auth)
     pm_task_id: Optional[str]      # A2A task id; None on first call, set from result
     pm_context_id: Optional[str]   # A2A contextId; echoed with task_id on resume
     pm_next_payload: dict          # what pm_call sends next:

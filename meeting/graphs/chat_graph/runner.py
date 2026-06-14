@@ -45,7 +45,7 @@ def _initial_turn_state(
     user_id: str,
     user_message: str,
     meeting_id: Optional[str],
-    pm_user_oid: Optional[str] = None,
+    pm_user_token: Optional[str] = None,
 ) -> "ChatState":
     """Initial state for a NEW user message.
 
@@ -65,7 +65,7 @@ def _initial_turn_state(
         "user_id": user_id,
         "user_message": user_message,
         "meeting_id": meeting_id,
-        "pm_user_oid": pm_user_oid,
+        "pm_user_token": pm_user_token,
         # reset unified-agent loop state
         "agent_messages": [],
         "agent_rounds": 0,
@@ -97,14 +97,14 @@ async def run_chat_turn(
     meeting_id: Optional[str],
     session: AsyncSession,
     checkpointer,
-    pm_user_oid: Optional[str] = None,
+    pm_user_token: Optional[str] = None,
 ) -> dict:
     """
     Run 1 turn of chat. May interrupt if tool needs approval.
 
-    `pm_user_oid` is the signed-in user's Azure OID, forwarded to pm-agent as
-    the per-request identity (see pm_call). Optional so tests/legacy callers
-    that never touch the pm branch can omit it.
+    `pm_user_token` is the signed-in user's Microsoft Graph access token,
+    forwarded to pm-agent as the per-request bearer (see pm_call). Optional so
+    tests/legacy callers that never touch the pm branch can omit it.
 
     Returns:
         {"status": "complete", "reply": "...", ...}
@@ -114,7 +114,7 @@ async def run_chat_turn(
     """
     graph = build_chat_graph(session, checkpointer)
     config = {"configurable": {"thread_id": session_id}}
-    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_oid)
+    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_token)
 
     logger.info(f"=== Running ChatGraph turn for session {session_id[:8]} ===")
     result = await graph.ainvoke(initial_state, config=config)
@@ -158,7 +158,7 @@ async def stream_chat_turn(
     meeting_id: Optional[str],
     session: AsyncSession,
     checkpointer,
-    pm_user_oid: Optional[str] = None,
+    pm_user_token: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """Streaming variant of run_chat_turn.
 
@@ -169,7 +169,7 @@ async def stream_chat_turn(
     """
     graph = build_chat_graph(session, checkpointer)
     config = {"configurable": {"thread_id": session_id}}
-    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_oid)
+    initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_token)
 
     logger.info(f"=== Streaming ChatGraph turn for session {session_id[:8]} ===")
     final_values: dict = {}

@@ -76,7 +76,7 @@ def test_get_login_url_passes_state_and_redirect(monkeypatch):
     url = provider.get_login_url(state="st-123", redirect_uri=REDIRECT)
 
     assert "state=st-123" in url
-    call = provider._app.calls["authorize"]
+    call = provider._injected_app.calls["authorize"]
     assert call["state"] == "st-123"
     assert call["redirect_uri"] == REDIRECT
 
