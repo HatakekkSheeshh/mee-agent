@@ -30,3 +30,4 @@ celery[librabbitmq]>=5.3
 # Celery doesn't pick up new @task definitions until the process restarts.
 watchdog>=4.0
 psycopg[binary]
+boto3>=1.34

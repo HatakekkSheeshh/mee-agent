@@ -1870,24 +1870,147 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .mono   { font-family: var(--font-mono); letter-spacing: 0; }
 .small  { font-size: 12px; }
 
-/* Scrollbar */
+/* Scrollbar — single look for every internal scroll area (transcript
+ * segments, chat, MoM editor, notta dropdown member list). Same width,
+ * same accent, same hover bump. */
 .pane-content::-webkit-scrollbar,
 .chat-thread::-webkit-scrollbar,
-.transcript-box::-webkit-scrollbar { width: 6px; }
+.transcript-box::-webkit-scrollbar,
+.notta-list::-webkit-scrollbar,
+.notta-dropdown::-webkit-scrollbar,
+.mom-editor-content::-webkit-scrollbar { width: 6px; height: 6px; }
 .pane-content::-webkit-scrollbar-track,
 .chat-thread::-webkit-scrollbar-track,
-.transcript-box::-webkit-scrollbar-track { background: transparent; }
+.transcript-box::-webkit-scrollbar-track,
+.notta-list::-webkit-scrollbar-track,
+.notta-dropdown::-webkit-scrollbar-track,
+.mom-editor-content::-webkit-scrollbar-track { background: transparent; }
 .pane-content::-webkit-scrollbar-thumb,
 .chat-thread::-webkit-scrollbar-thumb,
-.transcript-box::-webkit-scrollbar-thumb {
+.transcript-box::-webkit-scrollbar-thumb,
+.notta-list::-webkit-scrollbar-thumb,
+.notta-dropdown::-webkit-scrollbar-thumb,
+.mom-editor-content::-webkit-scrollbar-thumb {
     background: var(--border-2);
     border-radius: 999px;
+    min-height: 32px;
 }
 .pane-content::-webkit-scrollbar-thumb:hover,
 .chat-thread::-webkit-scrollbar-thumb:hover,
-.transcript-box::-webkit-scrollbar-thumb:hover {
+.transcript-box::-webkit-scrollbar-thumb:hover,
+.notta-list::-webkit-scrollbar-thumb:hover,
+.notta-dropdown::-webkit-scrollbar-thumb:hover,
+.mom-editor-content::-webkit-scrollbar-thumb:hover {
     background: var(--border-3);
 }
+
+/* Inline editable text fields used in MoMView's edit mode. The base
+ * .editable-inline applies a subtle dashed outline + hover lift so the
+ * user sees what's editable; on focus we light it up with the accent
+ * border. Placeholder uses ::before so an empty span still has hit
+ * area + a hint. */
+.editable-inline {
+    display: inline-block;
+    min-width: 12px;
+    padding: 0 4px;
+    margin: 0 -4px;
+    border-radius: 4px;
+    outline: 1px dashed transparent;
+    transition: outline-color 100ms, background 100ms;
+    cursor: text;
+}
+.editable-inline:hover { background: var(--bg-2); outline-color: var(--border-2); }
+.editable-inline:focus {
+    background: var(--bg-2);
+    outline: 1px solid var(--accent, var(--border-3));
+    outline-offset: 0;
+}
+.editable-inline.multiline { display: inline; }
+.editable-inline:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-mute);
+    font-style: italic;
+}
+.mom-edit-mode { padding-bottom: 24px; }
+
+.mom-save-banner {
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    font-size: 12px;
+    color: var(--text-mute);
+    display: inline-block;
+}
+
+/* Edited-MoM body — rendered HTML from MomEditor split into per-section
+ * cards by MoMView. Each `<div class="mom-card">` wraps an H3 + its
+ * following blocks (paragraph / list / etc) so each section gets a
+ * visible boxed container, matching the original MoMView card vibe. */
+.mom-edited-body { padding: 8px 4px 24px; color: var(--text-1); line-height: 1.55; }
+.mom-edited-title h1,
+.mom-edited-title h2 {
+    font-family: var(--font-display, var(--font-sans));
+    font-size: 22px;
+    font-weight: 600;
+    margin: 4px 0 20px;
+    letter-spacing: -0.01em;
+    color: var(--text-1);
+}
+.mom-card {
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface, var(--bg-1));
+    padding: 14px 18px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.mom-card-body h3 {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 12px;
+}
+.mom-card-body p {
+    margin: 0.5em 0;
+    font-size: 14px;
+    color: var(--text-1);
+}
+.mom-card-body p:first-child { margin-top: 0; }
+.mom-card-body p:last-child { margin-bottom: 0; }
+.mom-card-body ul,
+.mom-card-body ol {
+    padding-left: 1.4em;
+    margin: 0.4em 0;
+    font-size: 14px;
+}
+.mom-card-body ul:first-child,
+.mom-card-body ol:first-child { margin-top: 0; }
+.mom-card-body ul:last-child,
+.mom-card-body ol:last-child { margin-bottom: 0; }
+.mom-card-body li { margin: 0.35em 0; line-height: 1.55; }
+.mom-card-body li b,
+.mom-card-body li strong { color: var(--text-1); font-weight: 600; }
+.mom-card-body li i,
+.mom-card-body li em { color: var(--text-mute); font-style: italic; }
+.mom-card-body blockquote {
+    border-left: 3px solid var(--accent, var(--border-2));
+    padding: 0.2em 0 0.2em 0.9em;
+    margin: 0.6em 0;
+    color: var(--text-2);
+}
+.mom-card-body code {
+    background: var(--bg-2);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.92em;
+    font-family: var(--font-mono);
+}
+.mom-card-body strong, .mom-card-body b { font-weight: 600; }
 .transcript-box {
     scrollbar-width: thin;
     scrollbar-color: var(--border-2) transparent;
@@ -2557,10 +2680,166 @@ select.mee-modal-input {
     font-size: 11.5px;
     color: var(--text-faint);
 }
+/* Loading placeholder shown while the upload pipeline is mid-flight.
+ * Replaces the segment list so the user doesn't see partial text that
+ * later gets re-hidden by karaoke reveal (jarring flicker). */
+.transcript-clean-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.notta-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--text-muted);
+}
+.notta-loading-spinner {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: notta-loading-spin 0.9s linear infinite;
+}
+.notta-loading-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+.notta-loading-step {
+    font-size: 12.5px;
+    color: var(--accent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+.notta-loading-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    max-width: 360px;
+    line-height: 1.55;
+}
+@keyframes notta-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* iOS-style toggle switch — used for the "✎ Sửa text" / "✎ Sửa biên bản"
+ * controls. The native checkbox is visually hidden; the user clicks the
+ * label (track + label text). Accent green when on. */
+.toggle-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 2px 4px;
+    transition: color var(--dur) var(--ease);
+}
+.toggle-switch:hover .toggle-switch-track {
+    border-color: var(--border-2);
+}
+.toggle-switch.on {
+    color: var(--accent);
+}
+.toggle-switch input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.toggle-switch-track {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    border: 1px solid var(--border);
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-radius: 10px;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    flex-shrink: 0;
+}
+.toggle-switch.on .toggle-switch-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle-switch-thumb {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: transform var(--dur) var(--ease);
+}
+.toggle-switch.on .toggle-switch-thumb {
+    transform: translateX(14px);
+}
+.toggle-switch-label {
+    font-weight: 500;
+    white-space: nowrap;
+}
+.toggle-switch input[type="checkbox"]:focus + .toggle-switch-track {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* When a row's text is contentEditable, surface a subtle outline so the
+ * user knows they can click it. Saving in flight gets a pulsing tint. */
+.notta-row-text.editable {
+    outline: 1px dashed var(--border-2);
+    outline-offset: 4px;
+    border-radius: 4px;
+    padding: 2px 4px;
+    cursor: text;
+    transition: outline-color var(--dur) var(--ease);
+}
+.notta-row-text.editable:hover {
+    outline-color: var(--accent);
+}
+.notta-row-text.editable:focus {
+    outline-color: var(--accent);
+    outline-style: solid;
+    outline-width: 2px;
+}
+.notta-row-text.saving {
+    background: var(--accent-soft);
+    animation: notta-saving-pulse 1s ease-in-out infinite;
+}
+@keyframes notta-saving-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
+
+.notta-toolbar-karaoke {
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    cursor: pointer;
+    animation: notta-karaoke-pulse 1.6s ease-in-out infinite;
+}
+@keyframes notta-karaoke-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
 .notta-list {
     flex: 1;
     overflow-y: auto;
-    padding-right: 6px;
+    padding-right: 8px;
+    /* Firefox + modern browsers — thin, dark-tinted thumb on transparent
+     * track. The default chrome scrollbar (bright white) clashed with
+     * the GreenNode dark theme. WebKit treatment is consolidated at the
+     * bottom of this file with the other scrollable panes. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+    scrollbar-gutter: stable;
 }
 .notta-row {
     display: grid;
@@ -2571,6 +2850,14 @@ select.mee-modal-input {
     cursor: pointer;
     transition: background var(--dur) var(--ease);
     position: relative;
+    /* Fade + slide-in when a new block becomes visible during karaoke —
+     * smooths the "block pops into existence" transition so it feels
+     * deliberate instead of jumpy. Plays once on mount. */
+    animation: notta-row-appear 280ms ease-out;
+}
+@keyframes notta-row-appear {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 .notta-row:hover {
     background: var(--surface-2, rgba(255,255,255,0.025));

@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date as date_type
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -680,6 +680,130 @@ class SegmentSpeakerPatch(BaseModel):
     scope: str = "current"  # 'current' | 'all'
 
 
+class SegmentTextPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/segments/{seq}/text` — user
+    edited the text of one transcript block in the Notta inline editor.
+    Stored on `transcript_segments.edited_text` (NULLable column) so the
+    original STT output is preserved alongside the user's revision. The
+    `TranscriptSegment.text` property returns `edited_text` when set."""
+    text: str
+
+
+@router.patch("/recordings/{recording_id}/segments/{seq}/text")
+async def patch_segment_text(
+    recording_id: str,
+    seq: int,
+    req: SegmentTextPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save inline edit of one segment's text (Notta edit-mode toggle).
+
+    Idempotent — FE debounces on blur, send-on-final-text wins. Empty
+    string is allowed (effectively deletes the user's override; the
+    original_text resurfaces via the `text` property).
+    """
+    from sqlalchemy import select, update
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    new_text = (req.text or "").rstrip()
+    result = await session.execute(
+        update(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == rid,
+            TranscriptSegment.seq == seq,
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .values(edited_text=new_text or None)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Segment seq={seq} not found in recording {recording_id}",
+        )
+    await session.commit()
+    return {"recording_id": recording_id, "seq": seq, "saved_chars": len(new_text)}
+
+
+class MomBodyPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/mom/body` — user edited the
+    MoM in the rich-text editor. Stored on `recording.mom_json["edited_html"]`
+    alongside the LLM-generated `summary_html`. FE prefers `edited_html`
+    when rendering so the user's revisions take precedence; regenerating
+    the MoM via `/generate-mom` clears this field (gives user a clean
+    slate from the new LLM output)."""
+    html: str
+    text: Optional[str] = None  # plaintext extraction for search / export
+
+
+@router.patch("/recordings/{recording_id}/mom/body")
+async def patch_recording_mom_body(
+    recording_id: str,
+    req: MomBodyPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save a user edit of the per-recording MoM body."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    mom = recording.mom_json or {}
+    if not isinstance(mom, dict):
+        # Defensive: legacy data may be a list — wrap it.
+        mom = {"sections": mom}
+    mom["edited_html"] = req.html
+    if req.text is not None:
+        mom["edited_text"] = req.text
+    recording.mom_json = mom
+    flag_modified(recording, "mom_json")
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "saved_chars": len(req.html),
+    }
+
+
+class MomJsonPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/mom` — the FE sends back the
+    full edited mom_json after inline field edits. Replaces the stored
+    structured MoM wholesale (the FE owns the merge; backend stays
+    dumb)."""
+    mom_json: Dict[str, Any]
+
+
+@router.patch("/recordings/{recording_id}/mom")
+async def patch_recording_mom(
+    recording_id: str,
+    req: MomJsonPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save inline edits to the structured per-recording MoM. The FE
+    sends the full updated mom_json — we replace it as-is. View mode
+    reads the same JSON so toggling edit ↔ view shows the edits.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    if not isinstance(req.mom_json, dict):
+        raise HTTPException(status_code=422, detail="mom_json must be an object")
+
+    recording.mom_json = req.mom_json
+    flag_modified(recording, "mom_json")
+    await session.commit()
+    return {"recording_id": recording_id, "saved": True}
+
+
 @router.patch("/recordings/{recording_id}/segment-speaker")
 async def patch_segment_speaker(
     recording_id: str,
@@ -701,6 +825,15 @@ async def patch_segment_speaker(
         raise HTTPException(status_code=400, detail=f"Segment index {req.index} out of range")
 
     new_name = (req.speaker or "").strip()
+    # cluster_mapping is a sibling dict on clean_segments — when the FE
+    # renames a cluster wholesale (scope=all), we MUST update this map
+    # too. Otherwise a future regenerate-clean call hands the LLM the
+    # stale mapping and the rename gets clobbered (the LLM substitutes
+    # the old name or leaves "SPEAKER_NN").
+    cluster_mapping = segs.get("cluster_mapping") if isinstance(segs, dict) else None
+    if not isinstance(cluster_mapping, dict):
+        cluster_mapping = {}
+
     if req.scope == "all":
         # Rename every segment whose CURRENT speaker matches this row's
         # speaker. Lets the FE do the "apply all" UX without a separate call.
@@ -710,10 +843,25 @@ async def patch_segment_speaker(
             if (s.get("speaker") or "").strip() == target_label:
                 s["speaker"] = new_name
                 renamed += 1
+        # Sync cluster_mapping: any cluster_id whose CURRENT mapped name
+        # equals target_label needs to flip to new_name. Also handle the
+        # case where target_label is itself a cluster id (e.g. SPEAKER_02
+        # was never voice-matched) — add a direct cid → name entry.
+        for cid, mapped in list(cluster_mapping.items()):
+            if (mapped or "").strip() == target_label or cid == target_label:
+                cluster_mapping[cid] = new_name
+        # If target was a bare cluster id with no prior entry, create one.
+        if target_label.startswith("SPEAKER_") and target_label not in cluster_mapping:
+            cluster_mapping[target_label] = new_name
     else:
         seg_list[req.index]["speaker"] = new_name
         renamed = 1
 
+    # Persist the updated cluster_mapping back into the segs dict so the
+    # next /clean fetch returns the latest names.
+    if isinstance(segs, dict):
+        segs["cluster_mapping"] = cluster_mapping
+        recording.clean_segments = segs
     # JSONB column needs explicit flag — SQLAlchemy can't auto-detect dict mutation.
     flag_modified(recording, "clean_segments")
     await session.commit()
@@ -722,6 +870,7 @@ async def patch_segment_speaker(
         "renamed": renamed,
         "scope": req.scope,
         "speaker": new_name,
+        "cluster_mapping": cluster_mapping,
     }
 
 
@@ -746,32 +895,40 @@ async def upload_recording_audio(
     call. Use this when you only want to attach audio for playback.
     """
     import os as _os
+    from meeting.services import r2_storage
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
-    output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
-    audio_dir = _os.path.join(output_dir, "audio")
-    _os.makedirs(audio_dir, exist_ok=True)
-
     filename = file.filename or "audio.wav"
     ext = _os.path.splitext(filename)[1].lower() or ".wav"
     if ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
         ext = ".wav"
-    saved_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
 
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
-    with open(saved_path, "wb") as f:
-        f.write(audio_bytes)
-    recording.audio_path = _os.path.relpath(saved_path, project_root)
-    await session.commit()
+    # Same storage selector as /api/transcribe: R2 if configured,
+    # disk fallback otherwise. See app.py comment for the audio_path
+    # encoding (`r2://...` vs relative disk path).
+    if r2_storage.is_configured():
+        key = r2_storage.audio_key(recording_id, ext)
+        r2_storage.upload_bytes(key, audio_bytes)
+        recording.audio_path = f"r2://{key}"
+    else:
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+        audio_dir = _os.path.join(output_dir, "audio")
+        _os.makedirs(audio_dir, exist_ok=True)
+        disk_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
+        with open(disk_path, "wb") as f:
+            f.write(audio_bytes)
+        recording.audio_path = _os.path.relpath(disk_path, project_root)
 
+    await session.commit()
     return {
         "recording_id": recording_id,
         "audio_path": recording.audio_path,
@@ -796,10 +953,27 @@ async def get_recording_audio(
     import os as _os
     from fastapi.responses import FileResponse
 
+    from fastapi.responses import RedirectResponse
+    from meeting.services import r2_storage
+
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
+
+    # R2-backed audio: stored as `r2://<key>`. Redirect the browser to a
+    # short-lived presigned URL so the audio streams directly from R2
+    # (no Mee bandwidth, supports Range requests for fast seek).
+    if recording.audio_path and recording.audio_path.startswith("r2://"):
+        key = recording.audio_path[len("r2://"):]
+        try:
+            url = r2_storage.public_or_presigned_url(key, expires_sec=3600)
+            return RedirectResponse(url, status_code=302)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"R2 presign failed: {e}",
+            )
 
     project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
     fpath: Optional[str] = None

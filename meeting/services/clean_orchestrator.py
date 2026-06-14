@@ -318,6 +318,23 @@ async def _run_clean(recording_id: str) -> None:
                         user_id=user.id,
                         speaker_embeddings=recording.speaker_embeddings,
                     )
+                # Merge in any user-applied renames from a prior clean_segments
+                # run — without this, regenerate clean clobbers manual renames
+                # because the LLM only sees voiceprint-derived pre_mapped and
+                # outputs cluster ids for any cluster the voiceprint match
+                # didn't cover.
+                prev_clean = recording.clean_segments or {}
+                prev_cluster_map = (
+                    prev_clean.get("cluster_mapping")
+                    if isinstance(prev_clean, dict) else None
+                )
+                if isinstance(prev_cluster_map, dict):
+                    for cid, name in prev_cluster_map.items():
+                        nm = (name or "").strip()
+                        # Skip placeholders so they don't override real voice
+                        # matches; only carry forward explicit user renames.
+                        if nm and nm.lower() not in ("unknown", ""):
+                            pre_mapped.setdefault(cid, nm)
 
                 # Estimate chunk count for progress reporting (cleaner internally
                 # chunks at MAX_TRANSCRIPT_CHARS = 14_000). Approximate so FE

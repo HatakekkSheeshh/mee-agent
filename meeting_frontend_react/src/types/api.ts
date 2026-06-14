@@ -121,6 +121,26 @@ export interface WordTimestamp {
   end: number;    // absolute seconds
 }
 
+/** Server-Sent Events from /api/transcribe/stream — drives Notta-style
+ * progressive transcript rendering. Each event is one SSE frame. */
+export type StreamEvent =
+  | { type: "meta"; duration: number; language: string }
+  | {
+      type: "diarize";
+      turns: Array<{ speaker: string; start: number; end: number }>;
+      embeddings: Record<string, number[]>;
+    }
+  | {
+      type: "segment";
+      speaker: string;
+      text: string;
+      start: number;
+      end: number;
+      words: WordTimestamp[];
+    }
+  | { type: "done"; segments_count: number }
+  | { type: "error"; detail: string };
+
 export interface RawSegment {
   seq: number;
   text: string;

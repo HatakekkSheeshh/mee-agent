@@ -141,6 +141,19 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     }
   }
   const [busy, setBusy] = useState(false);
+  // True only while the SSE upload pipeline (faster-whisper + diarize +
+  // word-align) is mid-flight. NottaCleanView hides the segment list and
+  // shows a loading placeholder while this is on; once it flips to false
+  // we have the full transcript + word timestamps and karaoke auto-plays
+  // from t=0. Kept separate from `busy` because `busy` is also true for
+  // unrelated work (cleaner regen, MoM gen) where we should keep showing
+  // the existing transcript.
+  const [streamingActive, setStreamingActive] = useState(false);
+  // One-shot signal to NottaCleanView: a fresh upload just finished →
+  // please auto-play audio + karaoke from t=0. Flips on right when
+  // streamingActive flips off; consumed once by NottaCleanView's ref
+  // guard. Stays sticky so accidental re-renders don't lose the cue.
+  const [freshUpload, setFreshUpload] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Ref tracking the CURRENT recording id — used by async generators to
@@ -238,6 +251,12 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     },
     [setStatus],
   );
+  // Keep WS live preview ON regardless of STT model — the user wants to
+  // see text appear as they speak. WS goes through MaaS Whisper (fast,
+  // segment-level only). After stop(), if the recording's STT model is
+  // faster-whisper, handleStopRecord re-pass the captured audio for
+  // word-level timestamps (see below). End result: live preview during
+  // recording + word-accurate final transcript after stop.
   const live = useLiveRecording({
     uid: currentRecordingId || "",
     language: "vi",
@@ -258,13 +277,103 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   }
 
   async function handleStopRecord() {
-    live.stop();
-    // After stop, persist accumulated text to DB so Clean + Generate MoM can read it.
-    if (currentMeetingId && currentRecordingId && rawText.trim()) {
-      // Immediate feedback — diarize runs in the WS server (post_record_diarize)
-      // and clean runs in the API server (clean_orchestrator). Both kick off
-      // here. The cleanStatus poller below picks up the LLM phase; user sees
-      // the speaker tags appear when /clean refresh fires.
+    // Capture the recorded audio blob BEFORE the WS path drops its state.
+    const audioBlob = await live.stop();
+
+    if (!currentMeetingId || !currentRecordingId) return;
+
+    // Decide: if STT model = faster-whisper AND we have audio bytes,
+    // re-transcribe the captured audio via the SSE faster-whisper
+    // pipeline to recover word-level timestamps the WS path doesn't
+    // provide. Otherwise fall back to the original importTranscript
+    // (text-only) path so existing models (MaaS / large-v3) still work.
+    const currentRec = currentMeeting?.recordings.find((r) => r.id === currentRecordingId);
+    const sttModel = currentRec?.stt_model || currentMeeting?.stt_model || "";
+    const useFasterWhisperRepass = sttModel === "faster_whisper" && audioBlob.size > 1024;
+
+    if (useFasterWhisperRepass) {
+      // Wrap the blob as a File so api.transcribeStream accepts it.
+      const ext = audioBlob.type.includes("webm") ? "webm" : "wav";
+      const file = new File([audioBlob], `live-${Date.now()}.${ext}`, {
+        type: audioBlob.type || "audio/webm",
+      });
+      // Reuse the same vocab + attendees logic as the upload path so
+      // recording-specific hints reach faster-whisper.
+      const attendeesStr =
+        currentRec?.attendees?.map((a) => a.name).filter(Boolean).join(", ") || "";
+      const vocabStr = [
+        (currentMeeting?.vocab_hints || "").trim(),
+        (currentRec?.vocab_hints || "").trim(),
+      ].filter(Boolean).join(", ");
+
+      setView("clean");
+      setStreamingActive(true);
+      setFreshUpload(false);
+      setRawSegments([]);
+      setRawText("");
+      setStatus({
+        kind: "assessing",
+        msg: "Đang phân tích lại audio để có word-level timestamps…",
+      });
+
+      try {
+        const liveSegs: RawSegment[] = [];
+        const collected: Array<{
+          text: string; speaker: string; start: number; end: number;
+          words: { text: string; start: number; end: number }[];
+        }> = [];
+        for await (const ev of api.transcribeStream(
+          file, "vi", vocabStr, attendeesStr, currentRecordingId, "faster_whisper",
+        )) {
+          if (ev.type === "segment") {
+            collected.push({
+              text: ev.text, speaker: ev.speaker,
+              start: ev.start, end: ev.end, words: ev.words,
+            });
+            liveSegs.push({
+              seq: liveSegs.length + 1,
+              text: ev.text, speaker: ev.speaker,
+              start_ms: Math.round(ev.start * 1000),
+              end_ms: Math.round(ev.end * 1000),
+              words: ev.words,
+            });
+            setRawSegments([...liveSegs]);
+            if (liveSegs.length === 1) setFreshUpload(true);
+            setStatus({
+              kind: "assessing",
+              msg: `Đang phân tích live audio — ${liveSegs.length} đoạn…`,
+            });
+            await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
+          } else if (ev.type === "error") {
+            throw new ApiError(500, ev.detail);
+          }
+        }
+        const fullText = liveSegs
+          .map((s) => `[${s.speaker || "?"}] ${s.text}`)
+          .join("\n");
+        setRawText(fullText);
+        // Import the new transcript so Clean + Generate MoM see it.
+        await api.meetings.importTranscript(currentMeetingId, {
+          text: fullText,
+          recording_id: currentRecordingId,
+          replace: true,
+        });
+        dbTextRef.current = fullText;
+        await reloadCurrentMeeting();
+        pingCleanStatus();
+        setStatus({ kind: "success", msg: t("live.done") });
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.detail : (e as Error).message;
+        setStatus({ kind: "error", msg: `Lỗi re-transcribe: ${msg}` });
+      } finally {
+        setStreamingActive(false);
+      }
+      return;
+    }
+
+    // Legacy path: VNG MaaS / Whisper-large-v3 — persist the WS-accumulated
+    // text directly. No word-level timestamps available for these models.
+    if (rawText.trim()) {
       setStatus({
         kind: "assessing",
         msg: t("live.analyzing"),
@@ -277,7 +386,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         });
         dbTextRef.current = rawText;
         await reloadCurrentMeeting();
-        pingCleanStatus();  // import_transcript triggered background clean
+        pingCleanStatus();
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
         setStatus({ kind: "error", msg: t("live.saveError", { msg }) });
@@ -344,6 +453,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
 
   // ─── Load transcript whenever the selected recording changes ───
   useEffect(() => {
+    // Clear the karaoke arm whenever the recording changes — only a
+    // fresh upload (handleUpload) should re-set freshUpload=true.
+    setFreshUpload(false);
     if (!currentRecordingId) {
       setRawText("");
       setRawSegments([]);
@@ -420,9 +532,131 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         (currentRec?.vocab_hints || "").trim(),
       ].filter(Boolean);
       const vocabStr = vocabParts.join(", ");
-      const transcribeResp = await api.transcribe(
-        file, "vi", vocabStr, attendeesStr, currentRecordingId || "",
-      );
+      // STT routing: prefer recording.stt_model, fall back to meeting default,
+      // fall back to "" → backend resolves DEFAULT_STT. Without this the
+      // upload always hit VNG MaaS whisper regardless of dropdown choice.
+      const sttModel =
+        currentRec?.stt_model || currentMeeting?.stt_model || "";
+
+      // Notta-style streaming path — only faster-whisper supports it. We
+      // build up `transcribeResp` incrementally from SSE events instead of
+      // waiting for one batch response, and push each segment into FE
+      // state as it lands so the user sees words appearing live.
+      let transcribeResp: Awaited<ReturnType<typeof api.transcribe>>;
+      if (sttModel === "faster_whisper") {
+        // Switch to Clean view IMMEDIATELY so the loading placeholder
+        // (Notta still-processing UI) shows there instead of the raw
+        // textarea, which would otherwise flash a partial dump as
+        // segments stream in. Karaoke triggers when this flag flips off.
+        setView("clean");
+        setStreamingActive(true);
+        // Reset karaoke arm BEFORE the stream starts so NottaCleanView
+        // sees a clean false→true transition when the first segment
+        // arrives. Without this, a second upload to the same recording
+        // would never re-fire karaoke (freshUpload was already true
+        // from the previous upload).
+        setFreshUpload(false);
+        // Clear any prior recording's segments so the loading placeholder
+        // doesn't briefly show stale data before the first event lands.
+        setRawSegments([]);
+        setRawText("");
+        // setStatus({
+        //   kind: "assessing",
+        //   msg: `Đang xử lý "${file.name}" — STT + diarize + word-align…`,
+        // });
+        const liveSegs: RawSegment[] = [];
+        const collected: Array<{
+          text: string;
+          speaker: string;
+          start: number;
+          end: number;
+          words: { text: string; start: number; end: number }[];
+        }> = [];
+        let clusterEmb: Record<string, number[]> = {};
+        for await (const ev of api.transcribeStream(
+          file, "vi", vocabStr, attendeesStr, currentRecordingId || "", "faster_whisper",
+        )) {
+          if (ev.type === "diarize") {
+            clusterEmb = ev.embeddings || {};
+          } else if (ev.type === "segment") {
+            collected.push({
+              text: ev.text,
+              speaker: ev.speaker,
+              start: ev.start,
+              end: ev.end,
+              words: ev.words,
+            });
+            liveSegs.push({
+              seq: liveSegs.length + 1,
+              text: ev.text,
+              speaker: ev.speaker,
+              start_ms: Math.round(ev.start * 1000),
+              end_ms: Math.round(ev.end * 1000),
+              words: ev.words,
+            });
+            // Append LIVE so blocks appear as backend produces them. The
+            // visibility filter inside NottaCleanView gates whether each
+            // block renders based on audio progress (maxRevealedSec).
+            // For long audio (1-2h), this lets the user see the early
+            // blocks + start listening while the rest is still decoding.
+            setRawSegments([...liveSegs]);
+            // Arm karaoke as soon as the FIRST segment arrives — don't
+            // wait for the whole pipeline. NottaCleanView's ref guard
+            // ensures it triggers exactly once per recording.
+            if (liveSegs.length === 1) {
+              setFreshUpload(true);
+            }
+            setStatus({
+              kind: "assessing",
+              msg: `Đang xử lý "${file.name}" — ${liveSegs.length} đoạn nhận được…`,
+            });
+            // Yield to browser so React commits the new segment before
+            // we process the next SSE frame. Without this, React 18
+            // batches and we re-render only at the end of the burst.
+            await new Promise<void>((resolve) =>
+              window.requestAnimationFrame(() => resolve()),
+            );
+          } else if (ev.type === "error") {
+            throw new ApiError(500, ev.detail);
+          }
+          // 'meta' and 'done' are housekeeping; ignored.
+        }
+        // Pipeline finished — flush the buffered segments into state in one
+        // shot. NottaCleanView then renders everything together AND the
+        // karaoke effect (triggered by streamingActive flipping off below)
+        // auto-plays the audio + reveals words synced to playback. No more
+        // flicker because nothing was visible during processing.
+        setRawSegments(liveSegs);
+        setRawText(
+          liveSegs
+            .map((s) => {
+              const sec = Math.floor((s.start_ms ?? 0) / 1000);
+              const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+              const ss = String(sec % 60).padStart(2, "0");
+              return `[${mm}:${ss}] ${s.speaker || ""}: ${s.text}`;
+            })
+            .join("\n"),
+        );
+        setStreamingActive(false);
+        // Arm karaoke. NottaCleanView consumes this via a ref guard so
+        // it only triggers once per recording — subsequent renders with
+        // the flag still true are no-ops.
+        setFreshUpload(true);
+        transcribeResp = {
+          text: collected.map((s) => s.text).join("\n"),
+          segments: collected,
+          cluster_embeddings: clusterEmb,
+          // sample_audio_b64 / pending_diarize_path don't apply to the
+          // streaming path — leave undefined so the downstream import
+          // doesn't try to forward bogus data.
+          sample_audio_b64: undefined,
+          pending_diarize_path: undefined,
+        };
+      } else {
+        transcribeResp = await api.transcribe(
+          file, "vi", vocabStr, attendeesStr, currentRecordingId || "", sttModel,
+        );
+      }
       const text = transcribeResp.text;
       if (!text?.trim()) {
         setStatus({ kind: "error", msg: "Không phát hiện giọng nói." });
@@ -536,6 +770,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       setStatus({ kind: "error", msg: `Lỗi: ${msg}` });
     } finally {
       setBusy(false);
+      // Defensive: clear streaming flag even on error/abort so the loading
+      // placeholder doesn't strand the UI in "processing forever".
+      setStreamingActive(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
@@ -841,26 +1078,91 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
           />
+        ) : streamingActive && rawSegments.length === 0 ? (
+          // Loading placeholder shown ONLY until the first segment lands.
+          // Once we have at least one block, NottaCleanView takes over —
+          // it renders blocks as audio reaches them (block-by-block reveal),
+          // while remaining segments continue to stream in the background.
+          <div className="transcript-clean transcript-clean-loading">
+            <div className="notta-loading">
+              <div className="notta-loading-spinner" />
+              <div className="notta-loading-title">
+                Đang khởi động transcribe
+              </div>
+              <div className="notta-loading-step">
+                {status?.msg || "Faster-whisper + pyannote + word-align…"}
+              </div>
+              <div className="notta-loading-hint">
+                Block đầu tiên sẽ xuất hiện sau ~3-5 giây. Audio sẽ bắt đầu
+                phát ngay khi có dữ liệu — các block phía sau hiện dần theo
+                tiến độ phát.
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="transcript-clean">
-            {cleanSegs === null ? (
-              <div className="transcript-clean-empty muted">
-                {busy ? "Đang clean…" : "Bấm tab Clean để LLM format lại."}
-              </div>
-            ) : cleanSegs.length === 0 ? (
-              <div className="transcript-clean-empty muted">Không có segment nào.</div>
-            ) : currentRecordingId && currentMeetingId ? (
-              <NottaCleanView
-                recordingId={currentRecordingId}
-                meetingId={currentMeetingId}
-                cleanSegments={cleanSegs}
-                rawSegments={rawSegments}
-                clusterMapping={clusterMapping}
-                onRegenerate={regenerateClean}
-                onClusterMappingSaved={reloadClean}
-                busy={busy}
-              />
-            ) : null}
+            {(() => {
+              // Prefer rawSegments when they carry real timestamps
+              // (faster-whisper path). Reason: the LLM cleaner has been
+              // observed dropping segments + duplicating "Giai đoạn 4"-
+              // style boilerplate even with the verbatim prompt, which
+              // breaks positional pairing → most rows render `--:--` and
+              // audio sync no longer matches the audio. Raw segments
+              // already have speaker + time + word_ts directly from STT,
+              // so trust them as the source of truth. cleanSegments only
+              // wins when STT didn't produce timestamps at all (VNG MaaS).
+              const rawHasTimestamps =
+                rawSegments.length > 0 &&
+                rawSegments.some((r) => r.start_ms != null);
+              const rawAsClean = rawHasTimestamps
+                ? rawSegments.map((r) => ({
+                    speaker: r.speaker || "",
+                    text: r.text || "",
+                    tags: [],
+                  }))
+                : null;
+              const segsToShow = rawAsClean ?? cleanSegs;
+
+              if (segsToShow === null) {
+                return (
+                  <div className="transcript-clean-empty muted">
+                    {busy ? "Đang clean…" : "Bấm tab Clean để LLM format lại."}
+                  </div>
+                );
+              }
+              if (segsToShow.length === 0) {
+                return (
+                  <div className="transcript-clean-empty muted">
+                    Không có segment nào.
+                  </div>
+                );
+              }
+              if (!currentRecordingId || !currentMeetingId) return null;
+              return (
+                <NottaCleanView
+                  recordingId={currentRecordingId}
+                  meetingId={currentMeetingId}
+                  cleanSegments={segsToShow}
+                  rawSegments={rawSegments}
+                  clusterMapping={clusterMapping}
+                  onRegenerate={regenerateClean}
+                  onClusterMappingSaved={reloadClean}
+                  busy={busy}
+                  // streaming=false here: per-word streaming animation is
+                  // disabled because we now hide all output during the
+                  // pipeline (loading placeholder above) and let karaoke
+                  // alone drive the reveal once everything's ready.
+                  streaming={false}
+                  // Fire karaoke when a fresh upload's segments just
+                  // landed. `freshUpload` flips true at the moment
+                  // streamingActive flips false (see handleUpload) and
+                  // back to false on user interaction with audio.
+                  // NottaCleanView's own ref ensures it triggers exactly
+                  // once per recording so re-renders don't re-arm.
+                  autoPlayKaraoke={freshUpload}
+                />
+              );
+            })()}
           </div>
         )}
 

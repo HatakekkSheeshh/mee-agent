@@ -4,7 +4,7 @@
 // Both data sources come from currentMeeting (loaded by AppContext). No local
 // fetching here — when MoM is generated, TranscriptPane calls reloadCurrentMeeting
 // and this pane re-renders automatically.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { MoMJson, ProjectSummary, ActionItem } from "../types/api";
@@ -20,9 +20,45 @@ export function MoMPane() {
     freshRecordingMoms,
     freshProjectSummary,
     setProjectSummary,
+    setRecordingMom,
     reloadCurrentMeeting,
   } = useApp();
   const [busy, setBusy] = useState(false);
+  // Per-pane "edit MoM" toggle — when on, every text field in the
+  // structured MoMView becomes contenteditable in place. Edits debounce
+  // 800ms then PATCH the whole mom_json so view ↔ edit toggle is
+  // visually identical.
+  const [momEditMode, setMomEditMode] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveTimerRef = useRef<number | null>(null);
+
+  function handleMomPatch(updater: (prev: MoMJson) => MoMJson) {
+    if (!currentRecordingId) return;
+    // Mutate the in-memory cache so the next render shows the edit.
+    // setRecordingMom triggers a re-render and the new value flows back
+    // through `recordingMom` on the next pass.
+    const prev = (currentRecordingId && freshRecordingMoms[currentRecordingId])
+      || currentRec?.mom_json
+      || null;
+    if (!prev) return;
+    const next = updater(prev);
+    setRecordingMom(currentRecordingId, next);
+    // Debounced save — multiple field edits in quick succession collapse
+    // into a single PATCH.
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    setSaveState("saving");
+    saveTimerRef.current = window.setTimeout(async () => {
+      try {
+        await api.recordings.patchMomJson(currentRecordingId, next);
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState("idle"), 1500);
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.detail : (e as Error).message;
+        setMomStatus({ kind: "error", msg: `Lưu lỗi: ${msg}` });
+        setSaveState("error");
+      }
+    }, 800);
+  }
 
   async function handleGenerateSummary() {
     if (!currentMeetingId) return;
@@ -102,6 +138,26 @@ export function MoMPane() {
             </button>
           )}
           {!inOverview && <span className="mono small">{statusText}</span>}
+          {!inOverview && recordingMom && (
+            <label
+              className={`toggle-switch${momEditMode ? " on" : ""}`}
+              title={
+                momEditMode
+                  ? "Đang chỉnh sửa — tắt để xem cấu trúc"
+                  : "Bật chế độ chỉnh sửa rich text"
+              }
+            >
+              <input
+                type="checkbox"
+                checked={momEditMode}
+                onChange={(e) => setMomEditMode(e.target.checked)}
+              />
+              <span className="toggle-switch-track">
+                <span className="toggle-switch-thumb" />
+              </span>
+              <span className="toggle-switch-label">✎ Sửa biên bản</span>
+            </label>
+          )}
           <button
             className="icon-btn icon-btn-sm"
             type="button"
@@ -136,8 +192,22 @@ export function MoMPane() {
             {momStatus.msg}
           </div>
         )}
-        {recordingMom ? (
-          <MoMView mom={recordingMom} />
+        {recordingMom && currentRecordingId ? (
+          <>
+            {momEditMode && (
+              <div className="mom-save-banner">
+                {saveState === "saving" && "Đang lưu…"}
+                {saveState === "saved" && "✓ Đã lưu"}
+                {saveState === "error" && "✗ Lưu lỗi"}
+                {saveState === "idle" && "Nhấn ngoài ô để lưu"}
+              </div>
+            )}
+            <MoMView
+              mom={recordingMom}
+              editMode={momEditMode}
+              onPatch={handleMomPatch}
+            />
+          </>
         ) : showSummary && projectSummary ? (
           <ProjectSummaryView summary={projectSummary} />
         ) : isBusy ? (
@@ -194,64 +264,224 @@ function EmptyState({ t }: { t: (k: import("../i18n").StringKey) => string }) {
 }
 
 // ─── Per-recording MoM ─────────────────────────────────────────────
-function MoMView({ mom }: { mom: MoMJson }) {
+//
+// `editMode` makes every text field contenteditable in-place. The
+// parent (MoMPane) owns the working copy of `mom` and the autosave
+// debounce so a single PATCH carries all field edits per pause.
+function MoMView({
+  mom,
+  editMode = false,
+  onPatch,
+}: {
+  mom: MoMJson;
+  editMode?: boolean;
+  onPatch?: (updater: (prev: MoMJson) => MoMJson) => void;
+}) {
   const { t } = useApp();
-  return (
-    <div id="mom-result">
-      {/* Meta */}
-      <div className="mom-section">
-        <div className="mom-section-title">{t("mom.section.info")}</div>
-        <table className="mom-meta-table">
-          <tbody>
-            <Row label={t("mom.section.purpose")} value={mom.purpose} />
-            <Row label={t("mom.section.date")} value={mom.date} />
-            <Row label={t("mom.section.venue")} value={mom.venue} />
-            <Row label={t("mom.section.chairedBy")} value={mom.chaired_by} />
-            <Row label={t("mom.section.notedBy")} value={mom.noted_by} />
-            <Row label={t("mom.section.attendees")} value={formatAttendees(mom.attendees)} />
-          </tbody>
-        </table>
-      </div>
+  const patch = onPatch || (() => {});
 
-      {mom.summary && (
+  const hasMeta = !!(mom.purpose || mom.date || mom.venue || mom.chaired_by
+    || mom.noted_by || formatAttendees(mom.attendees));
+
+  return (
+    <div id="mom-result" className={editMode ? "mom-edit-mode" : ""}>
+      {/* Meta — hide entirely when every field is empty (a wiped or
+       * freshly-regenerated MoM); show in edit mode so the user can
+       * fill blanks. */}
+      {(hasMeta || editMode) && (
         <div className="mom-section">
-          <div className="mom-section-title">{t("mom.section.summary")}</div>
-          <div className="mom-summary">{mom.summary}</div>
+          <div className="mom-section-title">{t("mom.section.info")}</div>
+          <table className="mom-meta-table">
+            <tbody>
+              <EditableRow label={t("mom.section.purpose")} value={mom.purpose} editMode={editMode}
+                onChange={(v) => patch((m) => ({ ...m, purpose: v }))} />
+              <EditableRow label={t("mom.section.date")} value={mom.date} editMode={editMode}
+                onChange={(v) => patch((m) => ({ ...m, date: v }))} />
+              <EditableRow label={t("mom.section.venue")} value={mom.venue} editMode={editMode}
+                onChange={(v) => patch((m) => ({ ...m, venue: v }))} />
+              <EditableRow label={t("mom.section.chairedBy")} value={mom.chaired_by} editMode={editMode}
+                onChange={(v) => patch((m) => ({ ...m, chaired_by: v }))} />
+              <EditableRow label={t("mom.section.notedBy")} value={mom.noted_by} editMode={editMode}
+                onChange={(v) => patch((m) => ({ ...m, noted_by: v }))} />
+              {/* attendees is array-or-string; keep read-only for now */}
+              <Row label={t("mom.section.attendees")} value={formatAttendees(mom.attendees)} />
+            </tbody>
+          </table>
         </div>
       )}
 
-      {mom.agenda_items && mom.agenda_items.length > 0 && (
+      {(mom.summary || editMode) && (
+        <div className="mom-section">
+          <div className="mom-section-title">{t("mom.section.summary")}</div>
+          <div className="mom-summary">
+            <Editable
+              value={mom.summary || ""}
+              editMode={editMode}
+              onChange={(v) => patch((m) => ({ ...m, summary: v }))}
+              placeholder={editMode ? "Nhập tóm tắt…" : ""}
+              multiline
+            />
+          </div>
+        </div>
+      )}
+
+      {((mom.agenda_items && mom.agenda_items.length > 0) || editMode) && (
         <div className="mom-section">
           <div className="mom-section-title">{t("mom.section.agenda")}</div>
-          {mom.agenda_items.map((a, i) => (
+          {(mom.agenda_items || []).map((a, i) => (
             <div key={i} className="agenda-item">
               <div className="agenda-item-header">
                 <span className="topic-no">{a.topic_no ?? i + 1}</span>
-                <span className="agenda-title">{a.agenda}</span>
+                <span className="agenda-title">
+                  <Editable
+                    value={a.agenda || ""}
+                    editMode={editMode}
+                    onChange={(v) => patch((m) => ({
+                      ...m,
+                      agenda_items: (m.agenda_items || []).map((x, j) =>
+                        j === i ? { ...x, agenda: v } : x,
+                      ),
+                    }))}
+                  />
+                </span>
               </div>
-              {a.description && <div className="agenda-description">{a.description}</div>}
+              {(a.description || editMode) && (
+                <div className="agenda-description">
+                  <Editable
+                    value={a.description || ""}
+                    editMode={editMode}
+                    onChange={(v) => patch((m) => ({
+                      ...m,
+                      agenda_items: (m.agenda_items || []).map((x, j) =>
+                        j === i ? { ...x, description: v } : x,
+                      ),
+                    }))}
+                    placeholder={editMode ? "Mô tả…" : ""}
+                    multiline
+                  />
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
 
-      {mom.action_items && mom.action_items.length > 0 && (
+      {((mom.action_items && mom.action_items.length > 0) || editMode) && (
         <div className="mom-section">
           <div className="mom-section-title">{t("mom.section.actionItems")}</div>
-          <ActionItemsTable items={mom.action_items} />
+          <ActionItemsTable
+            items={mom.action_items || []}
+            editMode={editMode}
+            onChange={(idx, field, v) => patch((m) => ({
+              ...m,
+              action_items: (m.action_items || []).map((x, j) =>
+                j === idx ? { ...x, [field]: v } : x,
+              ),
+            }))}
+          />
         </div>
       )}
 
-      {mom.decisions && mom.decisions.length > 0 && (
-        <BulletSection title={t("mom.section.decisions")} items={mom.decisions} />
+      {((mom.decisions && mom.decisions.length > 0) || editMode) && (
+        <BulletSection
+          title={t("mom.section.decisions")}
+          items={mom.decisions || []}
+          editMode={editMode}
+          onChange={(idx, v) => patch((m) => ({
+            ...m,
+            decisions: (m.decisions || []).map((x, j) =>
+              j === idx ? (typeof x === "string" ? v : { ...x, text: v }) : x,
+            ),
+          }))}
+        />
       )}
-      {mom.commitments && mom.commitments.length > 0 && (
-        <BulletSection title={t("mom.section.commitments")} items={mom.commitments} />
+      {((mom.commitments && mom.commitments.length > 0) || editMode) && (
+        <BulletSection
+          title={t("mom.section.commitments")}
+          items={mom.commitments || []}
+          editMode={editMode}
+          onChange={(idx, v) => patch((m) => ({
+            ...m,
+            commitments: (m.commitments || []).map((x, j) =>
+              j === idx ? (typeof x === "string" ? v : { ...x, text: v }) : x,
+            ),
+          }))}
+        />
       )}
-      {mom.blockers && mom.blockers.length > 0 && (
-        <BulletSection title={t("mom.section.blockers")} items={mom.blockers} />
+      {((mom.blockers && mom.blockers.length > 0) || editMode) && (
+        <BulletSection
+          title={t("mom.section.blockers")}
+          items={mom.blockers || []}
+          editMode={editMode}
+          onChange={(idx, v) => patch((m) => ({
+            ...m,
+            blockers: (m.blockers || []).map((x, j) =>
+              j === idx ? (typeof x === "string" ? v : { ...x, text: v }) : x,
+            ),
+          }))}
+        />
       )}
     </div>
+  );
+}
+
+// Inline contenteditable text. Read-only span when editMode=false so
+// the original layout is byte-identical. On blur we emit onChange only
+// if the trimmed text actually differs — protects against a phantom
+// PATCH per field every time the user clicks through.
+function Editable({
+  value,
+  editMode,
+  onChange,
+  placeholder = "",
+  multiline = false,
+}: {
+  value: string;
+  editMode: boolean;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  multiline?: boolean;
+}) {
+  if (!editMode) {
+    return <>{value}</>;
+  }
+  return (
+    <span
+      className={`editable-inline${multiline ? " multiline" : ""}`}
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onBlur={(e) => {
+        const next = (e.currentTarget.textContent || "").trim();
+        if (next !== (value || "").trim()) onChange(next);
+      }}
+    >
+      {value}
+    </span>
+  );
+}
+
+function EditableRow({
+  label, value, editMode, onChange,
+}: {
+  label: string;
+  value?: string | null;
+  editMode: boolean;
+  onChange: (v: string) => void;
+}) {
+  if (!value && !editMode) return null;
+  return (
+    <tr>
+      <td>{label}</td>
+      <td>
+        <Editable
+          value={value || ""}
+          editMode={editMode}
+          onChange={onChange}
+          placeholder={editMode ? "(trống)" : ""}
+        />
+      </td>
+    </tr>
   );
 }
 
@@ -294,32 +524,78 @@ function Row({ label, value }: { label: string; value?: string | null }) {
 // language is English the LLM may copy that string verbatim.
 const VN_DEADLINE_TBD = /^chưa\s*xác\s*định$/i;
 
-function ActionItemsTable({ items }: { items: ActionItem[] }) {
+function ActionItemsTable({
+  items,
+  editMode = false,
+  onChange,
+}: {
+  items: ActionItem[];
+  editMode?: boolean;
+  onChange?: (idx: number, field: "item" | "pic" | "deadline", v: string) => void;
+}) {
   const { t } = useApp();
   // Group ALL items by PIC (not just consecutive), preserving:
   //   - the order PICs first appear in the LLM output
   //   - the order of items within each PIC
   // Tasks without `item` text are dropped (LLM occasionally emits {pic, deadline}
   // with no task description — see Meeting 3's old mom_json).
+  // In edit mode the PIC-grouping breaks the index-to-original mapping,
+  // so render the raw list directly (one row per item, original index
+  // preserved). In view mode keep the nice grouped layout.
   const groups = (() => {
     const order: string[] = [];
-    const byPic = new Map<string, ActionItem[]>();
-    for (const ai of items) {
-      if (!ai.item || !ai.item.trim()) continue;
+    const byPic = new Map<string, { ai: ActionItem; idx: number }[]>();
+    items.forEach((ai, idx) => {
+      if (!ai.item || !ai.item.trim()) return;
       const pic = (ai.pic || "—").trim() || "—";
       if (!byPic.has(pic)) {
         byPic.set(pic, []);
         order.push(pic);
       }
-      byPic.get(pic)!.push(ai);
-    }
+      byPic.get(pic)!.push({ ai, idx });
+    });
     return order.map((pic) => ({ pic, tasks: byPic.get(pic)! }));
   })();
+
+  if (editMode) {
+    return (
+      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r)", overflow: "hidden" }}>
+        {items.map((ai, idx) => (
+          <div key={idx} className="action-item">
+            <span className="action-pic">
+              <Editable
+                value={ai.pic || ""}
+                editMode
+                onChange={(v) => onChange?.(idx, "pic", v)}
+                placeholder="PIC"
+              />
+            </span>
+            <span className="action-task">
+              <Editable
+                value={ai.item || ""}
+                editMode
+                onChange={(v) => onChange?.(idx, "item", v)}
+                placeholder="Mô tả công việc…"
+              />
+            </span>
+            <span className="action-deadline">
+              <Editable
+                value={ai.deadline || ""}
+                editMode
+                onChange={(v) => onChange?.(idx, "deadline", v)}
+                placeholder="Deadline"
+              />
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r)", overflow: "hidden" }}>
       {groups.flatMap((g) =>
-        g.tasks.map((ai, j) => (
+        g.tasks.map(({ ai }, j) => (
           <div
             key={`${g.pic}-${j}`}
             className={`action-item${j > 0 ? " merged" : ""}`}
@@ -341,20 +617,29 @@ function ActionItemsTable({ items }: { items: ActionItem[] }) {
 function BulletSection({
   title,
   items,
+  editMode = false,
+  onChange,
 }: {
   title: string;
   items: (string | { text: string; by?: string })[];
+  editMode?: boolean;
+  onChange?: (idx: number, text: string) => void;
 }) {
   return (
     <div className="mom-section">
       <div className="mom-section-title">{title}</div>
       <ul style={{ paddingLeft: 18, margin: 0 }}>
         {items.map((it, i) => {
-          if (typeof it === "string") return <li key={i}>{it}</li>;
+          const text = typeof it === "string" ? it : it.text;
+          const by = typeof it === "string" ? undefined : it.by;
           return (
             <li key={i}>
-              {it.text}
-              {it.by && <span className="muted small"> — {it.by}</span>}
+              <Editable
+                value={text}
+                editMode={editMode}
+                onChange={(v) => onChange?.(i, v)}
+              />
+              {by && <span className="muted small"> — {by}</span>}
             </li>
           );
         })}
