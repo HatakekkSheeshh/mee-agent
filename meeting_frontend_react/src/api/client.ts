@@ -119,6 +119,35 @@ export const api = {
       http<{ meeting_id: string; members: MeetingMember[] }>(
         "GET", `/api/meetings/${id}/members`,
       ),
+    /** Invite a user (by email) into the project. User must have logged
+     * in O365 once so they exist in the users table. */
+    addMember: (id: string, email: string, role = "editor") =>
+      http<{
+        meeting_id: string;
+        user_id: string;
+        email: string;
+        display_name: string | null;
+        role: string;
+      }>("POST", `/api/meetings/${id}/members`, { email, role }),
+    /** Revoke a member from the project (soft-delete via revoked_at). */
+    removeMember: (meetingId: string, userId: string) =>
+      http<{ meeting_id: string; user_id: string; revoked: boolean }>(
+        "DELETE", `/api/meetings/${meetingId}/members/${userId}`,
+      ),
+    /** Autocomplete user search by email or display_name — drives the
+     * invite picker. Empty query returns []. */
+    searchUsers: (q: string, limit = 8) =>
+      http<{
+        users: Array<{
+          id: string;
+          email: string;
+          display_name: string;
+          avatar_url: string | null;
+        }>;
+      }>(
+        "GET",
+        `/api/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      ),
     importTranscript: (
       meetingId: string,
       data: {
@@ -236,11 +265,12 @@ export const api = {
       index: number,
       speaker: string,
       scope: "current" | "all",
+      cluster_id?: string | null,
     ) =>
       http<{ renamed: number; scope: string; speaker: string }>(
         "PATCH",
         `/api/recordings/${id}/segment-speaker`,
-        { index, speaker, scope },
+        { index, speaker, scope, cluster_id: cluster_id || null },
       ),
     /** Save inline edit of one transcript segment's text (Notta edit mode).
      * Persists to `transcript_segments.edited_text`; original_text retained. */
@@ -263,6 +293,54 @@ export const api = {
         "PATCH",
         `/api/recordings/${id}/mom`,
         { mom_json },
+      ),
+    /** List all comments on a recording, sorted by anchor_ms asc. */
+    listComments: (id: string) =>
+      http<{
+        recording_id: string;
+        comments: Array<{
+          id: string;
+          recording_id: string;
+          anchor_ms: number | null;
+          segment_seq: number | null;
+          text: string;
+          created_at: string | null;
+          edited_at: string | null;
+          user: { id: string; display_name: string; email: string; avatar_url: string | null };
+        }>;
+      }>("GET", `/api/recordings/${id}/comments`),
+    /** Create a comment, optionally anchored to an audio position. */
+    createComment: (
+      id: string,
+      text: string,
+      opts: { anchor_ms?: number | null; segment_seq?: number | null } = {},
+    ) =>
+      http<{
+        id: string;
+        recording_id: string;
+        anchor_ms: number | null;
+        segment_seq: number | null;
+        text: string;
+        created_at: string | null;
+        edited_at: string | null;
+        user: { id: string; display_name: string; email: string; avatar_url: string | null };
+      }>("POST", `/api/recordings/${id}/comments`, {
+        text,
+        anchor_ms: opts.anchor_ms ?? null,
+        segment_seq: opts.segment_seq ?? null,
+      }),
+    /** Edit comment body. */
+    editComment: (commentId: string, text: string) =>
+      http<{ id: string; text: string }>(
+        "PATCH",
+        `/api/comments/${commentId}`,
+        { text },
+      ),
+    /** Soft-delete a comment. */
+    removeComment: (commentId: string) =>
+      http<{ id: string; deleted: boolean }>(
+        "DELETE",
+        `/api/comments/${commentId}`,
       ),
     clean: (id: string, regenerate = false) =>
       http<CleanResponse>(

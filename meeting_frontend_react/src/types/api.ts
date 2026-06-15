@@ -174,7 +174,7 @@ export interface CleanResponse {
   /** Populated only on cache hit (cached=true) OR inline fallback path
    * (when RabbitMQ unreachable). When the cleaner is dispatched to Celery
    * this is empty — FE polls `task_id` and re-fetches /clean on SUCCESS. */
-  clean_segments?: { speaker?: string; text: string; tags?: string[] }[];
+  clean_segments?: { speaker?: string; text: string; tags?: string[]; cluster_id?: string }[];
   /** LLM-inferred cluster → name mapping. Verified entries (voice-matched)
    * are listed in `pre_mapped_clusters`. */
   cluster_mapping?: Record<string, string>;

@@ -124,7 +124,7 @@ function MainApp({ user }: { user: Me }) {
   }, []);
   return (
     <AppProvider>
-      <Sidebar />
+      <Sidebar user={user} />
       <div className="app">
         <Topbar user={user} />
         <MeetingControl />
