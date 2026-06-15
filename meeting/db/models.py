@@ -315,6 +315,36 @@ class TranscriptSegment(Base):
         return self.edited_text if self.edited_text is not None else self.original_text
 
 
+class RecordingComment(Base):
+    """User-authored note on a recording, optionally anchored to an
+    audio playback position (`anchor_ms`) and/or a transcript segment
+    (`segment_seq`). Surfaced by the Comments side pane.
+    """
+    __tablename__ = "recording_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    recording_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("recordings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    anchor_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    segment_seq: Mapped[Optional[int]] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Phase B2 — Chat & HITL tables
 # ═══════════════════════════════════════════════════════════════════════

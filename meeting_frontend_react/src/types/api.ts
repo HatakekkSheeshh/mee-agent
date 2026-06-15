@@ -121,6 +121,26 @@ export interface WordTimestamp {
   end: number;    // absolute seconds
 }
 
+/** Server-Sent Events from /api/transcribe/stream — drives Notta-style
+ * progressive transcript rendering. Each event is one SSE frame. */
+export type StreamEvent =
+  | { type: "meta"; duration: number; language: string }
+  | {
+      type: "diarize";
+      turns: Array<{ speaker: string; start: number; end: number }>;
+      embeddings: Record<string, number[]>;
+    }
+  | {
+      type: "segment";
+      speaker: string;
+      text: string;
+      start: number;
+      end: number;
+      words: WordTimestamp[];
+    }
+  | { type: "done"; segments_count: number }
+  | { type: "error"; detail: string };
+
 export interface RawSegment {
   seq: number;
   text: string;
@@ -154,7 +174,7 @@ export interface CleanResponse {
   /** Populated only on cache hit (cached=true) OR inline fallback path
    * (when RabbitMQ unreachable). When the cleaner is dispatched to Celery
    * this is empty — FE polls `task_id` and re-fetches /clean on SUCCESS. */
-  clean_segments?: { speaker?: string; text: string; tags?: string[] }[];
+  clean_segments?: { speaker?: string; text: string; tags?: string[]; cluster_id?: string }[];
   /** LLM-inferred cluster → name mapping. Verified entries (voice-matched)
    * are listed in `pre_mapped_clusters`. */
   cluster_mapping?: Record<string, string>;

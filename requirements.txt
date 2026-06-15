@@ -52,3 +52,6 @@ torch>=2.8.0
 # NOTE: the wespeaker-voxceleb-resnet34-LM model is gated on Hugging Face —
 # first load needs a HF token + accepting the model terms.
 pyannote.audio>=3.1
+
+# === Object storage (Cloudflare R2 — audio persistence) ===
+boto3>=1.34

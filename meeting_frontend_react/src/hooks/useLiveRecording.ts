@@ -28,6 +28,11 @@ interface Options {
   onSegments: (segs: LiveSegment[]) => void;
   /** Status text updates for UI banner. */
   onStatus?: (kind: "info" | "connecting" | "recording" | "error" | "idle", msg: string) => void;
+  /** When true, skip the WS path entirely — just capture audio via
+   * MediaRecorder so the caller can re-transcribe on stop() via
+   * faster-whisper. Use this when the selected STT model isn't
+   * supported by the live WS server (faster-whisper, etc). */
+  skipWs?: boolean;
 }
 
 export function useLiveRecording({
@@ -36,12 +41,18 @@ export function useLiveRecording({
   initialPrompt,
   onSegments,
   onStatus,
+  skipWs = false,
 }: Options) {
   const [isRecording, setIsRecording] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // MediaRecorder running in parallel to capture the full audio so we
+  // can re-transcribe it via faster-whisper after stop() and recover
+  // word-level timestamps the WS path doesn't provide.
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   const cleanup = useCallback(() => {
     workletRef.current?.disconnect();
@@ -78,10 +89,50 @@ export function useLiveRecording({
     };
     source.connect(worklet);
     worklet.connect(ctx.destination);
+
+    // Spin up MediaRecorder on the SAME getUserMedia stream so we
+    // capture a full audio blob in parallel with the WS PCM stream.
+    // Used on stop() to re-transcribe via faster-whisper for word-
+    // level timestamps. webm/opus is well-supported in Chrome/Firefox.
+    try {
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recordedChunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      rec.start(1000); // emit a chunk every 1s so a crashed page loses ≤1s
+      recorderRef.current = rec;
+    } catch (e) {
+      // If MediaRecorder fails (very old browser), we still get WS live
+      // text — just no word-level re-pass on stop.
+      console.warn("[useLiveRecording] MediaRecorder unavailable:", e);
+      recorderRef.current = null;
+    }
   }, []);
 
   const start = useCallback(async () => {
     if (isRecording) return;
+    // skipWs path — the selected STT model (e.g. faster-whisper) can't
+    // run on the live WS server, so we don't bother opening the WS at
+    // all. Just spin up the mic + MediaRecorder; caller re-transcribes
+    // the captured blob on stop() to recover word-level timestamps.
+    if (skipWs) {
+      onStatus?.("recording", "Đang ghi âm (audio sẽ phân tích sau khi dừng)…");
+      setIsRecording(true);
+      try {
+        await startAudio();
+      } catch (err) {
+        onStatus?.("error", `Lỗi mic: ${(err as Error).message}`);
+        setIsRecording(false);
+      }
+      return;
+    }
+
     onStatus?.("connecting", "Đang kết nối đến STT server…");
     // Vite proxies /ws → ws://localhost:9091. Build a proper ws:// URL from
     // current location so this works in dev (localhost) AND when the React
@@ -129,18 +180,43 @@ export function useLiveRecording({
       if (isRecording) onStatus?.("idle", "Mất kết nối");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uid, language, initialPrompt, onSegments, onStatus, isRecording, startAudio]);
+  }, [uid, language, initialPrompt, onSegments, onStatus, isRecording, startAudio, skipWs]);
 
-  const stop = useCallback(() => {
+  /** Stop recording and return the captured audio blob (if any).
+   * The blob is the MediaRecorder output for the entire session —
+   * caller can POST it to the faster-whisper pipeline for word-level
+   * timestamps. Resolves with an empty Blob when MediaRecorder was
+   * unavailable or no audio was captured. */
+  const stop = useCallback((): Promise<Blob> => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       try { ws.send(new TextEncoder().encode("END_OF_AUDIO")); } catch { /* ignore */ }
       ws.close();
     }
     wsRef.current = null;
-    cleanup();
-    setIsRecording(false);
-    onStatus?.("idle", "Đã dừng ghi âm");
+
+    // Wait for MediaRecorder to emit its final chunk before tearing
+    // down the stream — otherwise we'd lose the tail.
+    const rec = recorderRef.current;
+    const blobPromise: Promise<Blob> = rec && rec.state !== "inactive"
+      ? new Promise((resolve) => {
+          const mime = rec.mimeType || "audio/webm";
+          rec.onstop = () => {
+            const blob = new Blob(recordedChunksRef.current, { type: mime });
+            recordedChunksRef.current = [];
+            resolve(blob);
+          };
+          try { rec.stop(); } catch { resolve(new Blob()); }
+        })
+      : Promise.resolve(new Blob());
+
+    return blobPromise.then((blob) => {
+      recorderRef.current = null;
+      cleanup();
+      setIsRecording(false);
+      onStatus?.("idle", "Đã dừng ghi âm");
+      return blob;
+    });
   }, [cleanup, onStatus]);
 
   return { start, stop, isRecording };
