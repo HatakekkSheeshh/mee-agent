@@ -77,9 +77,10 @@ async def resolve_role_by_title(session: AsyncSession, title: str | None) -> Opt
 async def add_role_alias(session: AsyncSession, role_id: uuid.UUID, alias: str) -> None:
     """Append `alias` to a role's aliases array, skipping if already present.
 
-    Dedup via `NOT (:alias = ANY(aliases))`. Comparison is case-sensitive and
-    exact — callers must normalize `alias` before calling. The caller owns the
-    transaction (no commit here). Single-instance cron → no locking.
+    Dedup via `NOT (:alias = ANY(aliases))` (exact match). Stores the alias
+    verbatim — the raw jobTitle is intended, since `resolve_role` normalizes at
+    lookup time. The caller owns the transaction (no commit here).
+    Single-instance cron → no locking.
     """
     stmt = text(
         "UPDATE roles SET aliases = array_append(aliases, :alias) "
