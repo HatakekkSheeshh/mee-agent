@@ -4,7 +4,27 @@ Pure (no repo/tool/LLM seams), extracted from chat_graph.py and re-imported ther
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from meeting.graphs._chat_state import ChatState
+
+# Vietnam time (UTC+7) for "today" awareness. Prefer the tz database; fall back to
+# a fixed offset if tzdata is unavailable so prompt-building never raises.
+try:
+    from zoneinfo import ZoneInfo
+
+    _VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+except Exception:  # noqa: BLE001 — tzdata missing → fixed offset is good enough
+    _VN_TZ = timezone(timedelta(hours=7))
+
+_WEEKDAYS_VI = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+
+
+def _today_vi() -> str:
+    """Current date in Vietnam, e.g. 'Thứ Năm, 15/06/2026' — injected so the
+    agent can reason about deadlines/relative dates ('hôm nay', 'tuần này')."""
+    now = datetime.now(_VN_TZ)
+    return f"{_WEEKDAYS_VI[now.weekday()]}, {now:%d/%m/%Y}"
 
 # System prompt for classify_intent's binary router (pm_task vs agent).
 CLASSIFY_SYSTEM_PROMPT = (
@@ -66,6 +86,8 @@ def _agent_system_prompt(state: ChatState) -> str:
     )
     return (
         "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
+        f"Hôm nay là {_today_vi()} (giờ Việt Nam). Dùng mốc này để hiểu các mốc thời "
+        "gian tương đối như 'hôm nay', 'ngày mai', 'tuần này', 'cuối tháng'.\n\n"
         f"Cuộc họp hiện tại: {title}\n\n"
         f"{memory_block}"
         "Quy tắc:\n"
