@@ -8,6 +8,7 @@ import { Workspace } from "./components/Workspace";
 import { LandingPage } from "./components/LandingPage";
 import { VoiceEnrollment } from "./components/VoiceEnrollment";
 import { api, ApiError } from "./api/client";
+import { RedmineStatusBanner, type RedmineStatus } from "./components/RedmineStatusBanner";
 
 type Me = {
   id: string;
@@ -113,6 +114,17 @@ export default function App() {
 /** Bundled because Vite + AppProvider should mount once per session, not every
  * time the user navigates between auth views. */
 function MainApp({ user }: { user: Me }) {
+  const [redmine, setRedmine] = useState<RedmineStatus | null>(null);
+
+  const probeRedmine = async () => {
+    try {
+      setRedmine(await api.redmine.status());
+    } catch (e) {
+      console.warn("[redmine/status] probe failed:", e);
+      setRedmine(null);
+    }
+  };
+
   // Restore body's grid layout that the legacy app expects. AppProvider on its
   // own doesn't set this — the body:has(.lp) override removes the grid for
   // landing, so /app needs to flip it back.
@@ -120,13 +132,19 @@ function MainApp({ user }: { user: Me }) {
     document.body.style.display = "";
     document.body.style.height = "";
     document.body.style.overflow = "";
-    return () => { /* leave as-is on unmount; next route will set its own */ };
+    probeRedmine();
+    // Re-probe when the tab regains focus (e.g. returning from the consent gate).
+    const onFocus = () => probeRedmine();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
+
   return (
     <AppProvider>
       <Sidebar />
       <div className="app">
         <Topbar user={user} />
+        {redmine && <RedmineStatusBanner status={redmine} />}
         <MeetingControl />
         <Workspace />
       </div>

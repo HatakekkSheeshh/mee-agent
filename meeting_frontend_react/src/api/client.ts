@@ -370,6 +370,21 @@ export const api = {
       `/auth/login?next=${encodeURIComponent(next)}`,
   },
 
+  // ─── Redmine per-user key status ───────────────────────────────────
+  redmine: {
+    /** Post-login probe: key present? tools ok? pm-agent ok? + consent gate_url. */
+    status: () =>
+      http<{
+        redmine_key_present: boolean;
+        redmine_tools_ok: boolean;
+        registered_tool_count: number;
+        expected_tool_count: number;
+        pm_agent_ok: boolean;
+        gate_url: string | null;
+        all_ok: boolean;
+      }>("GET", "/api/redmine/status"),
+  },
+
   // ─── Chat ──────────────────────────────────────────────────────────
   chat: {
     // Create a user-scoped session. No meeting binding — grounding is per-turn.
