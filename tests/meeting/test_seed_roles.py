@@ -28,6 +28,12 @@ def test_seed_every_role_well_formed():
         assert r["kickoff_prompt"], r
 
 
+def test_every_seed_role_has_aliases_list():
+    for r in SEED_ROLES:
+        assert "aliases" in r
+        assert isinstance(r["aliases"], list)
+
+
 def test_seed_data_plan_assignments_match_spec():
     plan = {r["name"]: r["data_plan"] for r in SEED_ROLES}
     assert plan["AI Applied"] == "own_tasks"
