@@ -136,6 +136,18 @@ def test_bootstrap_payloads():
     assert p["allowedReturnUrls"] == ["https://mee.example/redmine-callback"]
 
 
+def test_parse_allowed_return_urls_csv_and_fallback():
+    from scripts.bootstrap_redmine_identity import parse_allowed_return_urls
+    # falls back to the single per-request URL when the CSV var is empty
+    assert parse_allowed_return_urls("", "https://a/cb") == ["https://a/cb"]
+    # comma-separated whitelist (dev + prod), trimmed
+    assert parse_allowed_return_urls("https://a/cb, https://b/cb", "https://a/cb") == [
+        "https://a/cb", "https://b/cb",
+    ]
+    # de-duped, order-preserving
+    assert parse_allowed_return_urls("https://a/cb,https://a/cb", "") == ["https://a/cb"]
+
+
 def test_cache_expires_after_ttl(monkeypatch):
     idc.clear_key_cache()
     calls = {"n": 0}

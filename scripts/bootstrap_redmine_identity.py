@@ -31,6 +31,22 @@ def identity_payload(name: str, allowed_return_urls: list[str]) -> dict:
     return {"name": name, "allowedReturnUrls": allowed_return_urls}
 
 
+def parse_allowed_return_urls(allowed_csv: str, single: str) -> list[str]:
+    """Whitelist for the identity's allowedReturnUrls.
+
+    Prefers the comma-separated AGENTBASE_REDMINE_ALLOWED_RETURN_URLS (so dev AND
+    prod URLs can be whitelisted in one go), falling back to the single
+    per-request AGENTBASE_REDMINE_RETURN_URL. De-duped, order-preserving.
+    """
+    raw = allowed_csv or single
+    seen: list[str] = []
+    for part in raw.split(","):
+        u = part.strip()
+        if u and u not in seen:
+            seen.append(u)
+    return seen
+
+
 def _post(base: str, path: str, body: dict, token: str) -> tuple[int, str]:
     url = f"{base.rstrip('/')}{path}"
     if ALLOWED_IDENTITY_HOST not in url:
@@ -57,11 +73,18 @@ def main() -> int:
         print("ERROR: set AGENTBASE_REDMINE_RETURN_URL in .env first", file=sys.stderr)
         return 2
 
+    allowed = parse_allowed_return_urls(
+        os.getenv("AGENTBASE_REDMINE_ALLOWED_RETURN_URLS", ""), return_url
+    )
     token = _get_token()
 
-    st, body = _post(base, "/agent-identities", identity_payload(identity, [return_url]), token)
-    print(f"create identity {identity!r}: HTTP {st} {body[:300]}")
-    if st not in (200, 201, 409):
+    st, body = _post(base, "/agent-identities", identity_payload(identity, allowed), token)
+    print(f"create identity {identity!r} allowedReturnUrls={allowed}: HTTP {st} {body[:300]}")
+    if st == 409:
+        print("  NOTE: identity already exists — its allowedReturnUrls was NOT updated. "
+              "To add a URL, delete+recreate the identity (user keys live under the "
+              "provider, not the identity, so none are lost) or update it in the console.")
+    elif st not in (200, 201):
         return 1
 
     st, body = _post(base, "/outbound-auth/delegated-api-key-providers", provider_payload(provider), token)
