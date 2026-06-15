@@ -3,7 +3,9 @@
 FROM node:20-slim AS frontend
 WORKDIR /fe
 COPY meeting_frontend_react/package.json meeting_frontend_react/package-lock.json ./
-RUN npm ci
+# Longer fetch timeout + retries: the build runs behind a slow/corp network where
+# the default 5min npm timeout trips ETIMEDOUT on a cold cache.
+RUN npm ci --fetch-timeout=600000 --fetch-retries=5
 COPY meeting_frontend_react/ ./
 RUN npm run build
 
