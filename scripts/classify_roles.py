@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import pathlib
 import sys
 from collections.abc import Callable
@@ -32,8 +33,14 @@ from meeting.db.base import AsyncSessionLocal, async_engine
 from meeting.db import models, repositories as repo
 from meeting.services.role_mapping import classify_role, resolve_role
 from meeting.graphs._chat_llm import _llm_client, _llm_model
+from meeting.observability.tracing import init_tracing, shutdown_tracing
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# LOG_LEVEL=DEBUG surfaces classify_role's per-decision reasoning (raw answer,
+# parsed name + confidence) — useful for tuning the confidence threshold/prompt.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 logger = logging.getLogger("classify_roles")
 
 
@@ -42,15 +49,25 @@ def _make_generate() -> Callable[[list[dict[str, str]]], str]:
     model = _llm_model()
 
     def generate(messages: list[dict[str, str]]) -> str:
+        # max_tokens must be generous: the configured LLM (minimax-m2.5) is a
+        # reasoning model that spends tokens on a separate chain-of-thought
+        # before emitting the answer in `content`. 120 truncated it mid-think
+        # (finish_reason="length", content=null), so it never produced the JSON.
         resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.0, max_tokens=120
+            model=model, messages=messages, temperature=0.0, max_tokens=1024
         )
-        return resp.choices[0].message.content or ""
+        msg = resp.choices[0].message
+        # Reasoning models put thought in `reasoning`/`reasoning_content` and the
+        # final answer in `content`; fall back to reasoning only if content is empty.
+        return msg.content or getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None) or ""
 
     return generate
 
 
 async def run(dry_run: bool = False) -> dict[str, int]:
+    # Env-gated (OTEL_ENABLED/LANGFUSE_ENABLED); no-op otherwise. The OpenAI
+    # instrumentor it attaches then traces the classify_role LLM calls below.
+    init_tracing()
     generate = _make_generate()
     stats = {"scanned": 0, "matched": 0, "classified": 0, "skipped": 0}
     async with AsyncSessionLocal() as session:
@@ -106,6 +123,9 @@ async def run(dry_run: bool = False) -> dict[str, int]:
                 stats["skipped"] += 1
                 logger.warning("classify failed user=%s: %s", user_id, e)
     await async_engine.dispose()
+    # Flush BatchSpanProcessor before this short-lived process exits, else
+    # batched spans are lost (the FastAPI app flushes on its own; a CLI doesn't).
+    shutdown_tracing()
     logger.info("done: %s", stats)
     return stats
 
