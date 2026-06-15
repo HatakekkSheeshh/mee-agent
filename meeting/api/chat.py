@@ -53,6 +53,9 @@ class SessionCreate(BaseModel):
 
 class MessageSend(BaseModel):
     text: str
+    # The UI-selected project for THIS turn (user-scoped sessions: grounding is
+    # per-turn, not bound to the session). None → answer without project grounding.
+    meeting_id: Optional[str] = None
 
 
 class KickoffRequest(BaseModel):
@@ -322,6 +325,29 @@ async def clear_session(
     return {"status": "cleared", "session_id": str(sid)}
 
 
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Remove a chat session permanently (user-scoped sidebar remove): hard-delete
+    its messages + pending actions + the session row, and purge the LangGraph
+    checkpoint thread. Distinct from clear (which keeps the row). 404 if missing;
+    the checkpoint purge is best-effort and never 500s the delete."""
+    sid = _parse_uuid(session_id)
+    chat = await repo.get_chat_session(session, sid)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await repo.delete_chat_session(session, sid)
+
+    try:
+        await get_checkpointer().adelete_thread(str(sid))
+    except Exception:
+        logger.warning("delete: checkpoint purge failed for %s", sid, exc_info=True)
+
+    return {"status": "deleted", "session_id": str(sid)}
+
+
 # ─── Messages ─────────────────────────────────────────────────────
 
 async def _graph_token_or_401(user: User, session: AsyncSession):
@@ -368,7 +394,7 @@ async def send_message(
         session_id=session_id,
         user_id=str(user.id),
         user_message=req.text,
-        meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
+        meeting_id=req.meeting_id,
         session=session,
         checkpointer=checkpointer,
         pm_user_token=pm_token,
@@ -438,7 +464,7 @@ async def send_message_stream(
                     session_id=session_id,
                     user_id=str(user.id),
                     user_message=req.text,
-                    meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
+                    meeting_id=req.meeting_id,
                     session=session,
                     checkpointer=checkpointer,
                     pm_user_token=pm_token,

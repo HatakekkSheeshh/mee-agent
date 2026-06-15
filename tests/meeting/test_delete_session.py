@@ -44,3 +44,53 @@ async def test_delete_chat_session_deletes_messages_pending_and_row():
     # Every DELETE is scoped to this session id.
     for stmt in sess.executed:
         assert sid in stmt.compile().params.values()
+
+
+# ─── endpoint: DELETE /sessions/{id} ──────────────────────────────────
+
+
+async def test_delete_endpoint_hard_deletes_and_purges_checkpoint(monkeypatch):
+    sid = uuid.UUID(SID)
+    sess = object()
+    fake_chat = SimpleNamespace(id=sid, meeting_id=None, title="Dự án Mee")
+
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=fake_chat))
+    delete_mock = AsyncMock()
+    monkeypatch.setattr(repo, "delete_chat_session", delete_mock)
+    adelete = AsyncMock()
+    monkeypatch.setattr(
+        chat_api, "get_checkpointer", lambda: SimpleNamespace(adelete_thread=adelete)
+    )
+
+    out = await chat_api.delete_session(SID, session=sess)
+
+    assert out == {"status": "deleted", "session_id": SID}
+    delete_mock.assert_awaited_once_with(sess, sid)
+    adelete.assert_awaited_once_with(SID)  # thread_id == str(session_id)
+
+
+async def test_delete_endpoint_404_when_session_missing(monkeypatch):
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=None))
+    delete_mock = AsyncMock()
+    monkeypatch.setattr(repo, "delete_chat_session", delete_mock)
+
+    with pytest.raises(HTTPException) as ei:
+        await chat_api.delete_session(SID, session=object())
+
+    assert ei.value.status_code == 404
+    delete_mock.assert_not_awaited()
+
+
+async def test_delete_endpoint_checkpoint_failure_is_nonfatal(monkeypatch):
+    sid = uuid.UUID(SID)
+    fake_chat = SimpleNamespace(id=sid, meeting_id=None, title=None)
+    monkeypatch.setattr(repo, "get_chat_session", AsyncMock(return_value=fake_chat))
+    monkeypatch.setattr(repo, "delete_chat_session", AsyncMock())
+    boom = AsyncMock(side_effect=RuntimeError("no checkpointer"))
+    monkeypatch.setattr(
+        chat_api, "get_checkpointer", lambda: SimpleNamespace(adelete_thread=boom)
+    )
+
+    out = await chat_api.delete_session(SID, session=object())
+
+    assert out["status"] == "deleted"  # purge failure logged, not raised
