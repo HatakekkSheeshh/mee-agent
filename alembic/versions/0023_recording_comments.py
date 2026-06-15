@@ -1,8 +1,14 @@
 """Recording comments — Notta-style per-recording threaded notes.
 
-Revision ID: 0019
-Revises: 0018
+Revision ID: 0023
+Revises: 0022
 Create Date: 2026-06-15
+
+NOTE: renumbered 0019 → 0023 (2026-06-16). transcript-flow and
+personalized-user-prompt both minted a "0019" (this + 0019_roles_pool);
+merging onto feat/build-agentbase created a duplicate revision id.
+recording_comments is an independent table add, so it is reparented to
+the end of the roles lineage (after 0022) to restore a single linear head.
 
 Adds a `recording_comments` table for the Comments side pane. Each row
 is a user-authored note anchored optionally to a playback position
@@ -21,8 +27,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0019"
-down_revision: Union[str, None] = "0018"
+revision: str = "0023"
+down_revision: Union[str, None] = "0022"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
