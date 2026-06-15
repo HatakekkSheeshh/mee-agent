@@ -1,8 +1,9 @@
-"""Kickoff role source — the FE supplies the role via env (no login in v1).
+"""Kickoff role source — the logged-in user's resolved role drives the kickoff.
 
-`_pick_role_name` decides the role name for a kickoff: the FE-provided role
-(from VITE_KICKOFF_ROLE) wins; otherwise fall back to the AgentBase persona;
-otherwise None (→ generic greeting).
+`_pick_role_name` decides the role name: the optional dev override
+(KickoffRequest.role, from VITE_KICKOFF_ROLE) wins; otherwise the user's
+resolved role name (users.role_id → roles.name); otherwise None (→ generic
+greeting).
 """
 from __future__ import annotations
 

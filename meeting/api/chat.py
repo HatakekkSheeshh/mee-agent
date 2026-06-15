@@ -36,7 +36,7 @@ from meeting.graphs import (
     stream_chat_turn,
 )
 from meeting.graphs._chat_llm import _llm_client, _llm_model
-from meeting.memory_client import DEFAULT_ACTOR_ID, get_user_role
+# (role now comes from the authenticated user's users.role_id, not AgentBase)
 from meeting.services.kickoff import run_kickoff
 from meeting.services.redmine_mcp_client import get_redmine_mcp_client
 
@@ -56,17 +56,17 @@ class MessageSend(BaseModel):
 
 
 class KickoffRequest(BaseModel):
-    # v1 has no login, so the FE supplies the role from VITE_KICKOFF_ROLE.
-    # Optional — falls back to the AgentBase persona, then a generic greeting.
+    # Optional dev override (VITE_KICKOFF_ROLE). Default path uses the logged-in
+    # user's resolved role (users.role_id). Falls back to a generic greeting.
     role: Optional[str] = None
 
 
 def _pick_role_name(
-    request_role: Optional[str], persona_role: Optional[str]
+    request_role: Optional[str], user_role: Optional[str]
 ) -> Optional[str]:
-    """The role for a kickoff: the FE-provided role wins, else the persona,
-    else None (→ generic greeting)."""
-    return (request_role or "").strip() or persona_role
+    """The role for a kickoff: the dev override wins, else the user's resolved
+    role, else None (→ generic greeting)."""
+    return (request_role or "").strip() or user_role
 
 
 class ApprovalRequest(BaseModel):
@@ -253,6 +253,7 @@ async def kickoff_session(
     session_id: str,
     req: KickoffRequest = KickoffRequest(),
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """Mee speaks first: a role-tailored, data-grounded greeting on an empty
     thread. Idempotent — if the thread already has messages, do nothing. Never
@@ -268,8 +269,8 @@ async def kickoff_session(
     if existing:
         return {"reply": None, "skipped": True}
 
-    user = await repo.get_or_create_dev_user(session)
-    role_name = _pick_role_name(req.role, get_user_role(DEFAULT_ACTOR_ID))
+    user_role_name = user.role.name if user.role else None
+    role_name = _pick_role_name(req.role, user_role_name)
     role = await repo.get_role(session, role_name) if role_name else None
     user_name = (user.display_name or "").strip() or "bạn"
 
