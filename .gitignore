@@ -12,3 +12,6 @@ slides
 .pytest_cache/
 cache/
 benchmarks
+agentbase
+voiceprints_*.webm
+*.ipynb
