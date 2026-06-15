@@ -233,7 +233,7 @@ export function CleanEditor({ recordingId, segments, editedHtml, clusterMapping,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
-  if (!editor) return <div className="muted">Đang load editor…</div>;
+  if (!editor) return <div className="muted">{t("cleanEditor.loading")}</div>;
 
   function applyTag(type: TagType) {
     editor!.chain().focus().toggleMeetingTag(type).run();
@@ -242,15 +242,15 @@ export function CleanEditor({ recordingId, segments, editedHtml, clusterMapping,
   const stateBadge = () => {
     switch (saveState) {
       case "dirty":
-        return <span className="muted small" style={{ marginRight: 8 }}>● Đang gõ…</span>;
+        return <span className="muted small" style={{ marginRight: 8 }}>● {t("cleanEditor.status.typing")}</span>;
       case "saving":
-        return <span className="muted small" style={{ marginRight: 8 }}>⟳ Đang lưu…</span>;
+        return <span className="muted small" style={{ marginRight: 8 }}>⟳ {t("cleanEditor.status.saving")}</span>;
       case "saved":
-        return <span className="small" style={{ marginRight: 8, color: "var(--accent)" }}>✓ Đã lưu {lastSaved}</span>;
+        return <span className="small" style={{ marginRight: 8, color: "var(--accent)" }}>✓ {t("cleanEditor.status.saved", { time: lastSaved || "" })}</span>;
       case "error":
-        return <span className="small" style={{ marginRight: 8, color: "var(--danger)" }} title={errorMsg || ""}>⚠ Lưu lỗi</span>;
+        return <span className="small" style={{ marginRight: 8, color: "var(--danger)" }} title={errorMsg || ""}>⚠ {t("cleanEditor.status.error")}</span>;
       default:
-        return <span className="muted small" style={{ marginRight: 8 }}>{lastSaved ? `Lưu lần cuối ${lastSaved}` : ""}</span>;
+        return <span className="muted small" style={{ marginRight: 8 }}>{lastSaved ? t("cleanEditor.status.lastSaved", { time: lastSaved }) : ""}</span>;
     }
   };
 
@@ -336,7 +336,7 @@ export function CleanEditor({ recordingId, segments, editedHtml, clusterMapping,
         <button
           className={`tt-btn tt-tag tt-tag-commitment${editor.isActive("meetingTag", { type: "commitment" }) ? " active" : ""}`}
           type="button"
-          title="Đánh dấu commitment (chọn text trước)"
+          title={t("cleanEditor.tag.commitment")}
           onClick={() => applyTag("commitment")}
         >
           Commit
@@ -344,7 +344,7 @@ export function CleanEditor({ recordingId, segments, editedHtml, clusterMapping,
         <button
           className={`tt-btn tt-tag tt-tag-decision${editor.isActive("meetingTag", { type: "decision" }) ? " active" : ""}`}
           type="button"
-          title="Đánh dấu decision"
+          title={t("cleanEditor.tag.decision")}
           onClick={() => applyTag("decision")}
         >
           Decision
@@ -352,7 +352,7 @@ export function CleanEditor({ recordingId, segments, editedHtml, clusterMapping,
         <button
           className={`tt-btn tt-tag tt-tag-blocker${editor.isActive("meetingTag", { type: "blocker" }) ? " active" : ""}`}
           type="button"
-          title="Đánh dấu blocker"
+          title={t("cleanEditor.tag.blocker")}
           onClick={() => applyTag("blocker")}
         >
           Blocker

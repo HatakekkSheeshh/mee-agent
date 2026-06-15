@@ -13,6 +13,7 @@ import type {
   ChatSessionSummary,
   ChatStreamStep,
   ChatTurnResult,
+  StreamEvent,
   Voiceprint,
 } from "../types/api";
 
@@ -118,6 +119,35 @@ export const api = {
     listMembers: (id: string) =>
       http<{ meeting_id: string; members: MeetingMember[] }>(
         "GET", `/api/meetings/${id}/members`,
+      ),
+    /** Invite a user (by email) into the project. User must have logged
+     * in O365 once so they exist in the users table. */
+    addMember: (id: string, email: string, role = "editor") =>
+      http<{
+        meeting_id: string;
+        user_id: string;
+        email: string;
+        display_name: string | null;
+        role: string;
+      }>("POST", `/api/meetings/${id}/members`, { email, role }),
+    /** Revoke a member from the project (soft-delete via revoked_at). */
+    removeMember: (meetingId: string, userId: string) =>
+      http<{ meeting_id: string; user_id: string; revoked: boolean }>(
+        "DELETE", `/api/meetings/${meetingId}/members/${userId}`,
+      ),
+    /** Autocomplete user search by email or display_name — drives the
+     * invite picker. Empty query returns []. */
+    searchUsers: (q: string, limit = 8) =>
+      http<{
+        users: Array<{
+          id: string;
+          email: string;
+          display_name: string;
+          avatar_url: string | null;
+        }>;
+      }>(
+        "GET",
+        `/api/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
       ),
     importTranscript: (
       meetingId: string,
@@ -236,11 +266,82 @@ export const api = {
       index: number,
       speaker: string,
       scope: "current" | "all",
+      cluster_id?: string | null,
     ) =>
       http<{ renamed: number; scope: string; speaker: string }>(
         "PATCH",
         `/api/recordings/${id}/segment-speaker`,
-        { index, speaker, scope },
+        { index, speaker, scope, cluster_id: cluster_id || null },
+      ),
+    /** Save inline edit of one transcript segment's text (Notta edit mode).
+     * Persists to `transcript_segments.edited_text`; original_text retained. */
+    patchSegmentText: (id: string, seq: number, text: string) =>
+      http<{ recording_id: string; seq: number; saved_chars: number }>(
+        "PATCH",
+        `/api/recordings/${id}/segments/${seq}/text`,
+        { text },
+      ),
+    /** Save the user-edited MoM HTML body (rich text editor in MoM tab). */
+    patchMomBody: (id: string, html: string, text?: string) =>
+      http<{ recording_id: string; saved_chars: number }>(
+        "PATCH",
+        `/api/recordings/${id}/mom/body`,
+        text != null ? { html, text } : { html },
+      ),
+    /** Save the full structured mom_json after inline field edits. */
+    patchMomJson: (id: string, mom_json: unknown) =>
+      http<{ recording_id: string; saved: boolean }>(
+        "PATCH",
+        `/api/recordings/${id}/mom`,
+        { mom_json },
+      ),
+    /** List all comments on a recording, sorted by anchor_ms asc. */
+    listComments: (id: string) =>
+      http<{
+        recording_id: string;
+        comments: Array<{
+          id: string;
+          recording_id: string;
+          anchor_ms: number | null;
+          segment_seq: number | null;
+          text: string;
+          created_at: string | null;
+          edited_at: string | null;
+          user: { id: string; display_name: string; email: string; avatar_url: string | null };
+        }>;
+      }>("GET", `/api/recordings/${id}/comments`),
+    /** Create a comment, optionally anchored to an audio position. */
+    createComment: (
+      id: string,
+      text: string,
+      opts: { anchor_ms?: number | null; segment_seq?: number | null } = {},
+    ) =>
+      http<{
+        id: string;
+        recording_id: string;
+        anchor_ms: number | null;
+        segment_seq: number | null;
+        text: string;
+        created_at: string | null;
+        edited_at: string | null;
+        user: { id: string; display_name: string; email: string; avatar_url: string | null };
+      }>("POST", `/api/recordings/${id}/comments`, {
+        text,
+        anchor_ms: opts.anchor_ms ?? null,
+        segment_seq: opts.segment_seq ?? null,
+      }),
+    /** Edit comment body. */
+    editComment: (commentId: string, text: string) =>
+      http<{ id: string; text: string }>(
+        "PATCH",
+        `/api/comments/${commentId}`,
+        { text },
+      ),
+    /** Soft-delete a comment. */
+    removeComment: (commentId: string) =>
+      http<{ id: string; deleted: boolean }>(
+        "DELETE",
+        `/api/comments/${commentId}`,
       ),
     clean: (id: string, regenerate = false) =>
       http<CleanResponse>(
@@ -289,12 +390,71 @@ export const api = {
   },
 
   // ─── Transcribe upload (one-shot, no DB persistence) ────────────────
+  /** Streaming counterpart of `transcribe()` — yields SSE events as the
+   * STT decodes the audio. Only works when sttModel='faster_whisper'
+   * (other backends return one JSON, no streaming). Caller drives a
+   * for-await loop over the returned generator.
+   *
+   * Why fetch + manual SSE parse instead of EventSource: EventSource is
+   * GET-only — we need to POST the audio file as multipart.
+   */
+  async *transcribeStream(
+    file: File,
+    language = "vi",
+    vocabHints = "",
+    attendees = "",
+    recordingId = "",
+    sttModel = "faster_whisper",
+  ): AsyncGenerator<StreamEvent, void, unknown> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("language", language);
+    if (vocabHints) fd.append("vocab_hints", vocabHints);
+    if (attendees) fd.append("attendees", attendees);
+    if (recordingId) fd.append("recording_id", recordingId);
+    if (sttModel) fd.append("stt_model", sttModel);
+
+    const r = await fetch("/api/transcribe/stream", { method: "POST", body: fd });
+    if (!r.ok || !r.body) {
+      const j = await r.json().catch(() => ({}));
+      throw new ApiError(r.status, j.detail || r.statusText);
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines (\n\n). Split on that
+      // and process each complete frame; keep partial tail in `buf`.
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        // Each frame may have multiple "data:" lines; join their values.
+        const dataLines = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart());
+        if (dataLines.length === 0) continue;
+        try {
+          const obj = JSON.parse(dataLines.join("\n"));
+          yield obj as StreamEvent;
+        } catch {
+          // Ignore malformed frames — keep reading.
+        }
+      }
+    }
+  },
+
   transcribe: async (
     file: File,
     language = "vi",
     vocabHints = "",
     attendees = "",
     recordingId = "",
+    sttModel = "",
   ) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -307,6 +467,10 @@ export const api = {
     // file under output/audio/<recording_id>.<ext> and patch recording.audio_path.
     // Enables Notta-style in-browser playback via /api/recordings/{id}/audio.
     if (recordingId) fd.append("recording_id", recordingId);
+    // Route to the chosen STT backend (e.g. "faster_whisper" for word-accurate
+    // sync, "phowhisper" for VI-only, default "whisper" = VNG MaaS).
+    // Without this, backend always resolves to DEFAULT_STT.
+    if (sttModel) fd.append("stt_model", sttModel);
     const r = await fetch("/api/transcribe", { method: "POST", body: fd });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));

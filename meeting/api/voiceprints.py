@@ -121,17 +121,39 @@ async def enroll_voice(
             detail=f"Audio quá ngắn ({size_kb} KB). Hãy ghi âm ít nhất 8 giây.",
         )
 
-    # Persist the source file (webm or whatever the browser produced) under
-    # output/voiceprints/<user_id>.<ext> — gives us a re-process audit trail.
-    enrollment_dir = os.path.join(_output_dir(), "voiceprints")
-    os.makedirs(enrollment_dir, exist_ok=True)
+    # Persist the source file. ffmpeg below needs a file PATH on disk to
+    # decode, so we write to a temp file regardless; when R2 is configured
+    # we also upload the same bytes to R2 for the long-term audit trail
+    # (re-processing if we ever want to re-embed with a better model).
+    # The temp file is removed after embed; R2 holds the canonical copy.
+    from meeting.services import r2_storage
+
     ext = "webm"
     if audio.filename and "." in audio.filename:
         ext = audio.filename.rsplit(".", 1)[1][:8] or "webm"
+
+    enrollment_dir = os.path.join(_output_dir(), "voiceprints")
+    os.makedirs(enrollment_dir, exist_ok=True)
     src_path = os.path.join(enrollment_dir, f"{user.id}.{ext}")
     with open(src_path, "wb") as f:
         f.write(content)
-    logger.info(f"[voiceprints/enroll] saved {size_kb}KB for user={user.id}")
+
+    if r2_storage.is_configured():
+        try:
+            r2_key = r2_storage.voiceprint_key(str(user.id), ext)
+            r2_storage.upload_bytes(r2_key, content)
+            audio_uri = f"r2://{r2_key}"
+            logger.info(
+                f"[voiceprints/enroll] saved {size_kb}KB for user={user.id} → R2 ({r2_key})"
+            )
+        except Exception as e:
+            audio_uri = src_path  # fallback: keep the local copy as the canonical reference
+            logger.warning(
+                f"[voiceprints/enroll] R2 upload failed for user={user.id} ({e}); keeping local copy"
+            )
+    else:
+        audio_uri = src_path
+        logger.info(f"[voiceprints/enroll] saved {size_kb}KB for user={user.id} (local)")
 
     # Decode + embed. Wrap so the user sees a meaningful error instead of 500.
     t0 = time.time()
@@ -198,6 +220,15 @@ async def enroll_voice(
     user.last_login_at = datetime.now(timezone.utc)
     await session.commit()
 
+    # Once we've embedded + persisted to R2 the local temp file is just
+    # disk pressure; remove it. (Kept when R2 wasn't configured so the
+    # audit trail isn't lost.)
+    if audio_uri.startswith("r2://"):
+        try:
+            os.unlink(src_path)
+        except OSError:
+            pass
+
     return {
         "ok": True,
         "user_id": str(user.id),
@@ -206,7 +237,7 @@ async def enroll_voice(
         "voiceprint_name": voiceprint_name,
         "embedding_dim": len(embedding),
         "audio_size_kb": size_kb,
-        "audio_path": src_path,
+        "audio_path": audio_uri,
     }
 
 

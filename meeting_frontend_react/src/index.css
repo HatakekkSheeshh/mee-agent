@@ -109,6 +109,70 @@ body.project-overview-mode .resizer { display: block !important; }
   padding: 12px 16px;
   background: var(--surface);
 }
+
+/* MoM rich editor — same TipTap chrome as CleanEditor, just under a
+ * different class so we can scope tweaks (heading sizes, blockquote
+ * styling) without affecting transcript edits. */
+.mom-editor { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.mom-editor-toolbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.mom-editor-toolbar .tt-btn,
+.mom-editor-toolbar .tt-sep { /* inherit from .clean-editor-toolbar */ }
+.mom-editor-toolbar .tt-btn {
+  background: transparent; border: 0; color: var(--text-2);
+  width: 28px; height: 28px; border-radius: var(--r-xs); cursor: pointer;
+  font-size: 13px; display: inline-flex; align-items: center;
+  justify-content: center;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.mom-editor-toolbar .tt-btn:hover { background: var(--hover); color: var(--text); }
+.mom-editor-toolbar .tt-btn.active { background: var(--accent-soft); color: var(--accent); }
+.mom-editor-toolbar .tt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.mom-editor-toolbar .tt-sep {
+  width: 1px; height: 18px; background: var(--border-2); margin: 0 4px;
+}
+.mom-editor-status {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 0 6px;
+}
+.mom-editor-error { color: var(--warning, #f59e0b); cursor: help; }
+.mom-editor-content {
+  flex: 1; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 16px 20px; background: var(--surface);
+}
+.mom-editor-content :focus { outline: none; }
+.mom-editor-content h1 { font-size: 22px; margin: 18px 0 10px; }
+.mom-editor-content h2 { font-size: 18px; margin: 16px 0 8px; }
+.mom-editor-content h3 { font-size: 15px; margin: 12px 0 6px; color: var(--accent); }
+.mom-editor-content p { margin: 8px 0; line-height: 1.7; }
+.mom-editor-content ul, .mom-editor-content ol { padding-left: 24px; margin: 8px 0; }
+.mom-editor-content li { margin: 4px 0; line-height: 1.6; }
+.mom-editor-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px; margin: 10px 0;
+  color: var(--text-muted); font-style: italic;
+}
+.mom-editor-content code {
+  background: var(--surface-2); padding: 1px 5px; border-radius: 3px;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px;
+}
+
+.mom-edit-toggle.active {
+  background: var(--accent);
+  color: var(--surface);
+  border-color: var(--accent);
+}
 .tiptap-content { outline: none; min-height: 100%; }
 .tiptap-content p { margin: 0 0 10px 0; line-height: 1.6; font-size: 14px; }
 .tiptap-content p:last-child { margin-bottom: 0; }
