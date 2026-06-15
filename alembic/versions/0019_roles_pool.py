@@ -29,21 +29,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "roles",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("name", sa.Text(), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("data_plan", sa.Text(), nullable=False, server_default="minimal"),
-        sa.Column("kickoff_prompt", sa.Text(), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        sa.UniqueConstraint("name", name="uq_roles_name"),
-    )
+    # Idempotent: the shared DB drifted (this revision was once recorded under a
+    # duplicate "0016" id without its body ever running), so the table may or may
+    # not exist. Create only if absent; the seed below is always safe to re-run.
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table("roles"):
+        op.create_table(
+            "roles",
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+            sa.Column("name", sa.Text(), nullable=False),
+            sa.Column("description", sa.Text(), nullable=True),
+            sa.Column("data_plan", sa.Text(), nullable=False, server_default="minimal"),
+            sa.Column("kickoff_prompt", sa.Text(), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.UniqueConstraint("name", name="uq_roles_name"),
+        )
 
     insert = sa.text(
         "INSERT INTO roles (id, name, description, data_plan, kickoff_prompt) "

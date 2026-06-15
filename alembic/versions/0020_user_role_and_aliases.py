@@ -26,28 +26,42 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # roles.aliases — text[] default empty.
-    op.add_column(
-        "roles",
-        sa.Column(
-            "aliases",
-            postgresql.ARRAY(sa.Text()),
-            nullable=False,
-            server_default="{}",
-        ),
+    # Idempotent against the drifted shared DB: add each column only if absent.
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    roles_cols = (
+        {c["name"] for c in insp.get_columns("roles")}
+        if insp.has_table("roles")
+        else set()
     )
-    # users.role_id — nullable FK → roles.id.
-    op.add_column(
-        "users",
-        sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=True),
+    if "aliases" not in roles_cols:
+        # roles.aliases — text[] default empty.
+        op.add_column(
+            "roles",
+            sa.Column(
+                "aliases",
+                postgresql.ARRAY(sa.Text()),
+                nullable=False,
+                server_default="{}",
+            ),
+        )
+    users_cols = (
+        {c["name"] for c in insp.get_columns("users")}
+        if insp.has_table("users")
+        else set()
     )
-    op.create_foreign_key(
-        "fk_users_role_id", "users", "roles", ["role_id"], ["id"]
-    )
+    if "role_id" not in users_cols:
+        # users.role_id — nullable FK → roles.id.
+        op.add_column(
+            "users",
+            sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=True),
+        )
+        op.create_foreign_key(
+            "fk_users_role_id", "users", "roles", ["role_id"], ["id"]
+        )
 
     # Reseed aliases by name (idempotent UPDATE).
     update = sa.text("UPDATE roles SET aliases = :aliases WHERE name = :name")
-    bind = op.get_bind()
     for r in SEED_ROLES:
         bind.execute(update, {"aliases": r.get("aliases", []), "name": r["name"]})
 
