@@ -14,7 +14,9 @@ import { useApp } from "../store/AppContext";
 import { api, ApiError } from "../api/client";
 import type { CleanResponse, MoMJson, RawSegment } from "../types/api";
 import { NottaCleanView } from "./NottaCleanView";
+import { FloatingRail } from "./FloatingRail";
 import { useLiveRecording, type LiveSegment } from "../hooks/useLiveRecording";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type ViewMode = "raw" | "clean";
 
@@ -29,6 +31,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     currentMeetingId,
     currentMeeting,
     reloadCurrentMeeting,
+    reloadMeetings,
+    selectMeeting,
+    selectRecording,
     setMomStatus,
     setRecordingMom,
     setProjectSummary,
@@ -172,7 +177,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     if (currentRecordingId && generatingRecordings.has(currentRecordingId)) {
       setMomStatus({
         kind: "assessing",
-        msg: "Đang tạo biên bản qua LangGraph… (tiếp tục từ lần bấm trước)",
+        msg: t("momPane.generatingTitle"),
       });
     } else {
       setMomStatus(null);
@@ -264,9 +269,55 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     onStatus: onLiveStatus,
   });
 
+  // Modal that prompts the user to create / open a project when they
+  // try to record / upload before selecting one. Opening the modal sets
+  // the pending action — on confirm we auto-create a default project +
+  // recording and re-fire that action.
+  const [noProjectModal, setNoProjectModal] = useState<
+    null | { action: "record" | "upload"; uploadFile?: File }
+  >(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+
+  async function ensureProjectAndRecording(): Promise<{
+    meetingId: string;
+    recordingId: string;
+  } | null> {
+    // If we already have both, no-op.
+    if (currentMeetingId && currentRecordingId) {
+      return { meetingId: currentMeetingId, recordingId: currentRecordingId };
+    }
+    setCreatingProject(true);
+    try {
+      let mid = currentMeetingId;
+      if (!mid) {
+        const m = await api.meetings.create({
+          title: t("meeting.titlePlaceholder") || "Phiên họp chưa đặt tên",
+        });
+        mid = m.id;
+        await reloadMeetings();
+        await selectMeeting(mid);
+      }
+      // Create the first recording — backend auto-inherits attendees /
+      // vocab from the previous sibling, so a brand-new project starts
+      // empty which is fine.
+      const isEn = t("sidebar.recordingPlaceholder") === "Untitled recording";
+      const r = await api.recordings.create(mid, `${isEn ? "Meeting" : "Phiên"} 1`);
+      await reloadCurrentMeeting();
+      selectRecording(r.id);
+      return { meetingId: mid, recordingId: r.id };
+    } catch (e) {
+      alert(t("transcriptPane.error.create", { msg: (e as Error).message }));
+      return null;
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
   async function handleStartRecord() {
     if (!currentRecordingId) {
-      alert("Chọn 1 phiên họp trước");
+      // Show the auto-create modal instead of a bare alert. User can
+      // confirm to auto-create a project + recording, or cancel.
+      setNoProjectModal({ action: "record" });
       return;
     }
     // Snapshot current text BEFORE starting — new live segments will be
@@ -274,6 +325,22 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     baseTextRef.current = rawText;
     completedRef.current = [];
     await live.start();
+  }
+
+  async function confirmNoProjectAndProceed() {
+    const pending = noProjectModal;
+    setNoProjectModal(null);
+    if (!pending) return;
+    const ok = await ensureProjectAndRecording();
+    if (!ok) return;
+    if (pending.action === "record") {
+      // Slight delay so React commits the recording-id state before we
+      // start the WS — useLiveRecording reads currentRecordingId via
+      // closure and we want the fresh value.
+      window.setTimeout(() => { void handleStartRecord(); }, 50);
+    }
+    // (upload path can be wired later — for now the upload button
+    // handler shows its own alert; this modal only covers record.)
   }
 
   async function handleStopRecord() {
@@ -313,7 +380,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       setRawText("");
       setStatus({
         kind: "assessing",
-        msg: "Đang phân tích lại audio để có word-level timestamps…",
+        msg: t("transcriptPane.status.reAnalyze"),
       });
 
       try {
@@ -341,7 +408,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             if (liveSegs.length === 1) setFreshUpload(true);
             setStatus({
               kind: "assessing",
-              msg: `Đang phân tích live audio — ${liveSegs.length} đoạn…`,
+              msg: t("transcriptPane.status.live", { n: liveSegs.length }),
             });
             await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
           } else if (ev.type === "error") {
@@ -353,10 +420,24 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           .join("\n");
         setRawText(fullText);
         // Import the new transcript so Clean + Generate MoM see it.
+        // CRITICAL: pass the structured `segments` array (with words +
+        // start_ms / end_ms timestamps) — without this the backend
+        // splits text by lines and stores segments with NULL timestamps,
+        // killing karaoke word-level highlight on playback.
         await api.meetings.importTranscript(currentMeetingId, {
           text: fullText,
+          segments: collected.map((c) => ({
+            text: c.text,
+            speaker: c.speaker,
+            start: c.start,
+            end: c.end,
+            words: c.words,
+          })),
           recording_id: currentRecordingId,
           replace: true,
+          duration_sec: liveSegs.length > 0
+            ? Math.ceil((liveSegs[liveSegs.length - 1].end_ms || 0) / 1000)
+            : null,
         });
         dbTextRef.current = fullText;
         await reloadCurrentMeeting();
@@ -364,7 +445,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         setStatus({ kind: "success", msg: t("live.done") });
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        setStatus({ kind: "error", msg: `Lỗi re-transcribe: ${msg}` });
+        setStatus({ kind: "error", msg: t("transcriptPane.error.transcribe", { msg }) });
       } finally {
         setStreamingActive(false);
       }
@@ -498,7 +579,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         }
       } catch (e) {
         if (!cancelled) {
-          setStatus({ kind: "error", msg: `Tải transcript lỗi: ${(e as Error).message}` });
+          setStatus({ kind: "error", msg: t("transcriptPane.error.loadTranscript", { msg: (e as Error).message }) });
         }
       }
     })();
@@ -509,12 +590,12 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   // ─── Upload audio file ───
   async function handleUpload(file: File) {
     if (!currentRecordingId) {
-      alert("Chọn 1 phiên họp trước (sidebar → click phiên hoặc + Thêm phiên).");
+      alert(t("transcriptPane.alert.noMeeting"));
       return;
     }
     if (!currentMeetingId) return;
     setBusy(true);
-    setStatus({ kind: "assessing", msg: `Đang upload "${file.name}"…` });
+    setStatus({ kind: "assessing", msg: t("transcriptPane.status.assess", { name: file.name }) });
     try {
       // Pass attendees to bias Whisper STT + diarization (correct name
       // spellings, expected speaker count). Defined in MeetingControl
@@ -608,7 +689,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             }
             setStatus({
               kind: "assessing",
-              msg: `Đang xử lý "${file.name}" — ${liveSegs.length} đoạn nhận được…`,
+              msg: t("transcriptPane.status.upload", { name: file.name, n: liveSegs.length }),
             });
             // Yield to browser so React commits the new segment before
             // we process the next SSE frame. Without this, React 18
@@ -659,7 +740,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       }
       const text = transcribeResp.text;
       if (!text?.trim()) {
-        setStatus({ kind: "error", msg: "Không phát hiện giọng nói." });
+        setStatus({ kind: "error", msg: t("transcriptPane.error.noVoice") });
         return;
       }
       // Format text with [mm:ss] SPEAKER_NN: prefixes for the Raw textarea
@@ -684,7 +765,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         : text;
       setRawText(formattedText);
       dbTextRef.current = formattedText;
-      setStatus({ kind: "assessing", msg: "Đang lưu transcript vào DB…" });
+      setStatus({ kind: "assessing", msg: t("transcriptPane.saving") });
       const imp = await api.meetings.importTranscript(currentMeetingId, {
         text,  // legacy fallback (only used if segments absent)
         // Pass structured segments — backend uses these to populate
@@ -740,7 +821,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                 if (currentRecordingIdRef.current === targetRid) {
                   setStatus({
                     kind: "success",
-                    msg: "Đã phân tích speakers xong ✓",
+                    msg: t("live.done"),
                   });
                   await reloadCurrentMeeting();
                 }
@@ -767,7 +848,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       }
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      setStatus({ kind: "error", msg: `Lỗi: ${msg}` });
+      setStatus({ kind: "error", msg: t("sidebar.error.generic", { msg }) });
     } finally {
       setBusy(false);
       // Defensive: clear streaming flag even on error/abort so the loading
@@ -791,7 +872,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     const targetMid = currentMeetingId;
     const stillOnThis = () => currentRecordingIdRef.current === targetRid;
     markGeneratingRecording(targetRid);
-    setMomStatus({ kind: "assessing", msg: "Đang tạo biên bản qua LangGraph…" });
+    setMomStatus({ kind: "assessing", msg: t("momPane.generatingTitle") });
     try {
       const currentText = rawText.trim();
       if (currentText) {
@@ -804,7 +885,6 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       const res = await api.recordings.generateMom(targetRid, lang);
       // Two shapes: Celery enqueued (task_id) vs inline (notes returned).
       let notes: MoMJson | undefined;
-      let memoryCount = 0;
       if ("task_id" in res) {
         // Celery path — poll /api/tasks/{id} every 3s until SUCCESS/FAILURE.
         // Hard stop at 15 min to match backend task_time_limit. Caller stays
@@ -819,7 +899,6 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           const status = await api.tasks.status(taskId);
           if (status.state === "SUCCESS") {
             notes = status.result?.notes;
-            memoryCount = status.result?.memory_context_count ?? 0;
             break;
           }
           if (status.state === "FAILURE" || status.state === "REVOKED") {
@@ -831,7 +910,6 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       } else {
         // Inline (broker down) path — notes returned directly.
         notes = res.notes;
-        memoryCount = res.memory_context_count;
       }
       // Always cache result under the snapshot id (correct destination).
       if (notes) setRecordingMom(targetRid, notes);
@@ -842,14 +920,13 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       reloadCurrentMeeting();
       // Only mutate visible status when user is still viewing this recording.
       if (stillOnThis()) {
-        const memHint = memoryCount ? ` (dùng ${memoryCount} memory events)` : "";
-        setMomStatus({ kind: "success", msg: `Đã tạo biên bản ✓${memHint}` });
+        setMomStatus({ kind: "success", msg: t("live.done") });
         setTimeout(() => setMomStatus(null), 4000);
       }
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
       if (stillOnThis()) {
-        setMomStatus({ kind: "error", msg: `Lỗi tạo MoM: ${msg}` });
+        setMomStatus({ kind: "error", msg: t("momPane.error.save", { msg }) });
       }
     } finally {
       unmarkGeneratingRecording(targetRid);
@@ -860,23 +937,35 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   async function handleProjectSummary() {
     if (!currentMeetingId) return;
     setBusy(true);
-    setMomStatus({ kind: "assessing", msg: "Đang tổng kết project…" });
+    setMomStatus({ kind: "assessing", msg: t("momPane.summarizing") });
     try {
       const res = await api.meetings.generateProjectSummary(currentMeetingId);
       setProjectSummary(currentMeetingId, res.summary);
       reloadCurrentMeeting();
       setMomStatus({
         kind: "success",
-        msg: `Đã tổng kết ${res.summary.session_count} phiên ✓`,
+        msg: t("momPane.summarized", { n: res.summary.session_count }),
       });
       setTimeout(() => setMomStatus(null), 4000);
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      setMomStatus({ kind: "error", msg: `Lỗi tổng kết: ${msg}` });
+      setMomStatus({ kind: "error", msg: t("momPane.error.summarize", { msg }) });
     } finally {
       setBusy(false);
     }
   }
+
+  // Listen for the re-generate-MoM request from MoMPane's "↻ Tạo lại"
+  // button. The button lives in MoMPane but the action's heavy lifting
+  // (Celery polling, status banners, in-flight guards) lives in
+  // handleGenerateMom here — custom DOM event is the lightweight
+  // wiring between them.
+  useEffect(() => {
+    const handler = () => { void handleGenerateMom(); };
+    window.addEventListener("mee.regenerate-mom", handler);
+    return () => window.removeEventListener("mee.regenerate-mom", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRecordingId, currentMeetingId, rawText, lang]);
 
   // ─── Switch view: fetch clean segments lazily ───
   const switchView = useCallback(
@@ -884,7 +973,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       setView(next);
       if (next !== "clean" || !currentRecordingId || cleanSegs !== null) return;
       setBusy(true);
-      setStatus({ kind: "assessing", msg: "Đang clean transcript (LLM)…" });
+      setStatus({ kind: "assessing", msg: t("transcriptPane.status.clean") });
       try {
         // If user typed/pasted text directly into the Raw textarea but never
         // recorded/uploaded (no auto-save path triggered), DB is empty for
@@ -909,7 +998,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         }
         // Initial Clean — when LLM call is dispatched to Celery, this
         // resolves only after the worker finishes (the wrapper polls).
-        setStatus({ kind: "assessing", msg: "Đang clean transcript…" });
+        setStatus({ kind: "assessing", msg: t("transcriptPane.status.clean") });
         const r = await requestClean(currentRecordingId, false);
         setCleanSegs(r.clean_segments || []);
         setEditedHtml(r.edited_html || null);
@@ -925,7 +1014,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         pingCleanStatus();
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        setStatus({ kind: "error", msg: `Clean lỗi: ${msg}` });
+        setStatus({ kind: "error", msg: t("momPane.error.save", { msg }) });
         setView("raw");
       } finally {
         setBusy(false);
@@ -937,7 +1026,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
   function regenerateClean() {
     if (!currentRecordingId) return;
     setBusy(true);
-    setStatus({ kind: "assessing", msg: "Regenerate clean (LLM ~2-4 phút)…" });
+    setStatus({ kind: "assessing", msg: t("transcriptPane.status.regen") });
     requestClean(currentRecordingId, true)
       .then((r) => {
         setCleanSegs(r.clean_segments || []);
@@ -945,11 +1034,11 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
         setClusterMapping(r.cluster_mapping || {});
         setPreMappedClusters(r.pre_mapped_clusters || []);
         setAvailableClusters(r.available_clusters || []);
-        setStatus({ kind: "success", msg: "Clean ✓" });
+        setStatus({ kind: "success", msg: t("live.done") });
       })
       .catch((e) => {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        setStatus({ kind: "error", msg: `Lỗi: ${msg}` });
+        setStatus({ kind: "error", msg: t("sidebar.error.generic", { msg }) });
       })
       .finally(() => setBusy(false));
   }
@@ -979,8 +1068,50 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
     !busy;
   const canUpload = !!currentRecordingId && !busy;
 
+  // ─── Empty state: no project selected at all ───
+  // Show a clear CTA UI instead of the live transcript chrome —
+  // recording without a project goes nowhere, and the textarea +
+  // record buttons just confuse users in this state.
+  if (!currentMeetingId) {
+    return (
+      <section className="pane pane-transcript pane-empty-no-project">
+        <div className="empty-no-project-card">
+          <div className="empty-no-project-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
+          <div className="empty-no-project-title">{t("transcriptPane.noProject.title")}</div>
+          <div className="empty-no-project-text">
+            {t("transcriptPane.noProject.body", { kbd: t("transcriptPane.createNewProject") })}
+          </div>
+          <div className="empty-no-project-actions">
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              disabled={creatingProject}
+              onClick={() => { void ensureProjectAndRecording(); }}
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>{creatingProject ? t("transcriptPane.creating") : t("transcriptPane.createNewProject")}</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="pane pane-transcript">
+      {currentRecordingId && (
+        <FloatingRail
+          onGenerateMom={handleGenerateMom}
+          hasMom={!!currentMeeting?.recordings.find((r) => r.id === currentRecordingId)?.mom_json}
+        />
+      )}
       <div className="pane-header pane-header-actions">
         <span className="pane-title">{t("pane.transcript")}</span>
         <div className="view-toggle">
@@ -997,9 +1128,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             onClick={() => switchView("clean")}
             title={
               cleanStatus === "running"
-                ? "Clean đang được tạo ngầm — bấm sẽ đợi LLM xong (~30s-2min)"
+                ? t("transcriptPane.cleanRunning")
                 : cleanStatus === "done"
-                ? "Clean đã sẵn sàng — bấm để xem instant từ DB"
+                ? t("transcriptPane.cleanDone")
                 : ""
             }
           >
@@ -1007,7 +1138,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             {cleanStatus === "done" && view !== "clean" && (
               <span
                 style={{ marginLeft: 4, fontSize: 10, color: "var(--accent)" }}
-                aria-label="Clean sẵn sàng"
+                aria-label={t("transcriptPane.cleanReady")}
               >
                 ✓
               </span>
@@ -1020,7 +1151,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             type="button"
             onClick={handleStartRecord}
             disabled={!currentRecordingId || live.isRecording || busy}
-            title={!currentRecordingId ? "Chọn 1 phiên họp trước" : t("btn.record")}
+            title={!currentRecordingId ? t("transcriptPane.pickMeetingFirst") : t("btn.record")}
           >
             <span className="rec-dot"></span>
             <span>{t("btn.record")}</span>
@@ -1087,15 +1218,13 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             <div className="notta-loading">
               <div className="notta-loading-spinner" />
               <div className="notta-loading-title">
-                Đang khởi động transcribe
+                {t("transcriptPane.processing.title")}
               </div>
               <div className="notta-loading-step">
-                {status?.msg || "Faster-whisper + pyannote + word-align…"}
+                {status?.msg || t("transcriptPane.processing.fallback")}
               </div>
               <div className="notta-loading-hint">
-                Block đầu tiên sẽ xuất hiện sau ~3-5 giây. Audio sẽ bắt đầu
-                phát ngay khi có dữ liệu — các block phía sau hiện dần theo
-                tiến độ phát.
+                {t("transcriptPane.processing.hint")}
               </div>
             </div>
           </div>
@@ -1126,14 +1255,14 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
               if (segsToShow === null) {
                 return (
                   <div className="transcript-clean-empty muted">
-                    {busy ? "Đang clean…" : "Bấm tab Clean để LLM format lại."}
+                    {busy ? t("transcriptPane.cleanLoading") : t("transcriptPane.cleanHint")}
                   </div>
                 );
               }
               if (segsToShow.length === 0) {
                 return (
                   <div className="transcript-clean-empty muted">
-                    Không có segment nào.
+                    {t("transcriptPane.noSegments")}
                   </div>
                 );
               }
@@ -1160,6 +1289,15 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                   // NottaCleanView's own ref ensures it triggers exactly
                   // once per recording so re-renders don't re-arm.
                   autoPlayKaraoke={freshUpload}
+                  // Scope speaker-chip dropdown to people marked as
+                  // attendees on this recording. Empty list → fall back
+                  // to all project members inside NottaCleanView.
+                  attendees={
+                    currentMeeting?.recordings
+                      .find((r) => r.id === currentRecordingId)
+                      ?.attendees?.map((a) => a.name)
+                      .filter(Boolean) ?? []
+                  }
                 />
               );
             })()}
@@ -1190,7 +1328,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             title={
               canGenSummary
                 ? t("btn.projectSummary")
-                : "Cần ít nhất 1 phiên đã có biên bản trong project"
+                : t("transcriptPane.needRecordingsForSummary")
             }
           >
             {t("btn.projectSummary")}
@@ -1202,9 +1340,9 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
             disabled={!canGenMom}
             title={
               !currentRecordingId
-                ? "Chọn 1 phiên họp trước"
+                ? t("transcriptPane.pickMeetingFirst")
                 : !rawText.trim()
-                  ? "Chưa có transcript"
+                  ? t("transcriptPane.noTranscript")
                   : t("btn.generateMom")
             }
           >
@@ -1216,6 +1354,17 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={noProjectModal !== null}
+        title={t("transcriptPane.confirmNoProject.title")}
+        message={t("transcriptPane.confirmNoProject.msg", { kbd: t("transcriptPane.createNewProject") })}
+        confirmLabel={creatingProject ? t("transcriptPane.creating") : t("transcriptPane.confirmNoProject.confirm")}
+        cancelLabel={t("transcriptPane.confirmNoProject.cancel")}
+        accent
+        onCancel={() => !creatingProject && setNoProjectModal(null)}
+        onConfirm={() => { void confirmNoProjectAndProceed(); }}
+      />
     </section>
   );
 }
@@ -1235,6 +1384,7 @@ function CleanProgressBar({
     raw_chars: number;
   } | null;
 }) {
+  const { t } = useApp();
   // Tick every 500ms so the time-based portion of the estimate animates.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -1256,7 +1406,7 @@ function CleanProgressBar({
           overflow: "hidden",
           position: "relative",
         }}
-        aria-label="Đang chuẩn bị clean"
+        aria-label={t("transcriptPane.preparingClean")}
       >
         <div
           style={{

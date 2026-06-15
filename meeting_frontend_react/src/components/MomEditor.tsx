@@ -14,6 +14,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
+import { useApp } from "../store/AppContext";
 
 interface Props {
   recordingId: string;
@@ -27,6 +28,7 @@ interface Props {
 }
 
 export function MomEditor({ recordingId, initialHtml, onSaved }: Props) {
+  const { t } = useApp();
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -188,11 +190,11 @@ export function MomEditor({ recordingId, initialHtml, onSaved }: Props) {
         </button>
         <div className="tt-sep" />
         <span className="mom-editor-status">
-          {status === "saving" && "Đang lưu…"}
-          {status === "saved" && "✓ Đã lưu"}
+          {status === "saving" && t("momEditor.saving")}
+          {status === "saved" && t("momEditor.saved")}
           {status === "error" && (
             <span className="mom-editor-error" title={errMsg || ""}>
-              ✗ Lưu lỗi
+              {t("momEditor.saveError")}
             </span>
           )}
         </span>

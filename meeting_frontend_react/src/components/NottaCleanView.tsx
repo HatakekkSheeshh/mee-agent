@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../api/client";
+import { useApp } from "../store/AppContext";
 import type { CleanResponse, MeetingMember, RawSegment } from "../types/api";
 
 type CleanSeg = NonNullable<CleanResponse["clean_segments"]>[number];
@@ -39,6 +40,13 @@ interface Props {
    * recording doesn't re-trigger karaoke if the user switches away and
    * back. */
   autoPlayKaraoke?: boolean;
+  /** Names of attendees marked on THIS recording (from
+   * recording.attendees[].name). When non-empty, the speaker chip
+   * dropdown only suggests members whose display_name matches one of
+   * these — keeps the picker scoped to who was actually in the room
+   * rather than every member of the project. Falls back to all members
+   * when empty so an unconfigured recording isn't locked out. */
+  attendees?: string[];
 }
 
 // Stable per-name color so the same person always gets the same avatar tint.
@@ -72,7 +80,9 @@ export function NottaCleanView({
   busy,
   streaming = false,
   autoPlayKaraoke = false,
+  attendees = [],
 }: Props) {
+  const { t, audioOutputDeviceId } = useApp();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [members, setMembers] = useState<MeetingMember[]>([]);
@@ -107,6 +117,11 @@ export function NottaCleanView({
   const [playing, setPlaying] = useState(false);
   const [rate, setRate] = useState(1);
   const [openDropdownIdx, setOpenDropdownIdx] = useState<number | null>(null);
+  // Direction the speaker dropdown should open relative to its chip.
+  // 'down' = anchor below (default); 'up' = anchor above the chip. Flipped
+  // when the chip is near the bottom of the viewport (close to the sticky
+  // audio player) so the dropdown isn't clipped by the footer.
+  const [dropdownDir, setDropdownDir] = useState<"up" | "down">("down");
   const [search, setSearch] = useState("");
   const [audioError, setAudioError] = useState(false);
   // Hovered member's submenu: rendered via portal at document.body so
@@ -462,6 +477,37 @@ export function NottaCleanView({
     if (currentSec > maxRevealedSec) setMaxRevealedSec(currentSec);
   }, [currentSec, karaokeMode, maxRevealedSec]);
 
+  // ── rAF-driven currentTime polling ─────────────────────────────────
+  // <audio>.onTimeUpdate fires only ~4 times/sec (250ms gap), which
+  // makes word-level karaoke highlight visibly lag the audio. Poll
+  // audioRef.currentTime every animation frame instead — that's ~60fps,
+  // so the highlight stays glued to the audio. We only spin the loop
+  // while playing (no point burning frames while paused).
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const a = audioRef.current;
+      if (a) setCurrentSec(a.currentTime);
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [playing]);
+
+  // Route audio output to the user-selected speaker via setSinkId.
+  // setSinkId is Chrome/Edge only; we no-op (silently) on unsupported
+  // browsers like Firefox. Empty string = browser/OS default.
+  useEffect(() => {
+    const a = audioRef.current as (HTMLAudioElement & {
+      setSinkId?: (id: string) => Promise<void>;
+    }) | null;
+    if (!a?.setSinkId) return;
+    a.setSinkId(audioOutputDeviceId || "").catch(() => {
+      /* selected device may have been unplugged — fall back silently */
+    });
+  }, [audioOutputDeviceId]);
+
   // Close the speaker dropdown when clicking outside it.
   useEffect(() => {
     if (openDropdownIdx == null) return;
@@ -548,7 +594,7 @@ export function NottaCleanView({
   // SpeakerMapper tool when the user explicitly wants to enroll a voice.
   async function applyName(
     blockIdx: number,
-    _clusterId: string,
+    rawSpk: string,
     name: string,
     scope: "current" | "all",
   ) {
@@ -565,50 +611,89 @@ export function NottaCleanView({
     console.log("[applyName] resolved indices", indices, "block:", block);
     if (!recordingId) {
       console.error("[applyName] no recordingId — abort");
-      alert("Không xác định được recording");
+      alert(t("notta.error.noRecording"));
       return;
+    }
+    // Resolve cluster_id for the backend. Three sources, in priority:
+    //  1) Explicit `cluster_id` stamped on the anchor cleanSegment
+    //     (new recordings after the cluster-id stamp fix).
+    //  2) `rawSpk` from the block — when TranscriptPane fed raw
+    //     segments AS clean (rawAsClean mode for accurate timestamps),
+    //     the block.speaker IS the raw SPEAKER_NN, i.e. the cluster
+    //     id itself. This handles the index-out-of-range case because
+    //     backend then matches segments by cluster_id even when FE's
+    //     indices point past clean_segments.length.
+    //  3) null — backend stays in index-only mode (legacy path).
+    const anchorCleanIdx = indices[0];
+    const anchorSeg = cleanSegments[anchorCleanIdx] as
+      | { cluster_id?: string }
+      | undefined;
+    let clusterId: string | null = anchorSeg?.cluster_id || null;
+    if (!clusterId && rawSpk && rawSpk.startsWith("SPEAKER_")) {
+      clusterId = rawSpk;
+    }
+
+    async function patchOne(idx: number, sc: "current" | "all") {
+      return api.recordings.patchSegmentSpeaker(
+        recordingId, idx, name, sc, clusterId,
+      );
     }
     try {
       if (scope === "all") {
-        const r = await api.recordings.patchSegmentSpeaker(
-          recordingId, indices[0], name, "all",
-        );
+        const r = await patchOne(indices[0], "all");
         console.log("[applyName] PATCH scope=all OK", r);
       } else {
-        const results = await Promise.all(
-          indices.map((idx) =>
-            api.recordings.patchSegmentSpeaker(recordingId, idx, name, "current"),
-          ),
-        );
+        const results = await Promise.all(indices.map((idx) => patchOne(idx, "current")));
         console.log("[applyName] PATCH scope=current OK", results);
       }
       onClusterMappingSaved();
     } catch (e) {
-      console.error("[applyName] PATCH failed", e);
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      alert(`Lưu speaker lỗi: ${msg}`);
+      console.error("[applyName] PATCH failed", e);
+      alert(t("notta.error.saveSpeaker", { msg }));
     } finally {
       setOpenDropdownIdx(null);
       setSearch("");
     }
   }
 
+  // Narrow `members` to people the user actually marked as attendees on
+  // this recording (via Members panel checkboxes → recording.attendees).
+  // If the attendees list is empty we fall back to ALL project members so
+  // an unconfigured recording isn't locked out of speaker labelling.
+  const recordingMembers = useMemo(() => {
+    if (!attendees || attendees.length === 0) return members;
+    const allow = new Set(attendees.map((n) => n.trim().toLowerCase()).filter(Boolean));
+    if (allow.size === 0) return members;
+    const scoped = members.filter((m) =>
+      allow.has(m.display_name.trim().toLowerCase()),
+    );
+    // Defensive fallback: if the intersection is empty (attendees names
+    // don't match any member, e.g. external guests typed in), show all
+    // members so user has SOMETHING to pick.
+    return scoped.length > 0 ? scoped : members;
+  }, [members, attendees]);
+
   // Filter members for the dropdown search. When the search is empty show
-  // all members. Always append "use as guest" hint for typed-but-unmatched
-  // names so the user can label non-members.
+  // the recording-scoped pool. Always append "use as guest" hint for
+  // typed-but-unmatched names so the user can label non-members.
   const filteredMembers = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return members;
-    return members.filter(
+    if (!q) return recordingMembers;
+    return recordingMembers.filter(
       (m) =>
         m.display_name.toLowerCase().includes(q) ||
         m.email.toLowerCase().includes(q),
     );
-  }, [members, search]);
+  }, [recordingMembers, search]);
 
   const hasGuestOption = useMemo(() => {
     const q = search.trim();
     if (!q) return false;
+    // Guest check matches against the FULL project member list, not just
+    // attendees — if the typed name already exists as a member but isn't
+    // an attendee yet, we don't want to offer "Add as guest" since they
+    // can just be ticked into attendees from the Members panel.
     return !members.some(
       (m) => m.display_name.toLowerCase() === q.toLowerCase(),
     );
@@ -623,18 +708,13 @@ export function NottaCleanView({
           type="button"
           onClick={onRegenerate}
           disabled={busy}
-          title="LLM clean lại từ raw"
+          title={t("notta.regenTitle")}
         >
-          ↻ Re-transcribe
+          {t("notta.regenBtn")}
         </button>
-        <div className="notta-toolbar-hint">
-          {editMode
-            ? "Click vào text để sửa. Blur (click ngoài) tự lưu."
-            : "Click avatar → đổi speaker. Click dòng để tua audio."}
-        </div>
         <label
           className={`toggle-switch${editMode ? " on" : ""}`}
-          title={editMode ? "Tắt chế độ sửa" : "Bật chế độ sửa text"}
+          title={editMode ? t("notta.editMode.on") : t("notta.editMode.off")}
         >
           <input
             type="checkbox"
@@ -644,7 +724,7 @@ export function NottaCleanView({
           <span className="toggle-switch-track">
             <span className="toggle-switch-thumb" />
           </span>
-          <span className="toggle-switch-label">Sửa text</span>
+          <span className="toggle-switch-label">{t("notta.editMode.label")}</span>
         </label>
       </div>
 
@@ -678,10 +758,29 @@ export function NottaCleanView({
                     style={{ background: color }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setOpenDropdownIdx(openDropdownIdx === i ? null : i);
+                      const next = openDropdownIdx === i ? null : i;
+                      if (next != null) {
+                        // Flip the dropdown above the chip when the chip
+                        // sits within ~360px of the viewport bottom (the
+                        // dropdown can grow to ~330px; the audio player
+                        // floats at the bottom). Falls back to 'down'
+                        // when there's room or the chip is unmeasurable.
+                        const rect = (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect();
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        const spaceAbove = rect.top;
+                        const NEEDED = 340;
+                        setDropdownDir(
+                          spaceBelow < NEEDED && spaceAbove > spaceBelow
+                            ? "up"
+                            : "down",
+                        );
+                      }
+                      setOpenDropdownIdx(next);
                       setSearch("");
                     }}
-                    aria-label={`Đổi speaker (${name})`}
+                    aria-label={t("notta.changeSpeaker", { name })}
                   >
                     <span className="notta-chip-initials">{initials(name)}</span>
                     <span className="notta-chip-name">{name}</span>
@@ -690,18 +789,25 @@ export function NottaCleanView({
 
                   {openDropdownIdx === i && (
                     <div
-                      className="notta-dropdown"
+                      className={`notta-dropdown notta-dropdown-${dropdownDir}`}
                       onClick={(e) => e.stopPropagation()}
+                      onWheel={(e) => {
+                        // Trap wheel inside the dropdown so scrolling
+                        // the member list doesn't bubble up and scroll
+                        // the transcript behind it. The dropdown's
+                        // own .notta-dropdown-list handles overflow.
+                        e.stopPropagation();
+                      }}
                     >
                       <input
                         className="notta-dropdown-search"
-                        placeholder="Search attendee"
+                        placeholder={t("notta.dropdown.searchPlaceholder")}
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         autoFocus
                       />
                       <div className="notta-dropdown-section-label">
-                        Suggestions
+                        {t("notta.dropdown.suggestions")}
                       </div>
                       <div className="notta-dropdown-list">
                         {filteredMembers.map((m) => {
@@ -735,7 +841,7 @@ export function NottaCleanView({
                                 <span className="notta-dropdown-name">
                                   {m.display_name}
                                   {m.voice_enrolled && (
-                                    <span className="notta-dropdown-badge" title="Đã enroll voice">🎤</span>
+                                    <span className="notta-dropdown-badge" title={t("notta.dropdown.voiceEnrolled")}>🎤</span>
                                   )}
                                 </span>
                                 {isCurrent && (
@@ -767,7 +873,7 @@ export function NottaCleanView({
                                 +
                               </span>
                               <span className="notta-dropdown-name">
-                                Add "{search.trim()}" as guest
+                                {t("notta.dropdown.addGuest", { name: search.trim() })}
                               </span>
                               <span className="notta-dropdown-caret">›</span>
                             </div>
@@ -775,7 +881,7 @@ export function NottaCleanView({
                         )}
                         {filteredMembers.length === 0 && !hasGuestOption && (
                           <div className="notta-dropdown-empty">
-                            Không tìm thấy member.
+                            {t("notta.dropdown.empty")}
                           </div>
                         )}
                       </div>
@@ -824,7 +930,7 @@ export function NottaCleanView({
                           } catch (err) {
                             const msg =
                               err instanceof ApiError ? err.detail : (err as Error).message;
-                            alert(`Lưu segment lỗi: ${msg}`);
+                            alert(t("notta.error.saveSegment", { msg }));
                           } finally {
                             setSavingSeqs((prev) => {
                               const next = new Set(prev);
@@ -924,9 +1030,9 @@ export function NottaCleanView({
       <div className="notta-player">
         {audioError && (
           <div className="notta-player-error">
-            <span>Audio không tải được. Recording này chưa có file audio.</span>
+            <span>{t("notta.audio.cannotLoad")}</span>
             <label className="btn btn-ghost btn-xs" style={{ marginLeft: 8 }}>
-              <span>📎 Gắn file audio</span>
+              <span>{t("notta.audio.attach")}</span>
               <input
                 type="file"
                 accept="audio/*"
@@ -944,11 +1050,9 @@ export function NottaCleanView({
                       audioRef.current.load();
                     }
                   } catch (err) {
-                    alert(
-                      `Upload audio lỗi: ${
-                        err instanceof ApiError ? err.detail : (err as Error).message
-                      }`,
-                    );
+                    const msg =
+                      err instanceof ApiError ? err.detail : (err as Error).message;
+                    alert(t("notta.audio.uploadError", { msg }));
                   } finally {
                     e.target.value = "";
                   }
@@ -1026,7 +1130,7 @@ export function NottaCleanView({
             type="button"
             className="notta-player-btn"
             onClick={() => skip(-3)}
-            title="Tua lùi 3 giây"
+            title={t("notta.skipBack")}
           >
             ↺3
           </button>
@@ -1041,7 +1145,7 @@ export function NottaCleanView({
             type="button"
             className="notta-player-btn"
             onClick={() => skip(3)}
-            title="Tua tới 3 giây"
+            title={t("notta.skipForward")}
           >
             3↻
           </button>
@@ -1092,7 +1196,7 @@ export function NottaCleanView({
                 setHoveredMember(null);
               }}
             >
-              Apply to current speaker
+              {t("notta.applyCurrent")}
             </button>
             <button
               type="button"
@@ -1105,7 +1209,7 @@ export function NottaCleanView({
                 setHoveredMember(null);
               }}
             >
-              Apply to all "{currentName}" ({blocks} blocks)
+              {t("notta.applyAll", { name: currentName, n: blocks })}
             </button>
           </div>,
           document.body,

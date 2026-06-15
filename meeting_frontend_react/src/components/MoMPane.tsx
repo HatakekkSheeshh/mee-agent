@@ -54,7 +54,7 @@ export function MoMPane() {
         window.setTimeout(() => setSaveState("idle"), 1500);
       } catch (e) {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        setMomStatus({ kind: "error", msg: `Lưu lỗi: ${msg}` });
+        setMomStatus({ kind: "error", msg: t("momPane.error.save", { msg }) });
         setSaveState("error");
       }
     }, 800);
@@ -63,19 +63,19 @@ export function MoMPane() {
   async function handleGenerateSummary() {
     if (!currentMeetingId) return;
     setBusy(true);
-    setMomStatus({ kind: "assessing", msg: "Đang tổng kết project…" });
+    setMomStatus({ kind: "assessing", msg: t("momPane.summarizing") });
     try {
       const res = await api.meetings.generateProjectSummary(currentMeetingId);
       setProjectSummary(currentMeetingId, res.summary);
       reloadCurrentMeeting();
       setMomStatus({
         kind: "success",
-        msg: `Đã tổng kết ${res.summary.session_count} phiên ✓`,
+        msg: t("momPane.summarized", { n: res.summary.session_count }),
       });
       setTimeout(() => setMomStatus(null), 4000);
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-      setMomStatus({ kind: "error", msg: `Lỗi tổng kết: ${msg}` });
+      setMomStatus({ kind: "error", msg: t("momPane.error.summarize", { msg }) });
     } finally {
       setBusy(false);
     }
@@ -104,7 +104,6 @@ export function MoMPane() {
     !!currentMeeting?.recordings.some((r) => r.mom_json) &&
     !isBusy;
 
-  const statusText = recordingMom || showSummary ? t("mom.generated") : t("mom.empty");
 
   const dlMd = currentRecordingId && recordingMom
     ? api.recordings.downloadUrl(currentRecordingId, "md")
@@ -114,7 +113,12 @@ export function MoMPane() {
     if (dlMd) window.open(dlMd, "_blank");
   }
   function handlePrintPdf() {
-    if (recordingMom) window.print();
+    // The print CSS targets #mom-result — that ID only renders when
+    // MoMPane is mounted. Defensive: invoke print on next tick so the
+    // pane is guaranteed in the DOM (MoMPane already renders when this
+    // button is visible, but Ctrl+P from elsewhere might race).
+    if (!recordingMom) return;
+    window.setTimeout(() => window.print(), 0);
   }
 
   return (
@@ -131,33 +135,15 @@ export function MoMPane() {
               title={
                 canGenSummary
                   ? t("btn.projectSummary")
-                  : "Cần ít nhất 1 phiên đã có biên bản"
+                  : t("momPane.needRecordings")
               }
             >
-              {projectSummary ? "↻ Cập nhật tổng kết" : t("btn.projectSummary")}
+              {projectSummary ? t("momPane.updateSummary") : t("btn.projectSummary")}
             </button>
           )}
-          {!inOverview && <span className="mono small">{statusText}</span>}
-          {!inOverview && recordingMom && (
-            <label
-              className={`toggle-switch${momEditMode ? " on" : ""}`}
-              title={
-                momEditMode
-                  ? "Đang chỉnh sửa — tắt để xem cấu trúc"
-                  : "Bật chế độ chỉnh sửa rich text"
-              }
-            >
-              <input
-                type="checkbox"
-                checked={momEditMode}
-                onChange={(e) => setMomEditMode(e.target.checked)}
-              />
-              <span className="toggle-switch-track">
-                <span className="toggle-switch-thumb" />
-              </span>
-              <span className="toggle-switch-label">✎ Sửa biên bản</span>
-            </label>
-          )}
+          {/* Status text + Re-generate + edit toggle moved to pane-footer.
+           * Header now only has the per-mode action button + utility
+           * icons (download / print). */}
           <button
             className="icon-btn icon-btn-sm"
             type="button"
@@ -186,6 +172,48 @@ export function MoMPane() {
           </button>
         </div>
       </div>
+      {/* Sub-header toolbar right below "Minutes" — mirrors the
+       * Notta-style toolbar in the transcript pane (↻ Re-transcribe +
+       * Chỉnh sửa toggle). Only renders when MoM exists. */}
+      {!inOverview && recordingMom && currentRecordingId && (
+        <div className="mom-toolbar">
+          <button
+            className="btn btn-ghost btn-xs"
+            type="button"
+            title={t("momPane.regenTitle")}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("mee.regenerate-mom"));
+            }}
+            disabled={isBusy}
+          >
+            {t("momPane.regenBtn")}
+          </button>
+          <div className="mom-toolbar-hint">
+            {momEditMode
+              ? t("momPane.editHintOn")
+              : t("momPane.editHintOff")}
+          </div>
+          <label
+            className={`toggle-switch${momEditMode ? " on" : ""}`}
+            title={
+              momEditMode
+                ? t("momPane.editToggleOn")
+                : t("momPane.editToggleOff")
+            }
+          >
+            <input
+              type="checkbox"
+              checked={momEditMode}
+              onChange={(e) => setMomEditMode(e.target.checked)}
+            />
+            <span className="toggle-switch-track">
+              <span className="toggle-switch-thumb" />
+            </span>
+            <span className="toggle-switch-label">{t("momPane.editLabel")}</span>
+          </label>
+        </div>
+      )}
+
       <div className="pane-content">
         {momStatus && (
           <div className={`pane-inline-status ${momStatus.kind}`} aria-live="polite">
@@ -196,10 +224,10 @@ export function MoMPane() {
           <>
             {momEditMode && (
               <div className="mom-save-banner">
-                {saveState === "saving" && "Đang lưu…"}
-                {saveState === "saved" && "✓ Đã lưu"}
-                {saveState === "error" && "✗ Lưu lỗi"}
-                {saveState === "idle" && "Nhấn ngoài ô để lưu"}
+                {saveState === "saving" && t("momPane.saving")}
+                {saveState === "saved" && t("momPane.saved")}
+                {saveState === "error" && t("momPane.saveError")}
+                {saveState === "idle" && t("momPane.blurToSave")}
               </div>
             )}
             <MoMView
@@ -216,12 +244,14 @@ export function MoMPane() {
           <EmptyState t={t} />
         )}
       </div>
+
     </section>
   );
 }
 
 // ─── Loading state ─────────────────────────────────────────────────
 function LoadingState() {
+  const { t } = useApp();
   return (
     <div className="mom-empty">
       <div className="mom-empty-icon" style={{ animation: "pulse 1.5s ease-in-out infinite" }}>
@@ -230,8 +260,8 @@ function LoadingState() {
           <polyline points="14 2 14 8 20 8" />
         </svg>
       </div>
-      <div className="mom-empty-title">Đang tạo biên bản…</div>
-      <div className="mom-empty-text muted">LLM đang xử lý — vài giây nữa sẽ xong.</div>
+      <div className="mom-empty-title">{t("momPane.generatingTitle")}</div>
+      <div className="mom-empty-text muted">{t("momPane.generatingBody")}</div>
     </div>
   );
 }
@@ -318,7 +348,7 @@ function MoMView({
               value={mom.summary || ""}
               editMode={editMode}
               onChange={(v) => patch((m) => ({ ...m, summary: v }))}
-              placeholder={editMode ? "Nhập tóm tắt…" : ""}
+              placeholder={editMode ? t("momPane.placeholder.summary") : ""}
               multiline
             />
           </div>
@@ -356,7 +386,7 @@ function MoMView({
                         j === i ? { ...x, description: v } : x,
                       ),
                     }))}
-                    placeholder={editMode ? "Mô tả…" : ""}
+                    placeholder={editMode ? t("momPane.placeholder.desc") : ""}
                     multiline
                   />
                 </div>
@@ -469,6 +499,7 @@ function EditableRow({
   editMode: boolean;
   onChange: (v: string) => void;
 }) {
+  const { t } = useApp();
   if (!value && !editMode) return null;
   return (
     <tr>
@@ -478,7 +509,7 @@ function EditableRow({
           value={value || ""}
           editMode={editMode}
           onChange={onChange}
-          placeholder={editMode ? "(trống)" : ""}
+          placeholder={editMode ? t("momPane.placeholder.empty") : ""}
         />
       </td>
     </tr>
@@ -575,7 +606,7 @@ function ActionItemsTable({
                 value={ai.item || ""}
                 editMode
                 onChange={(v) => onChange?.(idx, "item", v)}
-                placeholder="Mô tả công việc…"
+                placeholder={t("momPane.placeholder.taskDesc")}
               />
             </span>
             <span className="action-deadline">
