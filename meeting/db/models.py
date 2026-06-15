@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
+    ARRAY,
     JSON,
     Boolean,
     CheckConstraint,
@@ -82,6 +83,9 @@ class Role(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     data_plan: Mapped[str] = mapped_column(Text, nullable=False, default="minimal")
     kickoff_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}", default=list
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

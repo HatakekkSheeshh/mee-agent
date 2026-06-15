@@ -21,6 +21,7 @@ def test_role_model_has_expected_columns():
         "description",
         "data_plan",
         "kickoff_prompt",
+        "aliases",
         "created_at",
     } <= cols
 
@@ -77,3 +78,20 @@ async def test_list_roles_returns_all_rows():
 async def test_list_roles_empty_returns_empty():
     out = await repo.list_roles(_FakeSession([]))
     assert out == []
+
+
+# ─── resolve_role_by_title ────────────────────────────────────────────
+
+async def test_resolve_role_by_title_matches_alias():
+    roles = [
+        SimpleNamespace(name="AI Applied", aliases=["Applied AI Engineer"]),
+        SimpleNamespace(name="Software Engineer", aliases=[]),
+    ]
+    out = await repo.resolve_role_by_title(_FakeSession(roles), "Applied AI Engineer")
+    assert out == "AI Applied"
+
+
+async def test_resolve_role_by_title_unknown_returns_none():
+    roles = [SimpleNamespace(name="AI Applied", aliases=[])]
+    out = await repo.resolve_role_by_title(_FakeSession(roles), "Nope")
+    assert out is None

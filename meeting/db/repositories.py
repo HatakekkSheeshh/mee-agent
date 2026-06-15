@@ -28,6 +28,7 @@ from meeting.db.models import (
     TranscriptSegment,
     User,
 )
+from meeting.services.role_mapping import resolve_role
 
 
 # ─── User ─────────────────────────────────────────────────────────
@@ -61,6 +62,16 @@ async def list_roles(session: AsyncSession) -> Sequence[Role]:
     """All roles in the pool, oldest first (stable enumeration order)."""
     stmt = select(Role).order_by(Role.created_at)
     return (await session.execute(stmt)).scalars().all()
+
+
+async def resolve_role_by_title(session: AsyncSession, title: str | None) -> Optional[str]:
+    """Resolve a free-text jobTitle to a canonical roles.name, or None.
+
+    Loads the pool and delegates to the pure `resolve_role`. None on no match
+    (the caller leaves role_id NULL → generic kickoff).
+    """
+    roles = await list_roles(session)
+    return resolve_role(title, roles)
 
 
 # ─── Meeting ──────────────────────────────────────────────────────

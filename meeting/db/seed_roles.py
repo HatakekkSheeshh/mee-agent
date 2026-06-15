@@ -11,6 +11,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "AI Applied",
         "data_plan": "own_tasks",
+        "aliases": [],
         "description": (
             "Nghiên cứu và ứng dụng các mô hình trí tuệ nhân tạo vào sản phẩm "
             "thực tế, tối ưu hóa thuật toán để giải quyết các bài toán cụ thể "
@@ -25,6 +26,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "AI Engineer",
         "data_plan": "own_tasks",
+        "aliases": [],
         "description": (
             "Xây dựng, thử nghiệm và triển khai các hệ thống/mô hình AI "
             "(Machine Learning, Deep Learning), chịu trách nhiệm về kiến trúc "
@@ -40,6 +42,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Software Engineer",
         "data_plan": "own_tasks",
+        "aliases": [],
         "description": (
             "Lập trình, phát triển và bảo trì các ứng dụng phần mềm, hệ thống "
             "theo yêu cầu kỹ thuật của dự án."
@@ -53,6 +56,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Associate System Manager",
         "data_plan": "own_tasks",
+        "aliases": [],
         "description": (
             "Hỗ trợ quản lý, vận hành và giám sát hệ thống hạ tầng CNTT, đảm bảo "
             "tính ổn định, bảo mật và hiệu năng của hệ thống."
@@ -66,6 +70,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Lead System Engineer",
         "data_plan": "cross_project",
+        "aliases": [],
         "description": (
             "Trưởng nhóm kỹ sư hệ thống, chịu trách nhiệm thiết kế kiến trúc hạ "
             "tầng lớn, dẫn dắt đội ngũ kỹ thuật và giải quyết các sự cố hệ thống "
@@ -80,6 +85,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Business Analyst",
         "data_plan": "cross_project",
+        "aliases": [],
         "description": (
             "Phân tích yêu cầu nghiệp vụ từ khách hàng hoặc các bên liên quan, "
             "chuyển hóa thành tài liệu kỹ thuật để đội ngũ phát triển phần mềm "
@@ -95,6 +101,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Lead QC Engineer",
         "data_plan": "cross_project",
+        "aliases": [],
         "description": (
             "Trưởng nhóm kiểm thử chất lượng phần mềm, lên kế hoạch kiểm thử "
             "(test plan), giám sát quy trình QC và đảm bảo chất lượng đầu ra của "
@@ -110,6 +117,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Lead Software Engineer",
         "data_plan": "cross_project",
+        "aliases": [],
         "description": (
             "Trưởng nhóm lập trình phần mềm, chịu trách nhiệm chính về kiến trúc "
             "mã nguồn, định hướng kỹ thuật cho dự án và quản lý năng suất của "
@@ -124,6 +132,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "Associate Product Growth Executive",
         "data_plan": "cross_project",
+        "aliases": [],
         "description": (
             "Chuyên viên hỗ trợ tăng trưởng sản phẩm, tham gia vào việc phân "
             "tích dữ liệu người dùng, tối ưu hóa trải nghiệm và thực hiện các "
@@ -139,6 +148,7 @@ SEED_ROLES: list[dict] = [
     {
         "name": "L&D Executive",
         "data_plan": "minimal",
+        "aliases": [],
         "description": (
             "Chuyên viên Đào tạo và Phát triển (Learning & Development), chịu "
             "trách nhiệm xây dựng lộ trình học tập, tổ chức các khóa đào tạo "
