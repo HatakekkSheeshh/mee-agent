@@ -738,6 +738,27 @@ def create_app(output_dir: str = None) -> FastAPI:
             "language": language,
             "prompt": prompt or "",
         }
+        # Pass expected speaker count to pyannote — derived from the
+        # recording's `attendees` list (people the user marked as
+        # present in this session). Without this hint pyannote can
+        # cluster wildly for short utterances (3 sentences from one
+        # speaker → 3 clusters). We use a ±1 buffer so the user has
+        # some slack if they mis-checked attendance.
+        if recording_id:
+            try:
+                from meeting.db import AsyncSessionLocal
+                from meeting.db.models import Recording as _Recording
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec and isinstance(_rec.attendees, list) and _rec.attendees:
+                        n = len(_rec.attendees)
+                        if n > 0:
+                            form_data["min_speakers"] = str(max(1, n - 1))
+                            form_data["max_speakers"] = str(n + 1)
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe/stream] could not read attendees for speaker hint: {_e}"
+                )
 
         async def event_stream():
             """Open an httpx stream upstream, pipe SSE frames downstream
