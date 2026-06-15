@@ -16,11 +16,21 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import pathlib
+
+PROJECT_ROOT = pathlib.Path(__file__).parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
 
+# Import only the lightweight, stdlib-based token helper. We deliberately do NOT
+# import from meeting.services — its package __init__ pulls in meeting.db.base,
+# which requires DATABASE_URL at import time, and this bootstrap never touches the
+# DB. The two AgentBase constants below mirror meeting/services/identity_client.py.
 from meeting.memory_client import _get_token
-from meeting.services.identity_client import ALLOWED_IDENTITY_HOST, DEFAULT_IDENTITY_BASE
+
+ALLOWED_IDENTITY_HOST = "agentbase.api.vngcloud.vn"
+DEFAULT_IDENTITY_BASE = "https://agentbase.api.vngcloud.vn/identity/api/v1"
 
 
 def provider_payload(name: str) -> dict:
