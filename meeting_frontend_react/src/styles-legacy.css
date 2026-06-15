@@ -3047,39 +3047,94 @@ select.mee-modal-input {
     margin-left: 8px;
 }
 
-/* User-scoped chat session sidebar list */
-.chat-session-list {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
+/* User-scoped chat session picker (dropdown) */
+.chat-session-dropdown {
+    position: relative;
     padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.chat-session-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    border: 1px solid var(--border-2);
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.chat-session-trigger:hover {
+    background: var(--hover);
+    border-color: var(--border-3);
+}
+.chat-session-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-session-caret {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    transition: transform 0.15s ease;
+}
+.chat-session-caret.is-open {
+    transform: rotate(180deg);
+}
+.chat-session-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% - 2px);
+    left: 10px;
+    right: 10px;
     margin: 0;
+    padding: 4px;
     list-style: none;
-    border-bottom: 1px solid var(--border, #e5e7eb);
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .chat-session-item {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    border-radius: 12px;
-    background: var(--chip-bg, #f3f4f6);
-    white-space: nowrap;
+    padding: 4px 6px;
+    border-radius: 6px;
+    /* Non-selected: muted, quieter than the active row. */
+    color: var(--text-mute);
     font-size: 12px;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.chat-session-item:hover {
+    background: var(--hover);
+    color: var(--text-2);
 }
 .chat-session-item.is-active {
-    background: var(--accent-soft, #dbeafe);
+    /* Selected: prominent — accent tint + accent text. */
+    background: var(--accent-soft);
+    color: var(--accent);
 }
 .chat-session-open {
+    flex: 1;
+    text-align: left;
     border: 0;
     background: none;
     cursor: pointer;
-    max-width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
     color: inherit;
 }
 .chat-session-remove {
+    flex: none;
     border: 0;
     background: none;
     cursor: pointer;

@@ -61,6 +61,19 @@ export function ChatPane() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+  // Session picker is a dropdown ("list down") rather than an always-visible row.
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const sessionMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!sessionMenuOpen) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (sessionMenuRef.current && !sessionMenuRef.current.contains(e.target as Node)) {
+        setSessionMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sessionMenuOpen]);
   // Session ids already kicked off this mount, so Mee greets an empty thread once
   // (survives StrictMode double-mount + re-renders).
   const kickedOffRef = useRef<Set<string>>(new Set());
@@ -546,33 +559,64 @@ export function ChatPane() {
       </div>
 
       {sessions.length > 0 && (
-        <ul className="chat-session-list" aria-label={t("chat.session.listLabel")}>
-          {sessions.map((s) => (
-            <li
-              key={s.id}
-              className={`chat-session-item${s.id === activeSessionId ? " is-active" : ""}`}
+        <div className="chat-session-dropdown" ref={sessionMenuRef}>
+          <button
+            type="button"
+            className="chat-session-trigger"
+            onClick={() => setSessionMenuOpen((o) => !o)}
+            disabled={busy}
+            aria-haspopup="listbox"
+            aria-expanded={sessionMenuOpen}
+          >
+            <span className="chat-session-current">
+              {sessions.find((s) => s.id === activeSessionId)?.title ||
+                t("chat.session.untitled")}
+            </span>
+            <svg
+              className={`chat-session-caret${sessionMenuOpen ? " is-open" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <button
-                type="button"
-                className="chat-session-open"
-                onClick={() => void openSession(s.id)}
-                disabled={busy}
-              >
-                {s.title || t("chat.session.untitled")}
-              </button>
-              <button
-                type="button"
-                className="chat-session-remove"
-                title={t("chat.session.remove")}
-                aria-label={t("chat.session.remove")}
-                onClick={() => void handleRemoveSession(s.id)}
-                disabled={busy}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          {sessionMenuOpen && (
+            <ul className="chat-session-menu" role="listbox" aria-label={t("chat.session.listLabel")}>
+              {sessions.map((s) => (
+                <li
+                  key={s.id}
+                  className={`chat-session-item${s.id === activeSessionId ? " is-active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="chat-session-open"
+                    onClick={() => {
+                      void openSession(s.id);
+                      setSessionMenuOpen(false);
+                    }}
+                    disabled={busy}
+                  >
+                    {s.title || t("chat.session.untitled")}
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-session-remove"
+                    title={t("chat.session.remove")}
+                    aria-label={t("chat.session.remove")}
+                    onClick={() => void handleRemoveSession(s.id)}
+                    disabled={busy}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <div className="chat-thread" ref={threadRef}>
