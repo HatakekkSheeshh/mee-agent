@@ -63,13 +63,14 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
 
         # Signed-in user identity → injected into the agent prompt so it knows who
         # "tôi/của tôi" is and can scope role-based tool calls (not just kickoff).
-        user_name = user_role = None
+        user_name = user_role = user_email = None
         uid_str = state.get("user_id")
         if session is not None and uid_str:
             user = await session.get(User, uuid.UUID(uid_str))
             if user:
                 user_name = (user.display_name or "").strip() or None
                 user_role = user.role.name if user.role else None
+                user_email = (user.email or "").strip() or None
 
         meeting_ctx = {}
         project_memory = ""
@@ -143,6 +144,7 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
             "resolved_meeting_id": meeting_ctx.get("id") or state.get("meeting_id"),
             "user_name": user_name,
             "user_role": user_role,
+            "user_email": user_email,
         }
 
     return load_context

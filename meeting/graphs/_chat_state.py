@@ -36,6 +36,7 @@ class ChatState(TypedDict, total=False):
     resolved_meeting_id: Optional[str]  # bound meeting (or title-resolved) for tool scoping
     user_name: Optional[str]   # signed-in user's display name (for "tôi/của tôi")
     user_role: Optional[str]   # signed-in user's resolved role name
+    user_email: Optional[str]  # signed-in user's email → Redmine/company login identity
 
     # Filled by classify_intent (binary router: agent vs pm_task)
     intent: Literal["agent", "pm_task"]

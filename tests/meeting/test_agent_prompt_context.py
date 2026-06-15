@@ -28,10 +28,30 @@ def test_prompt_omits_user_block_when_absent():
     assert "Người dùng hiện tại" not in p
 
 
+def test_prompt_steers_redmine_to_company_login_not_display_name():
+    p = _agent_system_prompt({
+        "user_name": "Hieu Nguyen Quoc",
+        "user_email": "hieunq3@vng.com.vn",
+    })
+    # The Redmine identity (email local-part) is surfaced...
+    assert "hieunq3" in p
+    # ...with an explicit instruction to use it for Redmine, not the display name.
+    assert "Redmine" in p
+    assert "KHÔNG dùng tên hiển thị" in p
+    assert "Hieu Nguyen Quoc" in p
+
+
+def test_prompt_no_redmine_identity_line_without_email():
+    p = _agent_system_prompt({"user_name": "An Nguyễn"})
+    assert "Người dùng hiện tại" in p
+    assert "Định danh trên Redmine" not in p  # no email → no Redmine-login steering
+
+
 async def test_load_context_loads_user_name_and_role(monkeypatch):
     uid = uuid.uuid4()
     user = SimpleNamespace(
-        display_name="An Nguyễn", role=SimpleNamespace(name="Project Manager")
+        display_name="An Nguyễn", email="annd2@vng.com.vn",
+        role=SimpleNamespace(name="Project Manager"),
     )
 
     async def fake_list_chat_messages(session, sid, limit=10):
@@ -50,6 +70,7 @@ async def test_load_context_loads_user_name_and_role(monkeypatch):
 
     assert out["user_name"] == "An Nguyễn"
     assert out["user_role"] == "Project Manager"
+    assert out["user_email"] == "annd2@vng.com.vn"
 
 
 # ── B. don't auto-fix editable-field tool errors ─────────────────────────

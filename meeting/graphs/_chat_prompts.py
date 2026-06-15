@@ -69,11 +69,27 @@ def _agent_system_prompt(state: ChatState) -> str:
     )
     uname = (state.get("user_name") or "").strip()
     urole = (state.get("user_role") or "").strip()
-    user_block = (
-        f"Người dùng hiện tại: {uname}"
-        + (f" — vai trò: {urole}" if urole else "")
-        + ". Khi user nói 'tôi'/'của tôi', hiểu là người này.\n\n"
-    ) if uname else ""
+    uemail = (state.get("user_email") or "").strip()
+    ulogin = uemail.split("@")[0] if uemail else ""
+    user_block = ""
+    if uname or ulogin:
+        who = uname or ulogin
+        user_block = (
+            f"Người dùng hiện tại: {who}"
+            + (f" — vai trò: {urole}" if urole else "")
+            + ". Khi user nói 'tôi'/'của tôi', hiểu là người này.\n"
+        )
+        if ulogin:
+            user_block += (
+                f"Định danh trên Redmine/hệ thống công ty của người dùng là '{ulogin}'"
+                + (f" (email {uemail})" if uemail else "")
+                + ". Khi gọi công cụ Redmine (vd điền assigned_to/author, lọc việc "
+                f"'của tôi', tìm issue theo người): DÙNG '{ulogin}' hoặc email công ty, "
+                "TUYỆT ĐỐI KHÔNG dùng tên hiển thị"
+                + (f" '{uname}'" if uname else "")
+                + " làm định danh Redmine.\n"
+            )
+        user_block += "\n"
     return (
         "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
         f"Hôm nay là {_today_vi()} (giờ Việt Nam). Dùng mốc này để hiểu các mốc thời "
