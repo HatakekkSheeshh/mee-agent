@@ -334,6 +334,7 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         if info.ms_token_cache:
             user.refresh_token = encrypt_token(info.ms_token_cache)
         user.role_id = await _resolve_role_id(session, info.position)
+        user.position = info.position
         user.last_login_at = datetime.now(timezone.utc)
         return user
 
@@ -345,6 +346,7 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         ms_tenant_id=info.ms_tenant_id,
         refresh_token=encrypt_token(info.ms_token_cache) if info.ms_token_cache else None,
         role_id=await _resolve_role_id(session, info.position),
+        position=info.position,
         voice_enrolled=False,
         last_login_at=datetime.now(timezone.utc),
     )

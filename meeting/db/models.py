@@ -53,6 +53,9 @@ class User(Base):
     role_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=True
     )
+    # Raw O365 jobTitle as-received (pre-resolution). Persisted so a background
+    # worker can later classify titles that didn't match any pool role.
+    position: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # True once user records the enrollment phrase post-login. Matching
     # voiceprint row lives in `voiceprints` with label="enrollment".
     voice_enrolled: Mapped[bool] = mapped_column(

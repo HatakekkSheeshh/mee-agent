@@ -75,3 +75,23 @@ async def test_upsert_unknown_title_leaves_role_id_none(monkeypatch):
     session = _Session(existing=None)
     user = await routes._upsert_user(session, info)
     assert user.role_id is None
+
+
+async def test_upsert_persists_position(monkeypatch):
+    _patch_resolution(monkeypatch)
+    info = UserInfo(email="se@vng.com.vn", display_name="SE", position="Senior Backend Engineer")
+    session = _Session(existing=None)
+    user = await routes._upsert_user(session, info)
+    assert user.position == "Senior Backend Engineer"
+
+
+async def test_upsert_returning_user_persists_position(monkeypatch):
+    _patch_resolution(monkeypatch)
+    existing = SimpleNamespace(
+        display_name="old", avatar_url=None, ms_oid="o", ms_tenant_id="t",
+        refresh_token=None, role_id=None, position=None, last_login_at=None,
+    )
+    info = UserInfo(email="se@vng.com.vn", display_name="SE", position="Staff Engineer")
+    session = _Session(existing=existing)
+    user = await routes._upsert_user(session, info)
+    assert user.position == "Staff Engineer"
