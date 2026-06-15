@@ -17,7 +17,7 @@ slides
 cache/
 .mcp_redmine_tools_cache.json
 logs/
-
+.greennode_runtime.json
 benchmarks
 .greennode_runtime.json
 agentbase
