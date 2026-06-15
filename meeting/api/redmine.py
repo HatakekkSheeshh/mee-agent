@@ -78,6 +78,10 @@ async def redmine_status(user: User = Depends(get_current_user)) -> dict:
             result = await get_identity_client().request_user_key(oid)
             key_present = bool(result.apikey)
             gate_url = result.authorization_url
+            if result.apikey:
+                # Register Redmine tools now (using the key we just fetched) so
+                # the count below reflects reality even before the first chat turn.
+                await ts.ensure_redmine_tools_with_key(result.apikey)
         except Exception as e:  # AgentBase unreachable → unknown, fail soft
             logger.warning("redmine_status: identity probe failed: %s", e)
     return build_redmine_status(

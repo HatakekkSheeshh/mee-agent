@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.graphs._chat_state import ChatState
 from meeting.graphs.chat_graph.builder import build_chat_graph
+from meeting.services import ensure_redmine_tools_registered
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,10 @@ async def run_chat_turn(
     initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_token)
 
     logger.info(f"=== Running ChatGraph turn for session {session_id[:8]} ===")
+    # Lazily register Redmine MCP tools on the first authenticated turn, using
+    # this user's per-user key (best-effort; never raises). Must run before the
+    # agent enumerates the tool registry so newly-registered tools are offered.
+    await ensure_redmine_tools_registered(user_id, session)
     result = await graph.ainvoke(initial_state, config=config)
     return await _interrupt_or_complete(graph, config, result, session_id)
 
@@ -172,6 +177,7 @@ async def stream_chat_turn(
     initial_state = _initial_turn_state(session_id, user_id, user_message, meeting_id, pm_user_token)
 
     logger.info(f"=== Streaming ChatGraph turn for session {session_id[:8]} ===")
+    await ensure_redmine_tools_registered(user_id, session)  # lazy per-user tool discovery
     final_values: dict = {}
     async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
         for node, delta in (chunk or {}).items():
@@ -201,6 +207,14 @@ async def resume_chat_turn(
     """
     graph = build_chat_graph(session, checkpointer)
     config = {"configurable": {"thread_id": session_id}}
+
+    # A process restart between the originating turn and this resume would have
+    # lost the in-memory tool registry (lazy discovery is per-process). Re-register
+    # from the checkpoint's user so the pending tool can still execute.
+    snap = await graph.aget_state(config)
+    resume_user_id = (snap.values or {}).get("user_id")
+    if resume_user_id:
+        await ensure_redmine_tools_registered(resume_user_id, session)
 
     logger.info(f"=== Resuming ChatGraph session {session_id[:8]} with decision={decision}")
     result = await graph.ainvoke(Command(resume=decision), config=config)
