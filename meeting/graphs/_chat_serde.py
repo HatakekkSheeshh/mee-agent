@@ -101,17 +101,38 @@ def _last_assistant_text(messages: list[dict]) -> str:
     return ""
 
 
+def _completed_action_note(content: dict) -> str:
+    """A marker appended to a past agent turn whose tools ran to success, so the
+    flattened cross-turn seed carries an explicit 'already done' signal. Without
+    it the model only sees prose and may RE-FIRE a completed side-effect tool
+    (live 2026-06-15: turn-1 create_task re-fired by a turn-2 'liệt kê'). Empty
+    string when the turn had no tools, or the tool result signalled an error
+    (a failed action may legitimately be retried). Pairs with the matching
+    'KHÔNG LẶP HÀNH ĐỘNG ĐÃ XONG' rule in _agent_system_prompt."""
+    tools = [t for t in (content.get("tools_called") or []) if t]
+    if not tools:
+        return ""
+    result = content.get("tool_result")
+    if isinstance(result, dict) and result.get("error"):
+        return ""
+    return (
+        "\n\n[Bối cảnh hệ thống: các công cụ sau đã CHẠY XONG ở lượt trước và "
+        f"KHÔNG được gọi lại trừ khi lượt HIỆN TẠI yêu cầu rõ: {', '.join(tools)}.]"
+    )
+
+
 def _seed_agent_messages(state: ChatState) -> list[dict]:
     """Build the initial OpenAI message list from recent history + this turn."""
     msgs: list[dict] = []
     for m in (state.get("recent_messages") or [])[-6:]:
-        content = (m.get("content") or {}).get("text", "")
-        if not content:
+        content = m.get("content") or {}
+        text = content.get("text", "")
+        if not text:
             continue
         if m.get("role") == "user":
-            msgs.append({"role": "user", "content": content})
+            msgs.append({"role": "user", "content": text})
         elif m.get("role") == "agent":
-            msgs.append({"role": "assistant", "content": content})
+            msgs.append({"role": "assistant", "content": text + _completed_action_note(content)})
     msgs.append({"role": "user", "content": state.get("user_message", "")})
     return msgs
 
