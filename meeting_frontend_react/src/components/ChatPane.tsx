@@ -9,7 +9,7 @@ import {
 import { useApp } from "../store/AppContext";
 import { toolLabel as mapToolLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
-import type { ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
+import type { ChatSessionSummary, ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
 import { WelcomeBanner } from "./WelcomeBanner";
 import { ActionArgsCard } from "./ActionArgsCard";
@@ -53,85 +53,17 @@ export function ChatPane() {
   const [zoomed, setZoomed] = useState(false);
   useEffect(() => setZoomed(false), [pending?.id]);
 
-  // The chat session id (LangGraph thread). Created lazily on first send and
-  // re-created when the bound meeting changes. Kept in refs so it survives
-  // re-renders without triggering them.
-  const sessionIdRef = useRef<string | null>(null);
-  const sessionMeetingRef = useRef<string | null>(null);
-  // Which storageKey we've already kicked off, so Mee greets an empty thread
-  // exactly once (survives StrictMode double-mount + re-renders).
-  const kickedOffRef = useRef<string | null>(null);
-
-  // Persist the thread per meeting so it survives a page refresh (F5).
-  const storageKey = `mee.chat.${currentMeetingId ?? "none"}`;
-
-  // Restore on mount / when the bound meeting changes.
+  // User-scoped sessions: the sidebar list + the active session. Sessions are
+  // decoupled from projects — currentMeetingId is sent per-turn for grounding.
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
-    sessionMeetingRef.current = currentMeetingId;
-    let restoredEmpty = false;
-    try {
-      const raw = localStorage.getItem(storageKey);
-      const saved = raw
-        ? (JSON.parse(raw) as {
-            sessionId?: string | null;
-            messages?: ThreadMsg[];
-            pending?: PendingAction | null;
-          })
-        : null;
-      sessionIdRef.current = saved?.sessionId ?? null;
-      setMessages(saved?.messages ?? []);
-      setPending(saved?.pending ?? null);
-      restoredEmpty = !saved?.messages?.length && !saved?.pending;
-    } catch {
-      sessionIdRef.current = null;
-      setMessages([]);
-      setPending(null);
-      restoredEmpty = true;
-    }
-
-    // Proactive kickoff: on a fresh, empty thread, Mee speaks first with a
-    // role-tailored greeting. Best-effort — a failure leaves the thread empty
-    // (the WelcomeBanner stays as the fallback) and never blocks chat.
-    if (restoredEmpty && kickedOffRef.current !== storageKey) {
-      kickedOffRef.current = storageKey;
-      setBusy(true);
-      void (async () => {
-        try {
-          let sid = sessionIdRef.current;
-          if (!sid) {
-            const s = await api.chat.createSession(currentMeetingId ?? "");
-            sid = s.id;
-            sessionIdRef.current = s.id;
-            sessionMeetingRef.current = currentMeetingId;
-          }
-          // Role comes from the logged-in user (users.role_id, resolved from their
-          // O365 jobTitle). No env role needed.
-          const res = await api.chat.kickoff(sid);
-          if (res.reply) {
-            setMessages((m) => [...m, { role: "agent", text: res.reply as string }]);
-          }
-        } catch {
-          /* best-effort — WelcomeBanner remains as the fallback */
-        } finally {
-          setBusy(false);
-        }
-      })();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentMeetingId]);
-
-  // Save whenever the thread changes (sessionIdRef is set before any message,
-  // so it is captured alongside the messages that triggered its creation).
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify({ sessionId: sessionIdRef.current, messages, pending }),
-      );
-    } catch {
-      /* ignore quota / serialization errors */
-    }
-  }, [messages, pending, storageKey]);
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+  // Session ids already kicked off this mount, so Mee greets an empty thread once
+  // (survives StrictMode double-mount + re-renders).
+  const kickedOffRef = useRef<Set<string>>(new Set());
 
   // Rotating example placeholder — surfaces what users can ask, including how
   // to reach the Redmine/pm-agent path. Cycles only while the box is empty/idle.
@@ -204,15 +136,79 @@ export function ChatPane() {
   const errorText = (e: unknown) =>
     `${t("chat.error")}: ${e instanceof ApiError ? e.detail : String(e)}`;
 
-  const ensureSession = useCallback(async (): Promise<string> => {
-    if (sessionIdRef.current && sessionMeetingRef.current === currentMeetingId) {
-      return sessionIdRef.current;
+  // Fire the proactive kickoff once per session (role-based, project-agnostic).
+  // Best-effort — a failure leaves the thread empty (WelcomeBanner is the fallback).
+  const maybeKickoff = useCallback(async (sid: string) => {
+    if (kickedOffRef.current.has(sid)) return;
+    kickedOffRef.current.add(sid);
+    setBusy(true);
+    try {
+      const res = await api.chat.kickoff(sid);
+      if (res.reply) setMessages((m) => [...m, { role: "agent", text: res.reply as string }]);
+    } catch {
+      /* best-effort — WelcomeBanner remains the fallback */
+    } finally {
+      setBusy(false);
     }
-    const s = await api.chat.createSession(currentMeetingId ?? "");
-    sessionIdRef.current = s.id;
-    sessionMeetingRef.current = currentMeetingId;
+  }, []);
+
+  // Load a session's messages into the thread and switch to it. Kicks off if the
+  // thread is empty.
+  const openSession = useCallback(async (sid: string) => {
+    setActiveSessionId(sid);
+    setPending(null);
+    try {
+      const detail = await api.chat.sessionDetail(sid);
+      const msgs: ThreadMsg[] = (detail.messages ?? []).map((m) => ({
+        role: m.role === "user" ? "user" : "agent",
+        text: typeof m.content?.text === "string" ? m.content.text : "",
+      }));
+      setMessages(msgs);
+      if (msgs.length === 0) await maybeKickoff(sid);
+    } catch {
+      setMessages([]);
+    }
+  }, [maybeKickoff]);
+
+  // Create a fresh user-scoped session, prepend it to the sidebar, switch, kick off.
+  const createAndOpenSession = useCallback(async () => {
+    const s = await api.chat.createSession();
+    setSessions((prev) => [
+      { id: s.id, meeting_id: s.meeting_id, title: s.title, created_at: s.created_at, last_activity_at: s.created_at },
+      ...prev,
+    ]);
+    setActiveSessionId(s.id);
+    setMessages([]);
+    setPending(null);
+    await maybeKickoff(s.id);
+  }, [maybeKickoff]);
+
+  // On mount: fetch the user's sessions and open the most-recently-active (the
+  // backend returns them ordered last_activity_at desc, so [0] is the target).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await api.chat.listSessions();
+        setSessions(list);
+        if (list.length > 0) await openSession(list[0].id);
+        else await createAndOpenSession();
+      } catch {
+        /* best-effort — an empty pane with the New-session button stays usable */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const ensureSession = useCallback(async (): Promise<string> => {
+    if (activeSessionIdRef.current) return activeSessionIdRef.current;
+    const s = await api.chat.createSession();
+    setSessions((prev) => [
+      { id: s.id, meeting_id: s.meeting_id, title: s.title, created_at: s.created_at, last_activity_at: s.created_at },
+      ...prev,
+    ]);
+    setActiveSessionId(s.id);
     return s.id;
-  }, [currentMeetingId]);
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -239,12 +235,12 @@ export function ChatPane() {
       const sid = await ensureSession();
       let res: ChatTurnResult;
       try {
-        res = await api.chat.sendStream(sid, text, onStep, ctrl.signal);
+        res = await api.chat.sendStream(sid, text, currentMeetingId, onStep, ctrl.signal);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
         // Stream route missing (older backend) → fall back to the blocking POST.
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
-          res = await api.chat.send(sid, text);
+          res = await api.chat.send(sid, text, currentMeetingId);
         } else {
           throw e;
         }
@@ -261,7 +257,7 @@ export function ChatPane() {
       setSteps([]);
       setBusy(false);
     }
-  }, [input, busy, ensureSession, stepLabel, t]);
+  }, [input, busy, ensureSession, stepLabel, t, currentMeetingId]);
 
   // Clear the session in place: wipe its messages + pending + checkpoint on the
   // backend (keeping the session id / meeting binding), then empty the local
@@ -277,7 +273,7 @@ export function ChatPane() {
       accent: true,
     });
     if (!ok) return;
-    const sid = sessionIdRef.current;
+    const sid = activeSessionIdRef.current;
     setBusy(true);
     try {
       if (sid) await api.chat.clear(sid);
@@ -289,6 +285,44 @@ export function ChatPane() {
       setBusy(false);
     }
   }, [busy, t, confirm]);
+
+  // "New session": create a fresh user-scoped session and switch to it.
+  const handleNewSession = useCallback(async () => {
+    if (busy) return;
+    try {
+      await createAndOpenSession();
+    } catch (e) {
+      pushAgent(errorText(e));
+    }
+  }, [busy, createAndOpenSession]);
+
+  // Remove a session permanently (hard delete). If it was active, fall back to
+  // the most-recent remaining session, or create a fresh one.
+  const handleRemoveSession = useCallback(
+    async (sid: string) => {
+      const ok = await confirm({
+        title: t("chat.session.remove"),
+        message: t("chat.session.removeConfirm"),
+        confirmLabel: t("chat.session.remove"),
+        cancelLabel: t("confirm.cancel"),
+        accent: true,
+      });
+      if (!ok) return;
+      try {
+        await api.chat.remove(sid);
+        const rest = sessions.filter((s) => s.id !== sid);
+        setSessions(rest);
+        kickedOffRef.current.delete(sid);
+        if (activeSessionIdRef.current === sid) {
+          if (rest.length > 0) await openSession(rest[0].id);
+          else await createAndOpenSession();
+        }
+      } catch (e) {
+        pushAgent(errorText(e));
+      }
+    },
+    [sessions, confirm, t, openSession, createAndOpenSession],
+  );
 
   // Keep a read-only snapshot of a resolved pending card in the thread, so the
   // conversation history preserves what was approved / sent / rejected.
@@ -480,6 +514,19 @@ export function ChatPane() {
           <span className="small">
             {currentMeeting ? currentMeeting.title : t("agent.noMeeting")}
           </span>
+          <button
+            className="icon-btn icon-btn-sm"
+            type="button"
+            title={t("chat.session.new")}
+            aria-label={t("chat.session.new")}
+            disabled={busy}
+            onClick={() => void handleNewSession()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
           {(messages.length > 0 || pending) && (
             <button
               className="icon-btn icon-btn-sm"
@@ -497,6 +544,36 @@ export function ChatPane() {
           )}
         </div>
       </div>
+
+      {sessions.length > 0 && (
+        <ul className="chat-session-list" aria-label={t("chat.session.listLabel")}>
+          {sessions.map((s) => (
+            <li
+              key={s.id}
+              className={`chat-session-item${s.id === activeSessionId ? " is-active" : ""}`}
+            >
+              <button
+                type="button"
+                className="chat-session-open"
+                onClick={() => void openSession(s.id)}
+                disabled={busy}
+              >
+                {s.title || t("chat.session.untitled")}
+              </button>
+              <button
+                type="button"
+                className="chat-session-remove"
+                title={t("chat.session.remove")}
+                aria-label={t("chat.session.remove")}
+                onClick={() => void handleRemoveSession(s.id)}
+                disabled={busy}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="chat-thread" ref={threadRef}>
         <WelcomeBanner />

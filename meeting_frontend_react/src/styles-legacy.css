@@ -3047,4 +3047,47 @@ select.mee-modal-input {
     margin-left: 8px;
 }
 
+/* User-scoped chat session sidebar list */
+.chat-session-list {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 10px;
+    margin: 0;
+    list-style: none;
+    border-bottom: 1px solid var(--border, #e5e7eb);
+}
+.chat-session-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: var(--chip-bg, #f3f4f6);
+    white-space: nowrap;
+    font-size: 12px;
+}
+.chat-session-item.is-active {
+    background: var(--accent-soft, #dbeafe);
+}
+.chat-session-open {
+    border: 0;
+    background: none;
+    cursor: pointer;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: inherit;
+}
+.chat-session-remove {
+    border: 0;
+    background: none;
+    cursor: pointer;
+    opacity: 0.6;
+    color: inherit;
+}
+.chat-session-remove:hover {
+    opacity: 1;
+}
+
 
