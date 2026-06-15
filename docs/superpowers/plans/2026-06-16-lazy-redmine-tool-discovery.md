@@ -49,8 +49,8 @@ Confirmed in deployed logs:
 
 - Modify: `meeting/services/tools/redmine.py` — add key-aware discovery + lazy `ensure_redmine_tools_registered`; make startup cache-only.
 - Modify: `meeting/services/__init__.py` and `meeting/services/tools/__init__.py` — export `ensure_redmine_tools_registered`.
-- Modify: the chat request entrypoint (LOCATE: where `user_id` + DB `session` are both in scope before the agent assembles tools — likely `meeting/graphs/chat_graph/context.py::load_context` or the agent node in `meeting/graphs/chat_graph/`). Add a best-effort `await ensure_redmine_tools_registered(user_id, session)`.
-- Modify: `meeting/api/redmine.py` — optionally trigger `ensure_redmine_tools_registered` in the status route so the banner reflects reality once a key exists (the route has the user but verify it can get a DB session + the internal user id).
+- Modify: `meeting/graphs/chat_graph/runner.py` — call the lazy hook before `graph.ainvoke` (see Task 4; located/verified).
+- Modify: `meeting/api/redmine.py` — optionally trigger `ensure_redmine_tools_registered` in the status route so the banner reflects reality once a key exists (verify it can get a DB session + the internal user id).
 - Test: `tests/meeting/test_tools_redmine.py` (extend), and a new `tests/meeting/test_redmine_lazy_discovery.py`.
 
 ---
@@ -253,13 +253,26 @@ async def ensure_redmine_tools_registered(user_id, session) -> list[str]:
 
 ## Task 4: Hook lazy discovery into the chat request path
 
-**Files:**
-- Modify: the chat entrypoint where `user_id` + DB `session` are both available before the agent builds its tool list. LOCATE first (grep for `load_context`, `resolve_redmine_key`, or where `TOOLS` is read into the LLM tool list in `meeting/graphs/chat_graph/`).
-- Test: extend `tests/meeting/test_redmine_lazy_discovery.py` (or the chat-graph tests) to assert `ensure_redmine_tools_registered` is awaited once per turn with the turn's `user_id`/`session`.
+**LOCATED (verified 2026-06-16 on `feat/build-agentbase`) — no need to re-search:**
+- The exact hook is `meeting/graphs/chat_graph/runner.py`. Both `run_chat_turn(*, session_id, user_id, user_message, meeting_id, session, checkpointer, ...)` (≈92-121) and `resume_chat_turn(...)` (≈156+) take **`user_id` and `session` as parameters** and call `graph.ainvoke` (≈120). Add the hook **immediately before `graph.ainvoke`** in BOTH.
+- Why this works same-turn: the graph is rebuilt every turn (`runner.py:115 graph = build_chat_graph(session, checkpointer)`), AND the agent enumerates tools dynamically per invocation via `_openai_tools()` → `tools.list_tools()` (`meeting/graphs/chat_graph/agent.py:79-84`). So tools registered before `ainvoke` are visible to the LLM that same turn — no graph-build-time snapshot to worry about.
+- It must be best-effort (never raise into the turn) — `ensure_redmine_tools_registered` already swallows its own errors (Task 3), so a bare `await` is safe.
 
-- [ ] **Step 1: Write the failing test** — dispatching a chat turn calls `ensure_redmine_tools_registered(user_id, session)` exactly once (monkeypatch it to record args).
+**Files:**
+- Modify: `meeting/graphs/chat_graph/runner.py` — `run_chat_turn` and `resume_chat_turn`.
+- Test: extend `tests/meeting/test_redmine_lazy_discovery.py` (or the chat-graph runner tests) to assert `ensure_redmine_tools_registered` is awaited with the turn's `user_id`/`session` before `ainvoke`.
+
+- [ ] **Step 1: Write the failing test** — invoking `run_chat_turn` calls `ensure_redmine_tools_registered(user_id, session)` once (monkeypatch the symbol imported into `runner`, and monkeypatch `build_chat_graph` to a fake graph whose `ainvoke`/`aget_state` are stubbed so no DB is needed).
 - [ ] **Step 2: Run → fail.**
-- [ ] **Step 3: Implement** — `await ensure_redmine_tools_registered(user_id, session)` at the start of the turn (best-effort; it never raises). Place it BEFORE the agent enumerates `TOOLS` so newly-registered tools are visible this turn.
+- [ ] **Step 3: Implement** — at the top of `run_chat_turn` and `resume_chat_turn`, just before `graph.ainvoke`:
+
+```python
+from meeting.services import ensure_redmine_tools_registered  # module-top import
+...
+await ensure_redmine_tools_registered(user_id, session)  # best-effort; never raises
+result = await graph.ainvoke(initial_state, config=config)
+```
+
 - [ ] **Step 4: Run → PASS.**
 - [ ] **Step 5: Commit** — `git commit -m "feat(chat): lazily register Redmine tools on first authenticated turn"`
 
@@ -288,4 +301,4 @@ So `GET /api/redmine/status` reports `registered_tool_count: 15` once the user h
 
 ## Kickoff prompt for the fresh session
 
-> Continue on branch `feat/build-agentbase` in the Mee meeting agent. Implement the plan at `docs/superpowers/plans/2026-06-16-lazy-redmine-tool-discovery.md` via superpowers:subagent-driven-development. Context: the per-user Redmine key feature works for tool *calls* but tool *registration* fails because startup discovery (`list_tools`) runs with no user → falls back to an empty env `REDMINE_API_KEY` → 401 → 0 tools. Fix = lazy per-user discovery (discover with the first authenticated user's key, cache the schemas, register process-wide). Do NOT reintroduce a shared/env/service key and do NOT bake a schema cache into the image — the user explicitly chose the delegated per-user provider as the discovery key source. venv is `venv/`; tests are offline with `asyncio_mode=auto` (baseline green): `DATABASE_URL=postgresql://u:p@localhost:5432/db DATABASE_URL_SYNC=postgresql://u:p@localhost:5432/db venv/bin/pytest tests/meeting -q`. Run backend WITHOUT `alembic upgrade head` (DB drift). First locate the chat request entrypoint for Task 4 before writing that task's test.
+> Continue on branch `feat/build-agentbase` in the Mee meeting agent. Implement the plan at `docs/superpowers/plans/2026-06-16-lazy-redmine-tool-discovery.md` via superpowers:subagent-driven-development. Context: the per-user Redmine key feature works for tool *calls* but tool *registration* fails because startup discovery (`list_tools`) runs with no user → falls back to an empty env `REDMINE_API_KEY` → 401 → 0 tools. Fix = lazy per-user discovery (discover with the first authenticated user's key, cache the schemas, register process-wide). Do NOT reintroduce a shared/env/service key and do NOT bake a schema cache into the image — the user explicitly chose the delegated per-user provider as the discovery key source. venv is `venv/`; tests are offline with `asyncio_mode=auto` (baseline green): `DATABASE_URL=postgresql://u:p@localhost:5432/db DATABASE_URL_SYNC=postgresql://u:p@localhost:5432/db venv/bin/pytest tests/meeting -q`. Run backend WITHOUT `alembic upgrade head` (DB drift). The Task 4 hook point is already located: `meeting/graphs/chat_graph/runner.py` (`run_chat_turn` + `resume_chat_turn`, before `graph.ainvoke`).

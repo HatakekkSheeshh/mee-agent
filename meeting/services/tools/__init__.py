@@ -41,6 +41,8 @@ from meeting.services.tools import search_transcript as _search_transcript  # no
 # load_and_register_redmine_tools — importing the module here only loads the
 # defs (no network, no registration), so the tool set stays clean until wired.
 from meeting.services.tools.redmine import (  # noqa: F401
+    ensure_redmine_tools_registered,
+    ensure_redmine_tools_with_key,
     is_write_tool,
     load_and_register_redmine_tools,
     register_redmine_tools,
@@ -57,6 +59,8 @@ __all__ = [
     "repo",
     "get_memory_service",
     "is_write_tool",
+    "ensure_redmine_tools_registered",
+    "ensure_redmine_tools_with_key",
     "load_and_register_redmine_tools",
     "register_redmine_tools",
 ]

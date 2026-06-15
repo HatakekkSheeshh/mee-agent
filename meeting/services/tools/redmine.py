@@ -13,6 +13,7 @@ pm-agent's mcp_http_client tool cache.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -23,9 +24,20 @@ from typing import Optional
 from meeting.db.models import User
 from meeting.services.identity_client import get_cached_user_key
 from meeting.services.redmine_mcp_client import get_redmine_mcp_client
-from meeting.services.tools._registry import tool
+from meeting.services.tools._registry import TOOLS, tool
 
 logger = logging.getLogger(__name__)
+
+# Names registered via register_redmine_tools, so lazy discovery can detect a
+# prior registration without re-hitting the network. The lock serializes the
+# concurrent first-turn discoveries that would otherwise all fire at once.
+_registered_names: set[str] = set()
+_discovery_lock = asyncio.Lock()
+
+
+def _redmine_tools_registered() -> bool:
+    """True if any previously-registered Redmine tool is still in TOOLS."""
+    return any(name in TOOLS for name in _registered_names)
 
 # Tools whose execution mutates Redmine → MUST be HITL-gated (side_effect).
 WRITE_TOOLS = frozenset({
@@ -101,6 +113,7 @@ def register_redmine_tools(schemas: list[dict]) -> list[str]:
             schema=s.get("inputSchema") or {"type": "object", "properties": {}},
         )(_proxy(name))
         registered.append(name)
+    _registered_names.update(registered)
     logger.info("[redmine-mcp] registered %d tool(s): %s", len(registered), registered)
     return registered
 
@@ -138,10 +151,10 @@ def _save_cache(url: str, schemas: list[dict]) -> None:
         logger.warning("[redmine-mcp] failed saving tool cache %s: %s", path, e)
 
 
-async def fetch_redmine_tool_schemas() -> list[dict]:
-    """Live-fetch tool schemas from the MCP server (no cache)."""
+async def fetch_redmine_tool_schemas(api_key: Optional[str] = None) -> list[dict]:
+    """Live-fetch tool schemas from the MCP server, authenticated with `api_key`."""
     client = get_redmine_mcp_client()
-    async with client._session() as session:
+    async with client._session(api_key=api_key) as session:
         result = await session.list_tools()
         return [
             {"name": t.name, "description": t.description or "", "inputSchema": t.inputSchema or {}}
@@ -150,18 +163,59 @@ async def fetch_redmine_tool_schemas() -> list[dict]:
 
 
 async def load_and_register_redmine_tools(*, force: bool = False) -> list[str]:
-    """Resolve tool schemas (disk cache → live fetch) and register them.
+    """Startup registration: cache-only, never hits the network.
 
-    Best-effort: returns [] and logs on any failure so the app still boots when
-    the Redmine MCP server is unreachable. Call from the FastAPI lifespan.
+    Discovery now happens lazily per-user (ensure_redmine_tools_registered),
+    because the MCP server authenticates with the caller's per-user Redmine key,
+    which does not exist at startup. If a prior run's disk cache is present we
+    register from it; otherwise we register nothing and wait for the first
+    authenticated user. `force` bypasses the cache (→ registers nothing here).
     """
     url = get_redmine_mcp_client()._url
     schemas = None if force else _load_cache(url)
     if schemas is None:
-        try:
-            schemas = await fetch_redmine_tool_schemas()
-            _save_cache(url, schemas)
-        except Exception as e:
-            logger.warning("[redmine-mcp] tool discovery failed (skipping): %s", e)
-            return []
+        logger.info(
+            "[redmine-mcp] no schema cache; deferring discovery to first authenticated user"
+        )
+        return []
     return register_redmine_tools(schemas)
+
+
+async def _discover_and_register(key: str) -> list[str]:
+    """Discover schemas with `key` and register them, serialized by the lock."""
+    async with _discovery_lock:
+        if _redmine_tools_registered():  # re-check now that we hold the lock
+            return []
+        try:
+            schemas = await fetch_redmine_tool_schemas(api_key=key)
+        except Exception as e:
+            logger.warning("[redmine-mcp] lazy discovery failed (skipping): %s", e)
+            return []
+        _save_cache(get_redmine_mcp_client()._url, schemas)
+        return register_redmine_tools(schemas)
+
+
+async def ensure_redmine_tools_registered(user_id, session) -> list[str]:
+    """Lazily discover + register Redmine tools using the current user's key.
+
+    Idempotent and best-effort: no-op if tools are already registered or if the
+    user has no key yet (they'll see the consent gate). Never raises into the
+    request path. This is how the user-independent tool *schemas* get discovered
+    without a shared/env key — the first authenticated user's delegated key lists
+    them, then they're cached + registered process-wide.
+    """
+    if _redmine_tools_registered():
+        return []
+    key = await resolve_redmine_key(user_id, session)
+    if not key:
+        return []
+    return await _discover_and_register(key)
+
+
+async def ensure_redmine_tools_with_key(key: Optional[str]) -> list[str]:
+    """Variant for callers that already hold the user's key (e.g. the status
+    route just fetched it) — skips the DB/oid round-trip. No-op if tools are
+    already registered or no key is supplied."""
+    if _redmine_tools_registered() or not key:
+        return []
+    return await _discover_and_register(key)
