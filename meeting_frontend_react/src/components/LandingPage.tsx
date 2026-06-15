@@ -82,7 +82,7 @@ export function LandingPage() {
             </div>
             <h1 className="lp-hero__title reveal-on-scroll">
               The meeting<br />
-              becomes a <em>document.</em>
+              becomes a <em>document</em>
             </h1>
             <p className="lp-hero__sub reveal-on-scroll">
               Mee transcribes, attributes and summarises meetings in Vietnamese
@@ -207,6 +207,11 @@ export function LandingPage() {
                 num="04"
                 title="Read the MoM"
                 body="Structured minutes with decisions, action items, blockers. Edit in place; the agent learns vocabulary from your corrections."
+              />
+              <Step
+                num="05"
+                title="Ask the Chat Agent"
+                body="Your meeting history is a searchable knowledge base. Ask questions in natural language and the agent retrieves relevant sections and quotes to answer."
               />
             </ol>
           </div>

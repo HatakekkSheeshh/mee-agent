@@ -213,6 +213,33 @@ services:
       timeout: 5s
       retries: 5
 
+  # ───────────── App: backend (REST :8001 + WS :9091) ─────────────────
+  # Opt-in `app` profile so dev keeps host-mode (uvicorn --reload / live edit):
+  #     docker compose --profile app up -d --build
+  # `up --build` guarantees running code == committed code (no stale process).
+  # run_meeting.py spawns the Celery worker itself when RabbitMQ is reachable.
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: mee-backend
+    profiles: ["app"]
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # In-container, `localhost` is the container itself — point Celery's broker
+      # at the rabbitmq service. (If you also enable the local `postgres` profile,
+      # set DATABASE_URL host=postgres in .env too.)
+      RABBITMQ_HOST: rabbitmq
+    ports:
+      - "8002:8002"   # REST / HTTP (FastAPI; Vite owns :8001 and proxies here)
+      - "9091:9091"   # WebSocket (live transcription)
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./output:/app/output   # generated MoM markdown + audio chunks persist
+
 volumes:
   mee_pg_data:
   langfuse_pg_data:
