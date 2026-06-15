@@ -398,6 +398,11 @@ export const api = {
       http<{ status: string; session_id: string }>(
         "DELETE", `/api/chat/sessions/${sessionId}`,
       ),
+    // Rename a session (set its title).
+    rename: (sessionId: string, title: string) =>
+      http<{ id: string; title: string | null }>(
+        "PATCH", `/api/chat/sessions/${sessionId}`, { title },
+      ),
     // Proactive kickoff: Mee speaks first on an empty thread. Returns the
     // greeting (already persisted as an agent message), or {reply:null,
     // skipped:true} if the thread already had messages. Never throws server-side.

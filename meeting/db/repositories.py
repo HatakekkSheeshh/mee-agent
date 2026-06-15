@@ -717,6 +717,18 @@ async def delete_chat_session(
     await session.flush()
 
 
+async def rename_chat_session(
+    session: AsyncSession, session_id: uuid.UUID, title: str
+) -> Optional[ChatSession]:
+    """Set a chat session's title. Returns the session, or None if missing."""
+    chat = await session.get(ChatSession, session_id)
+    if not chat:
+        return None
+    chat.title = title
+    await session.flush()
+    return chat
+
+
 # ─── Pending Actions (HITL) ───────────────────────────────────────
 
 async def create_pending_action(

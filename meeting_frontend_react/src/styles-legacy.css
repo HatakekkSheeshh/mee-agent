@@ -3133,6 +3133,7 @@ select.mee-modal-input {
     white-space: nowrap;
     color: inherit;
 }
+.chat-session-rename,
 .chat-session-remove {
     flex: none;
     border: 0;
@@ -3140,9 +3141,23 @@ select.mee-modal-input {
     cursor: pointer;
     opacity: 0.6;
     color: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px 4px;
 }
+.chat-session-rename:hover,
 .chat-session-remove:hover {
     opacity: 1;
+}
+.chat-session-edit {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 12px;
 }
 
 

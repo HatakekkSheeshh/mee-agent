@@ -58,6 +58,10 @@ class MessageSend(BaseModel):
     meeting_id: Optional[str] = None
 
 
+class SessionRename(BaseModel):
+    title: str
+
+
 class KickoffRequest(BaseModel):
     # Optional dev override (VITE_KICKOFF_ROLE). Default path uses the logged-in
     # user's resolved role (users.role_id). Falls back to a generic greeting.
@@ -346,6 +350,20 @@ async def delete_session(
         logger.warning("delete: checkpoint purge failed for %s", sid, exc_info=True)
 
     return {"status": "deleted", "session_id": str(sid)}
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: str,
+    req: SessionRename,
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename a chat session (set its title). 404 if the session is missing."""
+    sid = _parse_uuid(session_id)
+    chat = await repo.rename_chat_session(session, sid, req.title.strip())
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"id": str(chat.id), "title": chat.title}
 
 
 # ─── Messages ─────────────────────────────────────────────────────

@@ -64,11 +64,15 @@ export function ChatPane() {
   // Session picker is a dropdown ("list down") rather than an always-visible row.
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
+  // Inline rename: which session row is being edited + its draft title.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
   useEffect(() => {
     if (!sessionMenuOpen) return;
     const onDown = (e: globalThis.MouseEvent) => {
       if (sessionMenuRef.current && !sessionMenuRef.current.contains(e.target as Node)) {
         setSessionMenuOpen(false);
+        setEditingId(null);
       }
     };
     document.addEventListener("mousedown", onDown);
@@ -335,6 +339,27 @@ export function ChatPane() {
       }
     },
     [sessions, confirm, t, openSession, createAndOpenSession],
+  );
+
+  // Inline rename: open the editor on a row, then commit (Enter) or cancel (Esc).
+  const startRename = useCallback((s: ChatSessionSummary) => {
+    setEditingId(s.id);
+    setEditValue(s.title ?? "");
+  }, []);
+
+  const commitRename = useCallback(
+    async (sid: string) => {
+      const title = editValue.trim();
+      setEditingId(null);
+      if (!title) return; // empty → keep the auto date/time label
+      setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, title } : s)));
+      try {
+        await api.chat.rename(sid, title);
+      } catch (e) {
+        pushAgent(errorText(e));
+      }
+    },
+    [editValue],
   );
 
   // Keep a read-only snapshot of a resolved pending card in the thread, so the
@@ -604,27 +629,59 @@ export function ChatPane() {
                   key={s.id}
                   className={`chat-session-item${s.id === activeSessionId ? " is-active" : ""}`}
                 >
-                  <button
-                    type="button"
-                    className="chat-session-open"
-                    onClick={() => {
-                      void openSession(s.id);
-                      setSessionMenuOpen(false);
-                    }}
-                    disabled={busy}
-                  >
-                    {sessionLabel(s)}
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-session-remove"
-                    title={t("chat.session.remove")}
-                    aria-label={t("chat.session.remove")}
-                    onClick={() => void handleRemoveSession(s.id)}
-                    disabled={busy}
-                  >
-                    ✕
-                  </button>
+                  {editingId === s.id ? (
+                    <input
+                      className="chat-session-edit"
+                      value={editValue}
+                      autoFocus
+                      placeholder={t("chat.session.renamePlaceholder")}
+                      disabled={busy}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitRename(s.id);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditingId(null);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="chat-session-open"
+                        onClick={() => {
+                          void openSession(s.id);
+                          setSessionMenuOpen(false);
+                        }}
+                        disabled={busy}
+                      >
+                        {sessionLabel(s)}
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-session-rename"
+                        title={t("chat.session.rename")}
+                        aria-label={t("chat.session.rename")}
+                        onClick={() => startRename(s)}
+                        disabled={busy}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-session-remove"
+                        title={t("chat.session.remove")}
+                        aria-label={t("chat.session.remove")}
+                        onClick={() => void handleRemoveSession(s.id)}
+                        disabled={busy}
+                      >
+                        ✕
+                      </button>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
