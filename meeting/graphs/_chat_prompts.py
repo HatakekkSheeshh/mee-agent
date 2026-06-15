@@ -56,7 +56,7 @@ CLASSIFY_SYSTEM_PROMPT = (
     "  • tạo/cập nhật/đóng issue trên Redmine; liệt kê issue overdue/stale/sắp đến hạn; "
     "workload hoặc issue được giao TRÊN HỆ THỐNG\n\n"
     "Ví dụ:\n"
-    '  "List the recorded_id in AI Innovation Project" → {"intent":"agent","grounding":"required"}\n'
+    '  "List the recorded_id in AI Innovation Projects" → {"intent":"agent","grounding":"required"}\n'
     '  "what tasks does Hieu need to do?" → {"intent":"agent","grounding":"required"}\n'
     '  "tóm tắt cuộc họp tuần trước" → {"intent":"agent","grounding":"required"}\n'
     '  "tóm tắt phiên 1 / Meeting 2" → {"intent":"agent","grounding":"required"}\n'
@@ -84,13 +84,26 @@ def _agent_system_prompt(state: ChatState) -> str:
         f"{memory}\n\n"
         if memory else ""
     )
+    uname = (state.get("user_name") or "").strip()
+    urole = (state.get("user_role") or "").strip()
+    user_block = (
+        f"Người dùng hiện tại: {uname}"
+        + (f" — vai trò: {urole}" if urole else "")
+        + ". Khi user nói 'tôi'/'của tôi', hiểu là người này.\n\n"
+    ) if uname else ""
     return (
         "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
         f"Hôm nay là {_today_vi()} (giờ Việt Nam). Dùng mốc này để hiểu các mốc thời "
         "gian tương đối như 'hôm nay', 'ngày mai', 'tuần này', 'cuối tháng'.\n\n"
+        f"{user_block}"
         f"Cuộc họp hiện tại: {title}\n\n"
         f"{memory_block}"
         "Quy tắc:\n"
+        "- KHI TOOL TẠO/CHỈNH ISSUE BÁO LỖI (create_task, create_redmine_issue, hoặc "
+        "tool có thẻ cho user chỉnh sửa trường): KHÔNG tự ý sửa hay đoán lại tham số "
+        "(vd đổi project_name, assigned_to) rồi gọi lại. Người dùng tự chỉnh các trường "
+        "trên thẻ và chịu trách nhiệm về giá trị nhập. Hãy BÁO nguyên văn lỗi cho người "
+        "dùng rồi DỪNG — KHÔNG thử lại với tham số tự đoán.\n"
         "- HỘI THOẠI LIÊN TỤC (RẤT QUAN TRỌNG): các lượt nói chuyện là MỘT cuộc hội "
         "thoại nối tiếp, KHÔNG phải từng câu rời rạc. Nếu ở (các) lượt trước bạn đã hỏi "
         "xin thông tin còn thiếu để thực hiện một hành động (gửi email, tạo task...), và "

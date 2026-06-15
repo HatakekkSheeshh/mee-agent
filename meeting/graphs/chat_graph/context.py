@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
+from meeting.db.models import User
 from meeting.graphs._chat_state import ChatState
 from meeting.memory_client import (
     STALE_NOTE,
@@ -59,6 +60,16 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
         # Recent messages (last 10)
         messages = await repo.list_chat_messages(session, sid, limit=10)
         recent = [{"role": m.role, "content": m.content} for m in messages]
+
+        # Signed-in user identity → injected into the agent prompt so it knows who
+        # "tôi/của tôi" is and can scope role-based tool calls (not just kickoff).
+        user_name = user_role = None
+        uid_str = state.get("user_id")
+        if session is not None and uid_str:
+            user = await session.get(User, uuid.UUID(uid_str))
+            if user:
+                user_name = (user.display_name or "").strip() or None
+                user_role = user.role.name if user.role else None
 
         meeting_ctx = {}
         project_memory = ""
@@ -130,6 +141,8 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
             # Default scope for the agent's tools = the chat's bound meeting.
             # switch_meeting can re-scope this mid-conversation by title.
             "resolved_meeting_id": meeting_ctx.get("id") or state.get("meeting_id"),
+            "user_name": user_name,
+            "user_role": user_role,
         }
 
     return load_context
