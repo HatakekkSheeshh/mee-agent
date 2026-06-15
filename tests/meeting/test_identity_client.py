@@ -128,6 +128,14 @@ def test_cache_hits_avoid_second_resolve(monkeypatch):
     assert calls["n"] == 1  # second call served from cache
 
 
+def test_bootstrap_payloads():
+    from scripts.bootstrap_redmine_identity import identity_payload, provider_payload
+    assert provider_payload("redmine") == {"name": "redmine"}
+    p = identity_payload("mee", ["https://mee.example/redmine-callback"])
+    assert p["name"] == "mee"
+    assert p["allowedReturnUrls"] == ["https://mee.example/redmine-callback"]
+
+
 def test_cache_expires_after_ttl(monkeypatch):
     idc.clear_key_cache()
     calls = {"n": 0}
