@@ -19,17 +19,19 @@ pm-agent validates via Graph /me).
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import urllib.request
 from typing import Optional
 
 from meeting.auth.base import UserInfo
 
+logger = logging.getLogger(__name__)
+
 # MSAL implicitly requests openid/profile/offline_access; User.Read gets us a
 # Graph token (validated by pm-agent's /me call) + a refresh token in the cache.
 SCOPES = ["User.Read"]
-
-import json
-import urllib.request
 
 _GRAPH_ME_URL = "https://graph.microsoft.com/v1.0/me?$select=jobTitle,department"
 
@@ -99,8 +101,7 @@ class MicrosoftProvider:
             me = _graph_get_me(access_token)
             return {"job_title": me.get("jobTitle"), "department": me.get("department")}
         except Exception as e:  # noqa: BLE001 — best-effort, login must not break
-            import logging
-            logging.getLogger(__name__).warning("Graph /me fetch failed: %s", e)
+            logger.warning("Graph /me fetch failed (%s): %s", type(e).__name__, str(e)[:120])
             return {}
 
     def exchange_code(self, code: str, redirect_uri: str) -> UserInfo:

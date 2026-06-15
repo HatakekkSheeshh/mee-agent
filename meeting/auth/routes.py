@@ -301,11 +301,15 @@ async def _resolve_role_id(session: AsyncSession, position: Optional[str]):
     """jobTitle → role name → role_id, or None. Best-effort: never raises."""
     if not position:
         return None
-    name = await repo.resolve_role_by_title(session, position)
-    if not name:
+    try:
+        name = await repo.resolve_role_by_title(session, position)
+        if not name:
+            return None
+        role = await repo.get_role(session, name)
+        return role.id if role else None
+    except Exception:
+        logger.warning("role resolution failed for position=%r", position)
         return None
-    role = await repo.get_role(session, name)
-    return role.id if role else None
 
 
 async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
