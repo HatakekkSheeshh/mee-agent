@@ -37,6 +37,7 @@ from meeting.auth.session import (
 )
 from meeting.db.base import get_session
 from meeting.db.models import User
+from meeting.db import repositories as repo
 
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,21 @@ async def callback(
     return resp
 
 
+async def _resolve_role_id(session: AsyncSession, position: Optional[str]):
+    """jobTitle → role name → role_id, or None. Best-effort: never raises."""
+    if not position:
+        return None
+    try:
+        name = await repo.resolve_role_by_title(session, position)
+        if not name:
+            return None
+        role = await repo.get_role(session, name)
+        return role.id if role else None
+    except Exception:
+        logger.warning("role resolution failed for position=%r", position)
+        return None
+
+
 async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
     """Look up by email first (works for both providers). On first sight,
     create the row; on returning, just refresh display_name/avatar/last_login.
@@ -332,6 +348,8 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         # refresh token stays current for minting Graph access tokens later.
         if info.ms_token_cache:
             user.refresh_token = encrypt_token(info.ms_token_cache)
+        user.role_id = await _resolve_role_id(session, info.position)
+        user.position = info.position
         user.last_login_at = datetime.now(timezone.utc)
         return user
 
@@ -342,6 +360,8 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         ms_oid=info.ms_oid,
         ms_tenant_id=info.ms_tenant_id,
         refresh_token=encrypt_token(info.ms_token_cache) if info.ms_token_cache else None,
+        role_id=await _resolve_role_id(session, info.position),
+        position=info.position,
         voice_enrolled=False,
         last_login_at=datetime.now(timezone.utc),
     )

@@ -486,10 +486,21 @@ def _build_whisper_prompt(
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Startup: init LangGraph PostgresSaver. Shutdown: close pool."""
+    """Startup: init OTel tracing + LangGraph PostgresSaver + discover/register
+    Redmine MCP tools. Shutdown: flush traces + close pool."""
+    # Best-effort, env-gated: no-op unless OTEL_ENABLED / LANGFUSE_ENABLED is set.
+    from meeting.observability import init_tracing, shutdown_tracing
+
+    init_tracing(app)
     await init_checkpointer()
+    # Best-effort: registers the deployed Redmine MCP server's tools into the
+    # local registry (disk cache → live list_tools). Returns [] + logs if the
+    # server is unreachable, so the app still boots without Redmine.
+    from meeting.services import load_and_register_redmine_tools
+    await load_and_register_redmine_tools()
     yield
     await close_checkpointer()
+    shutdown_tracing()
 
 
 def create_app(output_dir: str = None) -> FastAPI:
@@ -515,6 +526,9 @@ def create_app(output_dir: str = None) -> FastAPI:
     app.include_router(auth_router)
     # Voice enrollment endpoint — flips users.voice_enrolled
     app.include_router(voiceprints_router)
+    # Per-user Redmine key status probe (FE banner + consent gate)
+    from meeting.api.redmine import router as redmine_router
+    app.include_router(redmine_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):

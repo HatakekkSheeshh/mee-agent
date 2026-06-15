@@ -28,6 +28,11 @@ class UserInfo:
     # callback encrypts this before persisting to users.refresh_token. None for
     # MockProvider (no real Microsoft tokens).
     ms_token_cache: Optional[str] = None
+    # O365 profile (Microsoft Graph /me). position = jobTitle, used to resolve
+    # the user's role at login. None when Graph is unavailable. department is
+    # informational (logging only). Domain is NOT stored (derivable from email).
+    position: Optional[str] = None
+    department: Optional[str] = None
 
 
 class AuthProvider(Protocol):

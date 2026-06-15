@@ -13,6 +13,12 @@ PM_MAX_ROUNDS = 6
 # Safety cap on the unified agent ⇄ tools loop (number of LLM tool-calling rounds).
 MAX_AGENT_ROUNDS = 6
 
+# Explicit opt-in to the pm-agent A2A branch. A message starting with this
+# command (case-insensitive, leading whitespace ok) routes deterministically to
+# pm_task; everything else stays in the unified agent, which now owns the
+# Redmine MCP tools. The FE highlights this token as a command chip.
+PM_AGENT_COMMAND = "/pm-agent"
+
 
 # ─── State ────────────────────────────────────────────────────────
 
@@ -25,8 +31,12 @@ class ChatState(TypedDict, total=False):
 
     # Loaded by load_context
     meeting_context: dict      # title, project_summary_json, recording_moms[]
+    project_memory: str        # distilled current-state recalled from AgentBase (best-effort)
     recent_messages: list[dict]  # last N messages from chat_messages
     resolved_meeting_id: Optional[str]  # bound meeting (or title-resolved) for tool scoping
+    user_name: Optional[str]   # signed-in user's display name (for "tôi/của tôi")
+    user_role: Optional[str]   # signed-in user's resolved role name
+    user_email: Optional[str]  # signed-in user's email → Redmine/company login identity
 
     # Filled by classify_intent (binary router: agent vs pm_task)
     intent: Literal["agent", "pm_task"]

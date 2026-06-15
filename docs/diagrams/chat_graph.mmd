@@ -22,10 +22,10 @@ graph TD;
 	agent -.-> save_reply;
 	agent_approve --> agent_execute;
 	agent_execute -.-> agent;
-	agent_execute -.-> pm_call;
 	agent_execute -.-> save_reply;
 	agent_tools -.-> agent;
 	agent_tools -.-> agent_approve;
+	agent_tools -.-> save_reply;
 	classify_intent -.-> agent;
 	classify_intent -.-> pm_call;
 	load_context --> classify_intent;
@@ -36,7 +36,8 @@ graph TD;
 	pm_call -.-> save_reply;
 	pm_error -.-> pm_call;
 	pm_error -.-> save_reply;
-	pm_reply --> save_reply;
+	pm_reply -.-> pm_call;
+	pm_reply -.-> save_reply;
 	save_reply --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

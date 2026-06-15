@@ -1,0 +1,34 @@
+# Mee backend image — the REAL entrypoint run_meeting.py:
+#   • FastAPI REST/HTTP on :8001
+#   • WebSocket (live transcription) on :9091
+#   • spawns the Celery worker itself when RabbitMQ is reachable
+#     (falls back to inline MoM generation when it isn't).
+#
+# NOTE: the legacy root `Dockerfile` targets main.py:8080 (HTTP-only, no ffmpeg)
+# and is superseded by this file. Build via docker-compose's `app` profile.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# libsndfile1 → soundfile decode; ffmpeg → transcode m4a/aac/opus/webm + the
+# >24MB audio-chunking path in app.py.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# App code + legacy SPA (FastAPI mounts meeting_frontend/ at /) + migrations.
+COPY meeting/ ./meeting/
+COPY meeting_frontend/ ./meeting_frontend/
+COPY alembic/ ./alembic/
+COPY alembic.ini run_meeting.py ./
+
+RUN mkdir -p output
+
+EXPOSE 8001 9091
+
+# Intentionally does NOT run `alembic upgrade` — the shared DB is stamped past
+# the repo head and is run without migrations (see CLAUDE.md / db-alembic-drift).
+CMD ["python", "run_meeting.py"]

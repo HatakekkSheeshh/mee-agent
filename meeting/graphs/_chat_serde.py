@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from meeting.graphs._chat_state import ChatState
@@ -100,17 +101,38 @@ def _last_assistant_text(messages: list[dict]) -> str:
     return ""
 
 
+def _completed_action_note(content: dict) -> str:
+    """A marker appended to a past agent turn whose tools ran to success, so the
+    flattened cross-turn seed carries an explicit 'already done' signal. Without
+    it the model only sees prose and may RE-FIRE a completed side-effect tool
+    (live 2026-06-15: turn-1 create_task re-fired by a turn-2 'liệt kê'). Empty
+    string when the turn had no tools, or the tool result signalled an error
+    (a failed action may legitimately be retried). Pairs with the matching
+    'KHÔNG LẶP HÀNH ĐỘNG ĐÃ XONG' rule in _agent_system_prompt."""
+    tools = [t for t in (content.get("tools_called") or []) if t]
+    if not tools:
+        return ""
+    result = content.get("tool_result")
+    if isinstance(result, dict) and result.get("error"):
+        return ""
+    return (
+        "\n\n[Bối cảnh hệ thống: các công cụ sau đã CHẠY XONG ở lượt trước và "
+        f"KHÔNG được gọi lại trừ khi lượt HIỆN TẠI yêu cầu rõ: {', '.join(tools)}.]"
+    )
+
+
 def _seed_agent_messages(state: ChatState) -> list[dict]:
     """Build the initial OpenAI message list from recent history + this turn."""
     msgs: list[dict] = []
     for m in (state.get("recent_messages") or [])[-6:]:
-        content = (m.get("content") or {}).get("text", "")
-        if not content:
+        content = m.get("content") or {}
+        text = content.get("text", "")
+        if not text:
             continue
         if m.get("role") == "user":
-            msgs.append({"role": "user", "content": content})
+            msgs.append({"role": "user", "content": text})
         elif m.get("role") == "agent":
-            msgs.append({"role": "assistant", "content": content})
+            msgs.append({"role": "assistant", "content": text + _completed_action_note(content)})
     msgs.append({"role": "user", "content": state.get("user_message", "")})
     return msgs
 
@@ -124,6 +146,111 @@ def _result_to_dict(result: PmAgentResult) -> dict:
         "issues": result.issues,
         "context_id": result.context_id,
     }
+
+
+# ─── leaked tool-call recovery ──────────────────────────────────────
+# minimax-m2.5 (and other Anthropic-XML-trained models) sometimes emit tool
+# calls as TEXT in message.content instead of native OpenAI tool_calls, when
+# the serving layer (VNG MaaS / vLLM) has no tool-call parser configured. The
+# leaked shape:
+#     minimax:tool_call                 (or wrapped in <minimax:tool_call>…)
+#     <invoke name="send_email">
+#       <parameter name="to">andvd6</parameter>
+#       <parameter name="subject">…</parameter>
+#     </invoke>                         (closing tags are sometimes omitted)
+# We recover them client-side so the agent loop fires regardless of MaaS config.
+_TOOLCALL_START_RE = re.compile(r"<minimax:tool_call>|minimax:tool_call|<invoke\b")
+_INVOKE_BLOCK_RE = re.compile(
+    r'<invoke\s+name="([^"]+)"\s*>(.*?)(?:</invoke>|(?=<invoke\b)|\Z)',
+    re.DOTALL,
+)
+_PARAM_RE = re.compile(
+    r'<parameter\s+name="([^"]+)"\s*>(.*?)(?:</parameter>|(?=<parameter\b)|\Z)',
+    re.DOTALL,
+)
+
+
+def parse_leaked_tool_calls(content: Optional[str]) -> tuple[list[dict], str]:
+    """Recover tool calls a model leaked into text content (minimax/Anthropic
+    XML) into the native _tc_to_dict shape so the agent loop consumes them
+    unchanged.
+
+    Returns (tool_calls, cleaned_text):
+      - tool_calls: [{id, type:"function", function:{name, arguments(JSON str)}}]
+      - cleaned_text: prose before the tool-call region (often ""), stripped.
+    Returns ([], content) when there is no tool-call markup (or it is present
+    but unparseable — the original text is surfaced untouched).
+    """
+    if not content:
+        return [], content or ""
+    start = _TOOLCALL_START_RE.search(content)
+    if not start:
+        return [], content
+    prose = content[: start.start()]
+    region = content[start.start():]
+    calls: list[dict] = []
+    for i, m in enumerate(_INVOKE_BLOCK_RE.finditer(region)):
+        args = {pm.group(1): pm.group(2).strip() for pm in _PARAM_RE.finditer(m.group(2))}
+        calls.append({
+            "id": f"call_{i}",
+            "type": "function",
+            "function": {"name": m.group(1), "arguments": json.dumps(args, ensure_ascii=False)},
+        })
+    if not calls:
+        return [], content
+    return calls, prose.strip()
+
+
+# ─── create_task → Redmine MCP apply (P2) ──────────────────────────
+# Map an approved create_task template item ({subject, assignee, due_date,
+# description}) onto the deployed MCP write tools. LIVE-SCHEMA NOTE (probe
+# 2026-06-12): create_redmine_issue REQUIRES tracker + assigned_to and exposes
+# `due_date` as a REAL field; update_redmine_issue exposes `due_date` + `notes`.
+# So due_date is passed DIRECTLY (never folded into description), and an item's
+# free-text description becomes an update `notes` journal comment.
+def redmine_create_args(project: str, item: dict) -> dict:
+    """Map a create_task template item → create_redmine_issue args.
+
+    Required fields are always present (tracker defaults to 'Task' when the item
+    has none); optionals are included only when the item carries them.
+    """
+    args = {
+        "project_name": project,
+        "subject": item.get("subject", ""),
+        "tracker": item.get("tracker") or "Task",
+        "assigned_to": item.get("assignee", ""),
+    }
+    description = (item.get("description") or "").strip()
+    if description:
+        args["description"] = description
+    due = (item.get("due_date") or "").strip()
+    if due:
+        args["due_date"] = due
+    return args
+
+
+def redmine_update_args(project: str, item: dict, issue_id: str) -> dict:
+    """Map a template item → update_redmine_issue args (only present fields)."""
+    args: dict = {"issue_id": str(issue_id), "project_name": project}
+    if item.get("subject"):
+        args["subject"] = item["subject"]
+    if item.get("assignee"):
+        args["assigned_to"] = item["assignee"]
+    if item.get("due_date"):
+        args["due_date"] = item["due_date"]
+    if item.get("description"):
+        args["notes"] = item["description"]
+    return args
+
+
+def summarize_redmine_apply(project: str, results: list[dict]) -> str:
+    """Vietnamese summary of a batch apply ({subject, result} per item)."""
+    failed = [r for r in results if (r.get("result") or {}).get("error")]
+    ok_count = len(results) - len(failed)
+    lines = [f"Đã đồng bộ {ok_count}/{len(results)} việc lên Redmine (dự án {project})."]
+    for r in failed:
+        lines.append(f"- ❌ {r.get('subject', '')}: {(r.get('result') or {}).get('error')}")
+    return "\n".join(lines)
 
 
 def _decision_to_payload(decision: Optional[dict]) -> dict:

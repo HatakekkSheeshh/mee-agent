@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
+    ARRAY,
     JSON,
     Boolean,
     CheckConstraint,
@@ -47,6 +48,14 @@ class User(Base):
     display_name: Mapped[Optional[str]] = mapped_column(Text)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token: Mapped[Optional[str]] = mapped_column(Text)  # AES-256 encrypted
+    # Resolved from the O365 jobTitle at login (resolve_role_by_title). NULL when
+    # the title doesn't match any pool role → generic kickoff.
+    role_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roles.id"), nullable=True
+    )
+    # Raw O365 jobTitle as-received (pre-resolution). Persisted so a background
+    # worker can later classify titles that didn't match any pool role.
+    position: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # True once user records the enrollment phrase post-login. Matching
     # voiceprint row lives in `voiceprints` with label="enrollment".
     voice_enrolled: Mapped[bool] = mapped_column(
@@ -57,12 +66,38 @@ class User(Base):
     )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    role: Mapped[Optional["Role"]] = relationship("Role", lazy="selectin")
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="creator")
     memberships: Mapped[list["MeetingMember"]] = relationship(
         foreign_keys="MeetingMember.user_id", back_populates="user"
     )
 
     __table_args__ = (Index("idx_users_email", "email"),)
+
+
+class Role(Base):
+    """Role-persona catalog: the authoritative, enumerable pool of roles.
+
+    Each row drives Mee's proactive chat kickoff — ``data_plan`` selects which
+    Redmine reads to run (own_tasks | cross_project | minimal), ``kickoff_prompt``
+    steers the greeting's tone. Adding a role = inserting a row (no code change).
+    """
+
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    data_plan: Mapped[str] = mapped_column(Text, nullable=False, default="minimal")
+    kickoff_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}", default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class Meeting(Base):

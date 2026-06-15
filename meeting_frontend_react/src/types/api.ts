@@ -212,6 +212,15 @@ export interface PendingAction {
   task_id?: string | null;
 }
 
+/** A user-scoped chat session, as listed in the sidebar (decoupled from any project). */
+export interface ChatSessionSummary {
+  id: string;
+  meeting_id: string | null;
+  title: string | null;
+  created_at: string;
+  last_activity_at: string;
+}
+
 /** Envelope returned by POST /messages and /pending-actions/{id}/approve|reject. */
 export type ChatTurnResult =
   | { status: "complete"; reply: string; intent?: string; tool_result?: unknown }

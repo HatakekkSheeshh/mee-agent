@@ -36,6 +36,7 @@ from meeting.note_generator import generate_meeting_notes
 from meeting.report_generator import generate_mom_markdown
 from meeting.services import MemoryService, get_memory_service
 from meeting.services.memory_service import MemoryEvent
+from meeting.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +398,12 @@ def make_save_results(session: AsyncSession, memory_service: MemoryService):
                 meeting_id=uuid.UUID(meeting_id),
             )
             saved_count = len(events)
+
+        # Event-driven AgentBase re-sync: this recording's MoM just changed the
+        # project's state. Fire-and-forget (own session, best-effort) so it never
+        # blocks or breaks MoM generation. No-op if MEMORY_ID is unset.
+        if meeting_id:
+            schedule_project_sync(meeting_id)
 
         return {
             "saved_paths": {

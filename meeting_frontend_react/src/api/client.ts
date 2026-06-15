@@ -10,6 +10,7 @@ import type {
   CleanResponse,
   MoMJson,
   ProjectSummary,
+  ChatSessionSummary,
   ChatStreamStep,
   ChatTurnResult,
   Voiceprint,
@@ -369,16 +370,67 @@ export const api = {
       `/auth/login?next=${encodeURIComponent(next)}`,
   },
 
+  // ─── Redmine per-user key status ───────────────────────────────────
+  redmine: {
+    /** Post-login probe: key present? tools ok? pm-agent ok? + consent gate_url. */
+    status: () =>
+      http<{
+        redmine_key_present: boolean;
+        redmine_tools_ok: boolean;
+        registered_tool_count: number;
+        expected_tool_count: number;
+        pm_agent_ok: boolean;
+        gate_url: string | null;
+        all_ok: boolean;
+      }>("GET", "/api/redmine/status"),
+  },
+
   // ─── Chat ──────────────────────────────────────────────────────────
   chat: {
-    createSession: (meetingId: string) =>
+    // Create a user-scoped session. No meeting binding — grounding is per-turn.
+    createSession: (title?: string) =>
       http<{ id: string; meeting_id: string | null; title: string; created_at: string }>(
-        "POST", "/api/chat/sessions", { meeting_id: meetingId },
+        "POST", "/api/chat/sessions", title ? { title } : {},
+      ),
+    // List the user's sessions (sidebar), most-recently-active first.
+    listSessions: () =>
+      http<ChatSessionSummary[]>("GET", "/api/chat/sessions"),
+    // Session detail + messages (used when switching sessions in the sidebar).
+    sessionDetail: (sessionId: string) =>
+      http<{
+        id: string;
+        meeting_id: string | null;
+        title: string | null;
+        messages: Array<{
+          id: string;
+          role: string;
+          content: { text?: string };
+          created_at: string;
+        }>;
+      }>("GET", `/api/chat/sessions/${sessionId}`),
+    // Remove a session permanently (hard delete + checkpoint purge).
+    remove: (sessionId: string) =>
+      http<{ status: string; session_id: string }>(
+        "DELETE", `/api/chat/sessions/${sessionId}`,
+      ),
+    // Rename a session (set its title).
+    rename: (sessionId: string, title: string) =>
+      http<{ id: string; title: string | null }>(
+        "PATCH", `/api/chat/sessions/${sessionId}`, { title },
+      ),
+    // Proactive kickoff: Mee speaks first on an empty thread. Returns the
+    // greeting (already persisted as an agent message), or {reply:null,
+    // skipped:true} if the thread already had messages. Never throws server-side.
+    kickoff: (sessionId: string, role?: string) =>
+      http<{ reply: string | null; role?: string | null; skipped?: boolean }>(
+        "POST", `/api/chat/sessions/${sessionId}/kickoff`,
+        role ? { role } : undefined,
       ),
     // Backend MessageSend expects `text` (NOT `message`); returns a status envelope.
-    send: (sessionId: string, text: string) =>
+    send: (sessionId: string, text: string, meetingId: string | null) =>
       http<ChatTurnResult>(
-        "POST", `/api/chat/sessions/${sessionId}/messages`, { text },
+        "POST", `/api/chat/sessions/${sessionId}/messages`,
+        { text, meeting_id: meetingId },
       ),
     // Streaming variant: SSE frames over a POST body. `onStep` fires per
     // progress event; resolves with the terminal frame mapped to the same
@@ -386,13 +438,14 @@ export const api = {
     sendStream: async (
       sessionId: string,
       text: string,
+      meetingId: string | null,
       onStep: (ev: ChatStreamStep) => void,
       signal?: AbortSignal,
     ): Promise<ChatTurnResult> => {
       const r = await fetch(`/api/chat/sessions/${sessionId}/messages/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, meeting_id: meetingId }),
         signal,
       });
       if (!r.ok || !r.body) {

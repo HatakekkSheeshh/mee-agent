@@ -23,6 +23,7 @@ from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meeting.db import repositories as repo
+from meeting.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ async def generate_project_summary(
             "generated_at": datetime.utcnow().isoformat(),
         }
         await repo.save_project_summary(session, meeting_id, summary)
+        schedule_project_sync(meeting_id)
         return summary
 
     # Build text blob for LLM narrative
@@ -164,4 +166,5 @@ async def generate_project_summary(
         "generated_at": datetime.utcnow().isoformat(),
     }
     await repo.save_project_summary(session, meeting_id, summary)
+    schedule_project_sync(meeting_id)
     return summary

@@ -1,0 +1,33 @@
+# Benchmark prompt set: agent-memory (AgentBase distilled record) vs Postgres (raw).
+#
+# Each entry:
+#   meeting: a project title (ILIKE-resolved) OR a meeting UUID
+#   prompt:  the user question to measure both sources against
+#   note:    (optional) free-text reminder of what this prompt probes
+#
+# Edit/extend freely — the runner (scripts/bench_memory.py) re-reads this each run.
+# Default project: "AI Innovation Project" (id e7f14228-67ed-4c48-8aeb-e79883bb496b).
+
+- meeting: AI Innovation Project
+  prompt: "Tóm tắt meeting 1"
+  note: per-session summary — distilled record keeps recent sessions in detail
+
+- meeting: AI Innovation Project
+  prompt: "Trong meeting 4 thì anhvd6 phụ trách gì"
+  note: per-session + per-person — probes whether the distill kept this detail
+
+- meeting: AI Innovation Project
+  prompt: "Liệt kê các phiên họp của dự án này"
+  note: roster question — both sources should enumerate sessions
+
+- meeting: AI Innovation Project
+  prompt: "Dự án đang có những blocker nào đang mở?"
+  note: aggregate state — the LLM distill's strong suit
+
+- meeting: AI Innovation Project
+  prompt: "Những quyết định quan trọng của dự án là gì?"
+  note: aggregate decisions across sessions
+
+- meeting: AI Innovation Project
+  prompt: "Việc của Hiếu trong dự án là gì?"
+  note: per-person across sessions — login↔display-name gap

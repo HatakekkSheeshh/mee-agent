@@ -19,29 +19,71 @@ import meeting.services as _services  # default toolset bundle (DI seam)
 from meeting.db import repositories as repo
 from meeting.graphs._chat_llm import _llm_client, _llm_model
 from meeting.graphs._chat_prompts import _to_llm_messages
+from meeting.graphs.chat_graph.redmine_format import format_issue_list, is_formattable
 from meeting.graphs._chat_serde import (
     _json,
     _last_assistant_text,
     _parse_tool_args,
-    _reconcile_payloads,
     _seed_agent_messages,
     _tc_to_dict,
+    parse_leaked_tool_calls,
+    redmine_create_args,
+    redmine_update_args,
+    summarize_redmine_apply,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
-from meeting.services.tools.create_task import assignee_matches
+from meeting.services.tools.create_task import assignee_matches, build_agenda_task_items
 
 logger = logging.getLogger(__name__)
 
 # Canned acknowledgement for a rejected side-effect tool. The reject ends the turn
 # deterministically (route="finish") instead of looping back to the LLM, which would
 # re-read the standing user instruction from the checkpoint and re-attempt the action.
-REJECT_REPLY = "Đã hủy. Tui hong tạo task nữa."
+REJECT_REPLY = "Đã hủy theo yêu cầu của bạn. Nếu muốn thử lại, bạn cứ nói nhé!"
+
+# Prefix for the verbatim-error reply when an approved side-effect tool fails. The
+# loop finishes here instead of looping back to the LLM, so the model can't re-read
+# the standing user instruction and retry the action with guessed args — a
+# deterministic backstop for the same rule stated in _agent_system_prompt.
+TOOL_ERROR_REPLY_PREFIX = "Thao tác chưa thực hiện được do lỗi sau:"
+
+
+def _tool_error(result) -> Optional[str]:
+    """Return the error message if a tool result signals failure, else None.
+    MCP/proxy tools surface failures as {"error": ...}; others may use
+    {"status": "error", ...}."""
+    if not isinstance(result, dict):
+        return None
+    err = result.get("error")
+    if err:
+        return str(err)
+    if result.get("status") == "error":
+        return str(result.get("message") or result.get("reason") or "lỗi không xác định")
+    return None
+
+# Postgres-backed meeting-data grounding tools, DETACHED from the agent's surface:
+# the agent grounds Q&A on the distilled AgentBase project_memory injected at
+# load_context, not live Postgres reads. The tool modules stay registered (still
+# callable / unit-tested); they're just not offered to the LLM.
+#
+# `list_recordings` + `recording_mom` are the deliberate EXCEPTIONS — kept attached
+# as the agent's data-crawl chain. The memory bullets carry session labels/state but
+# no recording_id and only distilled detail, so the model resolves "Meeting 1" →
+# recording_id via list_recordings, then reads that session's EXACT items via
+# recording_mom — needed for per-recording create_task scoping AND per-meeting task
+# summaries the projection can't serve. `retrieve` (heavy RAG) + `search_transcript`
+# stay detached: memory replaces them for Q&A. Re-attach by removing from this set.
+DETACHED_TOOLS = frozenset({"retrieve", "search_transcript"})
+
 
 def _openai_tools(*, tools=_services) -> list[dict]:
     """Tool registry → OpenAI tool schemas, with meeting_id stripped (the agent
-    never supplies it; we inject resolved_meeting_id server-side)."""
+    never supplies it; we inject resolved_meeting_id server-side). Tools in
+    DETACHED_TOOLS are omitted so the LLM can't call them."""
     out = []
     for s in tools.list_tools():
+        if s["name"] in DETACHED_TOOLS:
+            continue
         schema = json.loads(json.dumps(s.get("schema") or {"type": "object", "properties": {}}))
         props = schema.get("properties") or {}
         props.pop("meeting_id", None)
@@ -100,6 +142,7 @@ async def _build_reconcile_template(
         # "trong Meeting 1" → the model passes the recording_id it saw in
         # list_recordings; scope to that recording's MoM instead of aggregating
         # the whole project.
+        mom = {}
         if recording_id:
             try:
                 mom = await repo.get_recording_mom(session, uuid.UUID(recording_id)) or {}
@@ -111,7 +154,7 @@ async def _build_reconcile_template(
             action_items = await repo.get_mom_action_items(
                 session, uuid.UUID(resolved_meeting_id)
             )
-        items = tools.build_task_items(action_items)
+        items = tools.build_task_items(action_items, description=(args.get("description") or "").strip())
         # "tạo task cho <người>" → keep the {project, items} shape but narrow to
         # that person's items. assignee_matches bridges the Redmine-login ↔
         # display-name gap ("hieunq3" ↔ pic "Hiếu").
@@ -121,6 +164,18 @@ async def _build_reconcile_template(
                 it for it in items
                 if assignee_matches(assignee, it.get("assignee") or "")
             ]
+        # Agenda-only phiên: no action_items to track, but the session DID cover
+        # topics. Fall back to one candidate task per agenda topic, stamping the
+        # merged assignee + deadline as editable defaults (user refines on the HITL
+        # card). Recording scope only — a project-wide aggregate has no single
+        # agenda to draw from. Guard on raw action_items, not the assignee-filtered
+        # `items`, so "no items for THIS person" doesn't trigger an agenda dump.
+        if not action_items and mom.get("agenda_items"):
+            due = args.get("deadline") or args.get("due_date") or ""
+            items = build_agenda_task_items(
+                mom.get("agenda_items") or [], assignee=assignee, due_date=due,
+                description=(args.get("description") or "").strip(),
+            )
     else:
         items = []
     return {"project": project, "items": items}
@@ -142,17 +197,13 @@ def make_agent(llm=None, *, tools=None):
                 or "Mình đã thử nhiều bước nhưng chưa hoàn tất được, bạn thử lại nhé.",
             }
 
-        # Force grounding: on the FIRST turn of a content/recording question
-        # (grounding="required"), use tool_choice="required" so gemma MUST emit a
-        # tool call instead of regurgitating a stale summary from recent_messages.
-        # Only round 0 is forced — round ≥1 stays "auto" so the post-tool answer
-        # turn can finish and the loop terminates. Verified Task 0: the MaaS gemma
-        # endpoint honors tool_choice="required".
-        tool_choice = (
-            "required"
-            if state.get("grounding") == "required" and rounds == 0
-            else "auto"
-        )
+        # Grounding tools (retrieve/recording_mom/list_recordings) are detached —
+        # the agent grounds on the distilled project_memory injected at
+        # load_context. Never force a tool call (the only tools left are
+        # create_task/switch_meeting/send_email — forcing those would be wrong);
+        # always "auto" so the model answers from memory or calls an action tool
+        # when the user actually asks for one.
+        tool_choice = "auto"
         client = llm or _llm_client()
         try:
             resp = client.chat.completions.create(
@@ -173,8 +224,18 @@ def make_agent(llm=None, *, tools=None):
             }
 
         msg = resp.choices[0].message
-        tool_calls = getattr(msg, "tool_calls", None)
-        if not tool_calls:
+        native = getattr(msg, "tool_calls", None)
+        if native:
+            tc_dicts = [_tc_to_dict(tc) for tc in native]
+            assistant_content = msg.content
+        else:
+            # minimax-m2.5 may leak tool calls as XML text in content when the
+            # serving layer has no tool-call parser — recover them so the loop fires.
+            tc_dicts, assistant_content = parse_leaked_tool_calls(msg.content)
+            if tc_dicts:
+                logger.info("[Node agent] recovered %d leaked tool call(s) from content", len(tc_dicts))
+
+        if not tc_dicts:
             reply = (msg.content or "").strip()
             logger.info(f"[Node agent] final answer (len={len(reply)})")
             return {
@@ -185,13 +246,11 @@ def make_agent(llm=None, *, tools=None):
 
         assistant_msg = {
             "role": "assistant",
-            "content": msg.content,
-            "tool_calls": [_tc_to_dict(tc) for tc in tool_calls],
+            "content": assistant_content or None,
+            "tool_calls": tc_dicts,
         }
-        logger.info(
-            "[Node agent] round=%d tool_calls=%s",
-            rounds + 1, [tc.function.name for tc in tool_calls],
-        )
+        names = [tc["function"]["name"] for tc in tc_dicts]
+        logger.info("[Node agent] round=%d tool_calls=%s", rounds + 1, names)
         return {
             "agent_messages": messages + [assistant_msg],
             "agent_rounds": rounds + 1,
@@ -214,6 +273,7 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
 
         pending = None
         switched = None
+        executed: list[tuple[str, dict, object]] = []   # (name, args, result) for read calls
         for tc in tool_calls:
             name = tc["function"]["name"]
             args = _inject_meeting(
@@ -246,6 +306,7 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
                 result = await ts.execute_tool(name, args, session=session, user_id=user_id)
             if name == "switch_meeting" and isinstance(result, dict) and result.get("meeting_id"):
                 switched = result["meeting_id"]
+            executed.append((name, args, result))
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _json(result)})
 
         out: dict = {"agent_messages": messages}
@@ -254,6 +315,24 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
         if pending:
             out["pending_tool"] = pending
             out["agent_route"] = "approve"
+        elif (
+            executed
+            and len(executed) == len(tool_calls)
+            and all(is_formattable(name) for name, _, _ in executed)
+        ):
+            # Pure read-display round: render the table(s) in code and finish the
+            # turn — the LLM never re-renders the rows (the #28815 fix). Any render
+            # that can't parse its result (None) makes us fall back to the LLM.
+            renders = [format_issue_list(name, args, result) for name, args, result in executed]
+            if all(r is not None for r in renders):
+                out["final_reply"] = "\n\n".join(renders)
+                out["tool_result"] = {
+                    "status": "ok", "via": "redmine_read",
+                    "tools": [name for name, _, _ in executed],
+                }
+                out["agent_route"] = "done"
+            else:
+                out["agent_route"] = "agent"
         else:
             out["agent_route"] = "agent"
         return out
@@ -308,31 +387,46 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
         user_id = uuid.UUID(state["user_id"])
         messages = list(state.get("agent_messages") or [])
 
-        # Approved create_task → bridge into the pm reconcile loop (GATE 2 is
-        # pm-agent's own write approval). The user may edit `project` on the card.
+        # Approved create_task → apply the batch directly over the Redmine MCP.
+        # One HITL approval (agent_approve) gated the whole batch; execution here
+        # is a deterministic create/update loop, terminal (no second LLM turn).
+        # An item carrying an issue_id is an update; otherwise a create.
         if action == "approved" and name == "create_task":
             template = dict(args)  # {project, items}
             if decision.get("edited_args"):
                 template.update(decision["edited_args"])
             project = template.get("project", "")
-            items = template.get("items", [])
-            note = decision.get("reason") or ""
-            payloads = _reconcile_payloads(project, items, note=note)
+            items = template.get("items", []) or []
+            results = []
+            for it in items:
+                issue_id = str(it.get("issue_id") or "").strip()
+                if issue_id:
+                    res = await ts.execute_tool(
+                        "update_redmine_issue",
+                        redmine_update_args(project, it, issue_id),
+                        session=session, user_id=user_id,
+                    )
+                else:
+                    res = await ts.execute_tool(
+                        "create_redmine_issue",
+                        redmine_create_args(project, it),
+                        session=session, user_id=user_id,
+                    )
+                results.append(
+                    {"subject": it.get("subject", ""), "issue_id": issue_id, "result": res}
+                )
             logger.info(
-                "[Node agent_execute] create_task → pm reconcile (%d item(s), %d send(s))",
-                len(items), len(payloads),
+                "[Node agent_execute] create_task → MCP apply (%d item(s))", len(items)
             )
             return {
                 "pending_tool": None,
                 "user_decision": None,
-                "agent_route": "reconcile",
-                "pm_next_payload": payloads[0],
-                "pm_queue": payloads[1:],
-                "pm_replies": [],
-                "pm_rounds": 0,
+                "agent_route": "finish",
                 "tool_result": {
-                    "status": "reconcile_handoff", "project": project, "count": len(items),
+                    "status": "redmine_apply", "project": project,
+                    "count": len(items), "results": results,
                 },
+                "final_reply": summarize_redmine_apply(project, results),
             }
 
         # Rejected side-effect tool → terminal. Append the rejected result (keeps the
@@ -361,6 +455,27 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
 
         if tc_id is not None:
             messages.append({"role": "tool", "tool_call_id": tc_id, "content": _json(result)})
+
+        # Loop-side guard: an errored side-effect tool ends the turn instead of
+        # looping back to the agent. Looping back would let the LLM re-read the
+        # standing user instruction and retry the action with guessed args — the
+        # belt-and-suspenders for the prompt's "BÁO lỗi rồi DỪNG" rule. Report the
+        # error verbatim and stop.
+        err = _tool_error(result)
+        if err is not None:
+            logger.info(
+                "[Node agent_execute] tool=%r returned error → finish (no retry): %s",
+                name, err,
+            )
+            return {
+                "agent_messages": messages,
+                "pending_tool": None,
+                "user_decision": None,
+                "tool_result": result,
+                "agent_route": "finish",
+                "final_reply": f"{TOOL_ERROR_REPLY_PREFIX} {err}",
+            }
+
         logger.info(f"[Node agent_execute] tool={name!r} action={action!r}")
         return {
             "agent_messages": messages,
@@ -375,16 +490,18 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
 def route_after_agent(state: ChatState) -> Literal["agent_tools", "save_reply"]:
     return "agent_tools" if state.get("agent_route") == "tools" else "save_reply"
 
-def route_after_agent_tools(state: ChatState) -> Literal["agent", "agent_approve"]:
-    return "agent_approve" if state.get("agent_route") == "approve" else "agent"
-
-def route_after_agent_execute(state: ChatState) -> Literal["agent", "pm_call", "save_reply"]:
-    """After an approved create_task, bridge into the pm reconcile loop; on a
-    rejected side-effect tool, finish the turn (terminal); otherwise loop back to
-    the agent (normal approved side-effect tools)."""
+def route_after_agent_tools(
+    state: ChatState,
+) -> Literal["agent", "agent_approve", "save_reply"]:
     route = state.get("agent_route")
-    if route == "reconcile":
-        return "pm_call"
-    if route == "finish":
+    if route == "approve":
+        return "agent_approve"
+    if route == "done":
         return "save_reply"
     return "agent"
+
+def route_after_agent_execute(state: ChatState) -> Literal["agent", "save_reply"]:
+    """Finish the turn after a rejected side-effect tool or a completed batch
+    apply (agent_route="finish"); otherwise loop back to the agent (normal
+    approved single side-effect tools)."""
+    return "save_reply" if state.get("agent_route") == "finish" else "agent"

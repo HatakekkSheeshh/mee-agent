@@ -25,6 +25,7 @@ import json
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from meeting.graphs._chat_prompts import _agent_system_prompt
 from meeting.graphs.chat_graph import _seed_agent_messages
 from tests.meeting.test_agent_loop import (
     FakeLLM,
@@ -60,6 +61,80 @@ def test_seed_includes_prior_turns_in_order():
     assert msgs[0]["content"] == TURN1_USER
     assert msgs[1]["content"] == TURN1_AGENT
     assert msgs[2]["content"] == TURN2_USER
+
+
+# ─── 1b. prompt carries an explicit multi-turn MERGE directive ──────
+#
+# The harness demonstrably hands the model the prior turns (tests 2+3 below);
+# the live loss is gemma treating each message as standalone. The only in-process
+# lever is the system prompt, so pin that it instructs the model to GỘP a
+# follow-up that supplies missing args into the in-flight action instead of
+# re-asking. Behavioral proof (does gemma actually merge) is a live run — a
+# FakeLLM can't exercise the real model.
+
+def test_system_prompt_has_multiturn_merge_rule():
+    prompt = _agent_system_prompt(_initial(TURN2_USER))
+    # the continuity rule exists and is named distinctly
+    assert "HỘI THOẠI LIÊN TỤC" in prompt
+    assert "GỘP" in prompt
+    # it explicitly forbids re-asking for already-supplied info
+    assert "KHÔNG hỏi lại" in prompt
+    # it grounds the rule with the canonical email-across-two-turns example
+    assert "send_email" in prompt
+
+
+# ─── 1c. completed prior actions are marked done in the seed ────────
+#
+# Live finding 2026-06-15: turn 1 "tạo task trên Redmine" → done; turn 2
+# "liệt kê task trên Redmine" → the model RE-FIRES create_task, because the
+# flattened seed only carries the prose reply (no structured signal the tool
+# already ran). Mark completed tool turns explicitly so the model won't repeat.
+
+RECENT_DONE_ACTION = [
+    {"role": "user", "content": {"text": "tạo task trên Redmine"}},
+    {"role": "agent", "content": {
+        "text": "Đã đồng bộ 3/3 việc lên Redmine (dự án Mee).",
+        "tools_called": ["create_task"],
+        "tool_result": {"status": "redmine_apply", "project": "Mee", "count": 3},
+    }},
+]
+
+
+def test_seed_marks_completed_action_so_it_is_not_repeated():
+    msgs = _seed_agent_messages(
+        {"recent_messages": RECENT_DONE_ACTION, "user_message": "liệt kê task trên Redmine"}
+    )
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    agent_text = msgs[1]["content"]
+    assert "Đã đồng bộ 3/3" in agent_text          # original reply preserved
+    assert "CHẠY XONG" in agent_text               # explicit completed-action marker
+    assert "create_task" in agent_text             # names the tool so the model won't re-fire
+
+
+def test_seed_does_not_mark_failed_action_done():
+    recent = [
+        {"role": "user", "content": {"text": "tạo task"}},
+        {"role": "agent", "content": {
+            "text": "Thao tác chưa thực hiện được do lỗi sau: boom",
+            "tools_called": ["create_redmine_issue"],
+            "tool_result": {"error": "boom"},
+        }},
+    ]
+    msgs = _seed_agent_messages({"recent_messages": recent, "user_message": "thử lại"})
+    # A failed action must NOT be marked done — the user may legitimately retry.
+    assert "CHẠY XONG" not in msgs[1]["content"]
+
+
+def test_seed_no_marker_for_plain_text_turn():
+    # Pure-text agent turn (no tools_called) stays byte-for-byte unchanged.
+    msgs = _seed_agent_messages({"recent_messages": RECENT, "user_message": TURN2_USER})
+    assert msgs[1]["content"] == TURN1_AGENT
+
+
+def test_system_prompt_forbids_repeating_completed_action():
+    prompt = _agent_system_prompt(_initial("liệt kê task trên Redmine"))
+    assert "KHÔNG LẶP HÀNH ĐỘNG" in prompt
+    assert "liệt kê" in prompt   # grounds the rule: a 'list' request is read-only
 
 
 # ─── 2+3. follow-up turn: context reaches the LLM; merged call works ─

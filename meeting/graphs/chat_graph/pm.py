@@ -46,6 +46,21 @@ def make_pm_call(pm_client):
         # callers → client falls back to its static api_key.
         bearer = state.get("pm_user_token")
 
+        # Guard empty text: a bare "/pm-agent" opt-in strips to an empty
+        # user_message, and pm-agent rejects empty text ("Message.text cannot be
+        # empty"). Don't send — ask the user what they want instead.
+        if kind in (None, "start", "text") and not (payload.get("text") or "").strip():
+            logger.info("[Node pm_call] empty text — skipping A2A send, prompting user")
+            return {
+                "pm_rounds": rounds,
+                "pm_route": "end",
+                "final_reply": (
+                    "Bạn muốn pm-agent làm gì trên Redmine? Hãy nhập yêu cầu ngay "
+                    "sau `/pm-agent` (ví dụ: `/pm-agent tạo task deploy v1`)."
+                ),
+                "tool_result": {"status": "skipped", "reason": "empty_text", "via": "pm_agent"},
+            }
+
         try:
             client = pm_client or get_pm_agent_client()
             if kind == "reconcile":
