@@ -60,6 +60,15 @@ export function ChatPane() {
   const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+    // Remember the active session across agent-toggle off/on (ChatPane unmounts
+    // when the agent is closed; this restores the session the user was viewing).
+    if (activeSessionId) {
+      try {
+        localStorage.setItem("mee.activeSessionId", activeSessionId);
+      } catch {
+        /* ignore quota / unavailable */
+      }
+    }
   }, [activeSessionId]);
   // Session picker is a dropdown ("list down") rather than an always-visible row.
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -207,8 +216,20 @@ export function ChatPane() {
       try {
         const list = await api.chat.listSessions();
         setSessions(list);
-        if (list.length > 0) await openSession(list[0].id);
-        else await createAndOpenSession();
+        if (list.length > 0) {
+          // Prefer the session the user last viewed (survives agent toggle);
+          // fall back to the most-recently-active if it's gone.
+          let saved: string | null = null;
+          try {
+            saved = localStorage.getItem("mee.activeSessionId");
+          } catch {
+            /* ignore */
+          }
+          const target = saved && list.some((s) => s.id === saved) ? saved : list[0].id;
+          await openSession(target);
+        } else {
+          await createAndOpenSession();
+        }
       } catch {
         /* best-effort — an empty pane with the New-session button stays usable */
       }
