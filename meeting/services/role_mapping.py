@@ -10,7 +10,15 @@ data_plan). See docs/superpowers/specs/2026-06-14-oid-role-persona-design.md.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
+from collections.abc import Callable, Sequence
+
+logger = logging.getLogger(__name__)
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -35,3 +43,67 @@ def resolve_role(job_title: str | None, roles) -> str | None:
         if any(normalize(c) == target for c in candidates):
             return role.name
     return None
+
+
+_CLASSIFY_SYSTEM = """\
+Bạn phân loại CHỨC DANH (jobTitle) của một nhân sự vào ĐÚNG MỘT vai trò trong
+danh sách CỐ ĐỊNH dưới đây. CHỈ được chọn tên vai trò có sẵn — KHÔNG bịa tên mới.
+
+Các vai trò (name — mô tả — data_plan):
+{catalog}
+
+Chức danh cần phân loại: "{job_title}"
+
+Trả về DUY NHẤT một JSON: {{"role": "<tên vai trò chính xác trong danh sách>",
+"confidence": <0..1>}}. Nếu không vai trò nào hợp lý, trả về đúng chữ: NONE
+"""
+
+
+def _strip_think(text: str) -> str:
+    return _THINK_RE.sub("", text or "").strip()
+
+
+def classify_role(
+    job_title: str | None,
+    roles: Sequence,                      # objects with .name/.description/.data_plan
+    *,
+    generate: Callable[[list[dict[str, str]]], str],
+    threshold: float = 0.6,
+) -> str | None:
+    """LLM fallback: map an unmatched jobTitle to the best-fit EXISTING role name.
+
+    `generate(messages) -> str` is injected. Returns a pool role name only when the
+    model is confident AND the name is in the pool; otherwise None (never invents).
+    """
+    if not job_title or not roles:
+        return None
+    roles = list(roles)
+    pool = {r.name for r in roles}
+    catalog = "\n".join(
+        f"- {r.name} — {(r.description or '').strip()} — {r.data_plan}" for r in roles
+    )
+    content = _CLASSIFY_SYSTEM.format(catalog=catalog, job_title=job_title)
+    try:
+        raw = _strip_think(generate([{"role": "system", "content": content}]))
+    except Exception:
+        logger.warning("classify_role: generate() failed for %r", job_title, exc_info=True)
+        return None
+    if not raw or raw.strip().upper() == "NONE":
+        return None
+    m = _JSON_RE.search(raw)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return None
+    name = obj.get("role")
+    conf = obj.get("confidence")
+    if name not in pool:
+        return None
+    try:
+        if float(conf) < threshold:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return name
