@@ -24,10 +24,12 @@ def _pm_agent_opt_in(msg: str) -> tuple[bool, str]:
 def make_classify_intent(llm=None):
     async def classify_intent(state: ChatState) -> dict:
         """Router: '/pm-agent' prefix → pm_task (explicit opt-in, no LLM call);
-        otherwise the LLM decides pm_task vs agent + the grounding flag.
+        otherwise intent is ALWAYS 'agent' and the LLM only decides the grounding
+        flag (whether the agent must read real meeting data first).
 
         The unified tool-calling agent handles all meeting Q&A + local tools
-        (incl. Redmine via MCP), so the pm-agent A2A branch is opt-in."""
+        (incl. Redmine via MCP), so the pm-agent A2A branch is STRICTLY opt-in —
+        the LLM classifier can never escalate to pm_task on its own."""
         msg = state["user_message"]
         opted_in, cleaned = _pm_agent_opt_in(msg)
         if opted_in:
@@ -62,19 +64,17 @@ def make_classify_intent(llm=None):
                     raw = raw[4:]
                 raw = raw.strip()
             parsed = json.loads(raw)
-            intent = parsed.get("intent")
-            if intent not in ("pm_task", "agent"):
-                intent = "agent"
+            # Opt-in only: intent is ALWAYS 'agent' off the /pm-agent prefix. Any
+            # intent field the model emits is deliberately ignored — the LLM is a
+            # grounding-only classifier now.
             # grounding="required" forces a tool call on the agent's first turn
             # (content/recording questions); default "auto" when absent/invalid so
             # a model that omits the field never accidentally forces grounding.
             grounding = parsed.get("grounding")
             if grounding not in ("required", "auto"):
                 grounding = "auto"
-            logger.info(
-                f"[Node classify_intent] intent={intent!r} grounding={grounding!r}"
-            )
-            return {"intent": intent, "grounding": grounding}
+            logger.info(f"[Node classify_intent] intent='agent' grounding={grounding!r}")
+            return {"intent": "agent", "grounding": grounding}
         except Exception as e:
             logger.exception("classify_intent failed")
             return {"intent": "agent", "grounding": "auto", "error": f"classify failed: {e}"}
