@@ -87,3 +87,60 @@ def test_init_requires_client_credentials(monkeypatch):
     from meeting.auth.microsoft import MicrosoftProvider
     with pytest.raises(RuntimeError):
         MicrosoftProvider()
+
+
+def test_fetch_profile_parses_graph_response(monkeypatch):
+    import meeting.auth.microsoft as ms
+    monkeypatch.setattr(
+        ms, "_graph_get_me",
+        lambda token: {"jobTitle": "Applied AI Engineer", "department": "Engineer"},
+    )
+    provider = _provider(monkeypatch, {"access_token": "graph-token"})
+    prof = provider.fetch_profile("graph-token")
+    assert prof["job_title"] == "Applied AI Engineer"
+    assert prof["department"] == "Engineer"
+
+
+def test_fetch_profile_degrades_to_empty_on_graph_error(monkeypatch):
+    import meeting.auth.microsoft as ms
+    def _boom(token):
+        raise RuntimeError("graph 500")
+    monkeypatch.setattr(ms, "_graph_get_me", _boom)
+    provider = _provider(monkeypatch, {"access_token": "graph-token"})
+    assert provider.fetch_profile("graph-token") == {}
+
+
+def test_exchange_code_sets_position_from_graph(monkeypatch):
+    import meeting.auth.microsoft as ms
+    monkeypatch.setattr(
+        ms, "_graph_get_me",
+        lambda token: {"jobTitle": "Software Engineer", "department": "Product"},
+    )
+    result = {
+        "access_token": "graph-token",
+        "id_token_claims": {
+            "oid": "9c1f8e7a-1111-2222-3333-444455556666",
+            "tid": TENANT_ID,
+            "preferred_username": "An.Nguyen@VNG.com.vn",
+            "name": "An Nguyễn",
+        },
+    }
+    provider = _provider(monkeypatch, result)
+    info = provider.exchange_code(code="auth-code-abc", redirect_uri=REDIRECT)
+    assert info.position == "Software Engineer"
+    assert info.department == "Product"
+
+
+def test_exchange_code_position_none_when_graph_fails(monkeypatch):
+    import meeting.auth.microsoft as ms
+    monkeypatch.setattr(ms, "_graph_get_me", lambda token: (_ for _ in ()).throw(RuntimeError("x")))
+    result = {
+        "access_token": "graph-token",
+        "id_token_claims": {
+            "oid": "o", "tid": TENANT_ID,
+            "preferred_username": "a@vng.com.vn", "name": "A",
+        },
+    }
+    provider = _provider(monkeypatch, result)
+    info = provider.exchange_code(code="c", redirect_uri=REDIRECT)
+    assert info.position is None
