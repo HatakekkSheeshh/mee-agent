@@ -526,6 +526,9 @@ def create_app(output_dir: str = None) -> FastAPI:
     app.include_router(auth_router)
     # Voice enrollment endpoint — flips users.voice_enrolled
     app.include_router(voiceprints_router)
+    # Per-user Redmine key status probe (FE banner + consent gate)
+    from meeting.api.redmine import router as redmine_router
+    app.include_router(redmine_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):
