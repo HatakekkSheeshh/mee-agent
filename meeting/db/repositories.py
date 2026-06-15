@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,6 +72,20 @@ async def resolve_role_by_title(session: AsyncSession, title: str | None) -> Opt
     """
     roles = await list_roles(session)
     return resolve_role(title, roles)
+
+
+async def add_role_alias(session: AsyncSession, role_id: uuid.UUID, alias: str) -> None:
+    """Append `alias` to a role's aliases array, skipping if already present.
+
+    Dedup via `NOT (:alias = ANY(aliases))`. Comparison is case-sensitive and
+    exact — callers must normalize `alias` before calling. The caller owns the
+    transaction (no commit here). Single-instance cron → no locking.
+    """
+    stmt = text(
+        "UPDATE roles SET aliases = array_append(aliases, :alias) "
+        "WHERE id = :role_id AND NOT (:alias = ANY(aliases))"
+    )
+    await session.execute(stmt, {"alias": alias, "role_id": role_id})
 
 
 # ─── Meeting ──────────────────────────────────────────────────────

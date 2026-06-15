@@ -106,3 +106,28 @@ def test_user_model_has_role_id_fk():
     # FK targets roles.id
     fks = {fk.column.table.name for c in m.User.__table__.columns for fk in c.foreign_keys}
     assert "roles" in fks
+
+
+# ─── add_role_alias ───────────────────────────────────────────────────
+
+class _ExecRecordingSession:
+    """Captures the SQL text + params passed to execute()."""
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, stmt, params=None):
+        self.calls.append((str(stmt), params))
+        return _FakeResult([])
+
+
+async def test_add_role_alias_issues_dedup_update():
+    import uuid as _uuid
+    session = _ExecRecordingSession()
+    rid = _uuid.uuid4()
+    await repo.add_role_alias(session, rid, "Applied AI Intern")
+    assert len(session.calls) == 1
+    sql, params = session.calls[0]
+    assert "array_append" in sql
+    assert "ANY(aliases)" in sql
+    assert params["alias"] == "Applied AI Intern"
+    assert params["role_id"] == rid
