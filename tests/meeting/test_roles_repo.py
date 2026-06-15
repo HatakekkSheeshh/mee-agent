@@ -95,3 +95,14 @@ async def test_resolve_role_by_title_unknown_returns_none():
     roles = [SimpleNamespace(name="AI Applied", aliases=[])]
     out = await repo.resolve_role_by_title(_FakeSession(roles), "Nope")
     assert out is None
+
+
+# ─── User.role_id FK contract ─────────────────────────────────────────
+
+def test_user_model_has_role_id_fk():
+    from meeting.db import models as m
+    cols = {c.name for c in m.User.__table__.columns}
+    assert "role_id" in cols
+    # FK targets roles.id
+    fks = {fk.column.table.name for c in m.User.__table__.columns for fk in c.foreign_keys}
+    assert "roles" in fks

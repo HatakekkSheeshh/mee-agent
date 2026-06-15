@@ -48,6 +48,11 @@ class User(Base):
     display_name: Mapped[Optional[str]] = mapped_column(Text)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text)
     refresh_token: Mapped[Optional[str]] = mapped_column(Text)  # AES-256 encrypted
+    # Resolved from the O365 jobTitle at login (resolve_role_by_title). NULL when
+    # the title doesn't match any pool role → generic kickoff.
+    role_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roles.id"), nullable=True
+    )
     # True once user records the enrollment phrase post-login. Matching
     # voiceprint row lives in `voiceprints` with label="enrollment".
     voice_enrolled: Mapped[bool] = mapped_column(
@@ -58,6 +63,7 @@ class User(Base):
     )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    role: Mapped[Optional["Role"]] = relationship("Role", lazy="selectin")
     meetings: Mapped[list["Meeting"]] = relationship(back_populates="creator")
     memberships: Mapped[list["MeetingMember"]] = relationship(
         foreign_keys="MeetingMember.user_id", back_populates="user"
