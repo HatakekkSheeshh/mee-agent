@@ -698,6 +698,25 @@ async def clear_chat_session(
     await session.flush()
 
 
+async def delete_chat_session(
+    session: AsyncSession, session_id: uuid.UUID
+) -> None:
+    """Hard-delete a chat session: its messages, pending actions, AND the
+    session row itself. Distinct from clear_chat_session, which keeps the row.
+    The LangGraph checkpoint thread is purged by the API layer (it owns the
+    checkpointer handle), mirroring clear_session."""
+    await session.execute(
+        delete(ChatMessage).where(ChatMessage.session_id == session_id)
+    )
+    await session.execute(
+        delete(PendingAction).where(PendingAction.session_id == session_id)
+    )
+    await session.execute(
+        delete(ChatSession).where(ChatSession.id == session_id)
+    )
+    await session.flush()
+
+
 # ─── Pending Actions (HITL) ───────────────────────────────────────
 
 async def create_pending_action(
