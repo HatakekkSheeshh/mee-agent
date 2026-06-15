@@ -39,7 +39,27 @@ logger = logging.getLogger(__name__)
 # Canned acknowledgement for a rejected side-effect tool. The reject ends the turn
 # deterministically (route="finish") instead of looping back to the LLM, which would
 # re-read the standing user instruction from the checkpoint and re-attempt the action.
-REJECT_REPLY = "Đã hủy. Tui hong tạo task nữa."
+REJECT_REPLY = "Đã hủy theo yêu cầu của bạn. Nếu muốn thử lại, bạn cứ nói nhé!"
+
+# Prefix for the verbatim-error reply when an approved side-effect tool fails. The
+# loop finishes here instead of looping back to the LLM, so the model can't re-read
+# the standing user instruction and retry the action with guessed args — a
+# deterministic backstop for the same rule stated in _agent_system_prompt.
+TOOL_ERROR_REPLY_PREFIX = "Thao tác chưa thực hiện được do lỗi sau:"
+
+
+def _tool_error(result) -> Optional[str]:
+    """Return the error message if a tool result signals failure, else None.
+    MCP/proxy tools surface failures as {"error": ...}; others may use
+    {"status": "error", ...}."""
+    if not isinstance(result, dict):
+        return None
+    err = result.get("error")
+    if err:
+        return str(err)
+    if result.get("status") == "error":
+        return str(result.get("message") or result.get("reason") or "lỗi không xác định")
+    return None
 
 # Postgres-backed meeting-data grounding tools, DETACHED from the agent's surface:
 # the agent grounds Q&A on the distilled AgentBase project_memory injected at
@@ -435,6 +455,27 @@ def make_agent_execute(session: AsyncSession, *, tools=None):
 
         if tc_id is not None:
             messages.append({"role": "tool", "tool_call_id": tc_id, "content": _json(result)})
+
+        # Loop-side guard: an errored side-effect tool ends the turn instead of
+        # looping back to the agent. Looping back would let the LLM re-read the
+        # standing user instruction and retry the action with guessed args — the
+        # belt-and-suspenders for the prompt's "BÁO lỗi rồi DỪNG" rule. Report the
+        # error verbatim and stop.
+        err = _tool_error(result)
+        if err is not None:
+            logger.info(
+                "[Node agent_execute] tool=%r returned error → finish (no retry): %s",
+                name, err,
+            )
+            return {
+                "agent_messages": messages,
+                "pending_tool": None,
+                "user_decision": None,
+                "tool_result": result,
+                "agent_route": "finish",
+                "final_reply": f"{TOOL_ERROR_REPLY_PREFIX} {err}",
+            }
+
         logger.info(f"[Node agent_execute] tool={name!r} action={action!r}")
         return {
             "agent_messages": messages,

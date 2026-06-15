@@ -283,6 +283,33 @@ async def test_agent_side_effect_rejected(monkeypatch):
     assert len(llm.calls) == 1
 
 
+async def test_agent_side_effect_error_finishes_without_retry(monkeypatch):
+    """An approved side-effect tool that returns an error must END the turn — the
+    loop must NOT re-enter the LLM (which could retry with guessed args). The
+    verbatim error is surfaced to the user. Belt-and-suspenders for the prompt rule.
+
+    Scripted with ONE LLM response only: if the guard fails and loops back, the
+    FakeLLM raises 'no scripted response for call 1', failing the test loudly.
+    """
+    ft = _install(monkeypatch, {"send_email": {"error": "SMTP rejected: bad recipient"}})
+    llm = FakeLLM([
+        tool([{"id": "c1", "name": "send_email", "arguments": '{"to": "a@x.vn"}'}]),
+    ])
+    graph = _build(llm, MemorySaver(), ft)
+    cfg = _config("side-effect-error")
+
+    await graph.ainvoke(_initial("gửi email"), cfg)
+    assert await _interrupted(graph, cfg)
+
+    result = await graph.ainvoke(Command(resume={"action": "approved"}), cfg)
+
+    assert not await _interrupted(graph, cfg)
+    assert len(ft.calls) == 1                  # executed exactly once
+    assert ft.calls[0]["name"] == "send_email"
+    assert len(llm.calls) == 1                 # NO second LLM turn / retry
+    assert "SMTP rejected: bad recipient" in result["final_reply"]  # verbatim error
+
+
 async def test_agent_max_rounds_cap(monkeypatch):
     ts = _install(monkeypatch, {"retrieve": {"status": "ok", "chunks": []}})
     llm = FakeLLM(
