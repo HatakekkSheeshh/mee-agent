@@ -90,19 +90,49 @@ def test_missing_input_schema_falls_back_to_empty_object():
     assert tools.get_tool("get_overdue_issues")["schema"] == {"type": "object", "properties": {}}
 
 
-async def test_registered_executor_proxies_to_client(monkeypatch):
+async def test_registered_executor_forwards_resolved_user_key(monkeypatch):
     redmine.register_redmine_tools(FAKE_SCHEMAS)
     captured = {}
 
     class _FakeClient:
-        async def call_tool(self, name, arguments):
+        async def call_tool(self, name, arguments, *, api_key=None):
             captured["name"] = name
             captured["args"] = arguments
+            captured["api_key"] = api_key
             return {"ok": True}
 
     monkeypatch.setattr(redmine, "get_redmine_mcp_client", lambda: _FakeClient())
+
+    async def _fake_resolve(user_id, session):
+        return "rk-user-123"
+
+    monkeypatch.setattr(redmine, "resolve_redmine_key", _fake_resolve)
     # Call the executor directly (not execute_tool) to skip audit-logging/DB.
     executor = tools.get_tool("get_overdue_issues")["executor"]
-    out = await executor({"project_name": "GIP"}, session=None, user_id=None)
+    out = await executor({"project_name": "GIP"}, session=None, user_id="u1")
     assert out == {"ok": True}
-    assert captured == {"name": "get_overdue_issues", "args": {"project_name": "GIP"}}
+    assert captured == {"name": "get_overdue_issues", "args": {"project_name": "GIP"}, "api_key": "rk-user-123"}
+
+
+async def test_registered_executor_missing_key_returns_structured_error(monkeypatch):
+    redmine.register_redmine_tools(FAKE_SCHEMAS)
+
+    async def _no_key(user_id, session):
+        return None
+
+    monkeypatch.setattr(redmine, "resolve_redmine_key", _no_key)
+    # Client must NOT be called when the key is missing.
+    monkeypatch.setattr(redmine, "get_redmine_mcp_client",
+                        lambda: (_ for _ in ()).throw(AssertionError("must not call client")))
+    executor = tools.get_tool("get_overdue_issues")["executor"]
+    out = await executor({"project_name": "GIP"}, session=None, user_id="u1")
+    assert out == {"error": "redmine_key_missing"}
+
+
+def test_resolve_redmine_key_dev_fallback(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("REDMINE_DEV_FALLBACK", "1")
+    monkeypatch.setenv("REDMINE_API_KEY", "env-dev-key")
+    # No oid lookup needed when the dev fallback is on.
+    out = asyncio.run(redmine.resolve_redmine_key(user_id=None, session=None))
+    assert out == "env-dev-key"

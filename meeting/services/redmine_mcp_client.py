@@ -66,15 +66,20 @@ class RedmineMcpClient:
         self._api_key = api_key
         self._timeout = timeout
 
+    def _auth_headers(self, api_key: Optional[str]) -> dict:
+        """Bearer from the per-call key, else the env key; empty if neither."""
+        key = api_key or self._api_key
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
     @asynccontextmanager
-    async def _session(self):
+    async def _session(self, api_key: Optional[str] = None):
         # Imported lazily so importing this module (and the whole services
         # package, which conftest does) never requires `mcp` to be installed
         # unless a Redmine tool is actually invoked.
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        headers = self._auth_headers(api_key)
         async with streamablehttp_client(self._url, headers=headers, timeout=self._timeout) as (
             read_stream,
             write_stream,
@@ -84,10 +89,10 @@ class RedmineMcpClient:
                 await session.initialize()
                 yield session
 
-    async def call_tool(self, name: str, arguments: dict) -> dict:
+    async def call_tool(self, name: str, arguments: dict, *, api_key: Optional[str] = None) -> dict:
         logger.info("[redmine-mcp] call_tool %s args=%s", name, arguments)
         try:
-            async with self._session() as session:
+            async with self._session(api_key=api_key) as session:
                 result = await session.call_tool(name, arguments)
         except Exception as e:  # transport / auth / server error
             logger.exception("[redmine-mcp] call_tool %s failed", name)

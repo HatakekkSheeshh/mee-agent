@@ -16,9 +16,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Optional
 
+from meeting.db.models import User
+from meeting.services.identity_client import get_cached_user_key
 from meeting.services.redmine_mcp_client import get_redmine_mcp_client
 from meeting.services.tools._registry import tool
 
@@ -43,9 +46,38 @@ def is_write_tool(name: str) -> bool:
     return (name or "").lower().startswith(_WRITE_PREFIXES)
 
 
+def _dev_fallback_enabled() -> bool:
+    return os.getenv("REDMINE_DEV_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+
+
+async def _oid_for_user(user_id, session) -> Optional[str]:
+    if not user_id or session is None:
+        return None
+    try:
+        user = await session.get(User, uuid.UUID(str(user_id)))
+    except Exception:  # malformed id / detached session
+        return None
+    return user.ms_oid if user else None
+
+
+async def resolve_redmine_key(user_id, session) -> Optional[str]:
+    """The current user's Redmine key: dev fallback → OID → cached AgentBase key."""
+    if _dev_fallback_enabled():
+        env_key = os.getenv("REDMINE_API_KEY", "")
+        if env_key:
+            return env_key
+    oid = await _oid_for_user(user_id, session)
+    if not oid:
+        return None
+    return await get_cached_user_key(oid)
+
+
 def _proxy(name: str):
     async def _exec(args: dict, *, session, user_id) -> dict:
-        return await get_redmine_mcp_client().call_tool(name, dict(args or {}))
+        key = await resolve_redmine_key(user_id, session)
+        if not key:
+            return {"error": "redmine_key_missing"}
+        return await get_redmine_mcp_client().call_tool(name, dict(args or {}), api_key=key)
 
     _exec.__name__ = f"redmine_{name}"
     return _exec
