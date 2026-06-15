@@ -510,6 +510,17 @@ export function ChatPane() {
     }
   };
 
+  // Display name for a session: its title if set, else a readable created-at
+  // stamp (sessions are untitled by default — renaming is a separate feature).
+  const sessionLabel = (s: ChatSessionSummary): string =>
+    s.title?.trim() ||
+    new Date(s.created_at).toLocaleString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
   // GATE 1 for create_task carries an editable {project, items} template
   // (tool === "create_task", no pm `kind`). Null for every other pending action.
   const taskTemplate =
@@ -569,8 +580,10 @@ export function ChatPane() {
             aria-expanded={sessionMenuOpen}
           >
             <span className="chat-session-current">
-              {sessions.find((s) => s.id === activeSessionId)?.title ||
-                t("chat.session.untitled")}
+              {(() => {
+                const active = sessions.find((s) => s.id === activeSessionId);
+                return active ? sessionLabel(active) : t("chat.session.untitled");
+              })()}
             </span>
             <svg
               className={`chat-session-caret${sessionMenuOpen ? " is-open" : ""}`}
@@ -600,7 +613,7 @@ export function ChatPane() {
                     }}
                     disabled={busy}
                   >
-                    {s.title || t("chat.session.untitled")}
+                    {sessionLabel(s)}
                   </button>
                   <button
                     type="button"
