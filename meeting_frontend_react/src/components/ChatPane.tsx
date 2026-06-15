@@ -104,12 +104,9 @@ export function ChatPane() {
             sessionIdRef.current = s.id;
             sessionMeetingRef.current = currentMeetingId;
           }
-          // v1 has no login: the role is a deploy-time constant from the env
-          // (VITE_KICKOFF_ROLE), passed through to the kickoff endpoint.
-          const kickoffRole = (
-            import.meta as unknown as { env: Record<string, string | undefined> }
-          ).env.VITE_KICKOFF_ROLE;
-          const res = await api.chat.kickoff(sid, kickoffRole);
+          // Role comes from the logged-in user (users.role_id, resolved from their
+          // O365 jobTitle). No env role needed.
+          const res = await api.chat.kickoff(sid);
           if (res.reply) {
             setMessages((m) => [...m, { role: "agent", text: res.reply as string }]);
           }
