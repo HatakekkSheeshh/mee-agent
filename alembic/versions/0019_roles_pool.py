@@ -1,7 +1,7 @@
 """roles pool — role-persona kickoff catalog + seed
 
-Revision ID: 0016
-Revises: 0015
+Revision ID: 0019
+Revises: 0018
 Create Date: 2026-06-14
 
 Creates the `roles` table (the authoritative, enumerable role-persona pool that
@@ -22,8 +22,8 @@ from sqlalchemy.dialects import postgresql
 
 from meeting.db.seed_roles import SEED_ROLES
 
-revision: str = "0016"
-down_revision: Union[str, None] = "0015"
+revision: str = "0019"
+down_revision: Union[str, None] = "0018"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
