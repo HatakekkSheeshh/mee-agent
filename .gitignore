@@ -12,5 +12,6 @@ slides
 .pytest_cache/
 cache/
 .mcp_redmine_tools_cache.json
+logs/
 
 benchmarks
