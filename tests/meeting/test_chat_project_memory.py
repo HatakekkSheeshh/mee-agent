@@ -102,24 +102,15 @@ class _Meeting:
         self.recordings = recs
 
 
-class _ChatSess:
-    def __init__(self, meeting_id):
-        self.meeting_id = meeting_id
-
-
 def _patch_repo(monkeypatch, meeting):
     """Stub the repo calls load_context makes so it runs without a DB."""
     async def fake_list_chat_messages(session, sid, limit=10):
         return []
 
-    async def fake_get_chat_session(session, sid):
-        return _ChatSess(meeting.id)
-
     async def fake_get_meeting(session, mid):
         return meeting
 
     monkeypatch.setattr(ctx.repo, "list_chat_messages", fake_list_chat_messages)
-    monkeypatch.setattr(ctx.repo, "get_chat_session", fake_get_chat_session)
     monkeypatch.setattr(ctx.repo, "get_meeting", fake_get_meeting)
 
 
@@ -149,7 +140,9 @@ async def test_load_context_flags_stale_record_and_kicks_resync(monkeypatch):
         search_record=lambda pid: record,
         schedule_resync=lambda mid: resync_calls.append(mid),
     )
-    out = await load_context({"session_id": str(uuid.uuid4())})
+    out = await load_context(
+        {"session_id": str(uuid.uuid4()), "meeting_id": str(meeting.id)}
+    )
 
     # Honest now: the recalled body carries the staleness note…
     assert STALE_NOTE in out["project_memory"]
@@ -177,7 +170,9 @@ async def test_load_context_no_note_when_record_is_fresh(monkeypatch):
         search_record=lambda pid: record,
         schedule_resync=lambda mid: resync_calls.append(mid),
     )
-    out = await load_context({"session_id": str(uuid.uuid4())})
+    out = await load_context(
+        {"session_id": str(uuid.uuid4()), "meeting_id": str(meeting.id)}
+    )
 
     assert STALE_NOTE not in out["project_memory"]
     assert out["project_memory"] == "# AI Innovation Project\n\nTrạng thái hiện tại."

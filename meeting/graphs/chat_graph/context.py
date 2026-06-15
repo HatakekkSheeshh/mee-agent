@@ -62,9 +62,11 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
 
         meeting_ctx = {}
         project_memory = ""
-        chat_sess = await repo.get_chat_session(session, sid)
-        if chat_sess and chat_sess.meeting_id:
-            meeting = await repo.get_meeting(session, chat_sess.meeting_id)
+        # User-scoped sessions: ground on the per-turn meeting_id (the UI-selected
+        # project passed with this message), NOT a session column. None → general.
+        turn_meeting_id = state.get("meeting_id")
+        if turn_meeting_id:
+            meeting = await repo.get_meeting(session, uuid.UUID(turn_meeting_id))
             if meeting:
                 # Best-effort recall of the distilled project-state projection
                 # (AgentBase). Off the event loop (sync urllib); never block a turn.
