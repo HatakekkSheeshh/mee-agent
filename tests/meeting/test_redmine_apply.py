@@ -8,7 +8,7 @@ from meeting.graphs import _chat_serde as serde
 # LIVE-SCHEMA CORRECTION (probe 2026-06-12): create_redmine_issue AND
 # update_redmine_issue both expose `due_date` as a real field, so it is passed
 # DIRECTLY (not folded into description/notes as the original plan assumed).
-def test_create_args_defaults_tracker_and_passes_due_date_directly():
+def test_create_args_defaults_tracker_and_normalizes_due_date():
     args = serde.redmine_create_args(
         "GIP",
         {"subject": "viết migration", "assignee": "Hiếu", "due_date": "10/01/2026", "description": "schema"},
@@ -18,7 +18,14 @@ def test_create_args_defaults_tracker_and_passes_due_date_directly():
     assert args["tracker"] == "Task"            # default when item has none
     assert args["assigned_to"] == "Hiếu"
     assert args["description"] == "schema"      # due_date NOT folded in
-    assert args["due_date"] == "10/01/2026"     # passed as a real field
+    assert args["due_date"] == "2026-01-10"     # DD/MM/YYYY → ISO for the MCP
+
+
+def test_create_args_drops_unparseable_due_date():
+    args = serde.redmine_create_args(
+        "GIP", {"subject": "x", "due_date": "Chưa xác định"},
+    )
+    assert "due_date" not in args             # garbage dropped, not sent raw
 
 
 def test_create_args_respects_explicit_tracker():
@@ -33,13 +40,18 @@ def test_create_args_omits_absent_optionals():
 
 
 def test_update_args_includes_only_present_fields():
-    args = serde.redmine_update_args("GIP", {"subject": "new", "due_date": "12/01"}, "123")
+    args = serde.redmine_update_args("GIP", {"subject": "new", "due_date": "12/06/2026"}, "123")
     assert args["issue_id"] == "123"
     assert args["project_name"] == "GIP"
     assert args["subject"] == "new"
-    assert args["due_date"] == "12/01"          # direct field, not folded
+    assert args["due_date"] == "2026-06-12"     # normalized to ISO
     assert "assigned_to" not in args            # absent in item → omitted
     assert "notes" not in args                  # no description → no note
+
+
+def test_update_args_drops_unparseable_due_date():
+    args = serde.redmine_update_args("GIP", {"subject": "new", "due_date": "12/01"}, "123")
+    assert "due_date" not in args               # no year → dropped
 
 
 def test_update_args_maps_description_to_notes():

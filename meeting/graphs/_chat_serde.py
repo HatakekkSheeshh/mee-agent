@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 
 from meeting.graphs._chat_state import ChatState
@@ -215,6 +216,33 @@ def parse_leaked_tool_calls(content: Optional[str]) -> tuple[list[dict], str]:
     return calls, prose.strip()
 
 
+# ─── due-date normalization ─────────────────────────────────────────
+# create_redmine_issue / update_redmine_issue require `due_date` as YYYY-MM-DD.
+# Free text reaches us from the create_task card AND from MoM-derived deadlines
+# (DD/MM/YYYY, "Chưa xác định", …). Normalize to ISO or drop — never send raw.
+# VI locale is day-first, so D/M precedes M/D.
+_DUE_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y")
+
+
+def to_redmine_date(s) -> Optional[str]:
+    """Normalize a free-text date to `YYYY-MM-DD`, or None if unparseable.
+
+    Accepts ISO (`2026-06-06`) and VI day-first `DD/MM/YYYY` / `DD-MM-YYYY`
+    (also non-padded). Anything without a full, valid day+month+year — e.g.
+    "12/01" (no year), "Chưa xác định", "" — returns None so the caller drops
+    it rather than sending garbage to the MCP.
+    """
+    text = ("" if s is None else str(s)).strip()
+    if not text:
+        return None
+    for fmt in _DUE_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
 # ─── create_task → Redmine MCP apply (P2) ──────────────────────────
 # Map an approved create_task template item ({subject, assignee, due_date,
 # description}) onto the deployed MCP write tools. LIVE-SCHEMA NOTE (probe
@@ -237,7 +265,7 @@ def redmine_create_args(project: str, item: dict) -> dict:
     description = (item.get("description") or "").strip()
     if description:
         args["description"] = description
-    due = (item.get("due_date") or "").strip()
+    due = to_redmine_date(item.get("due_date"))
     if due:
         args["due_date"] = due
     return args
@@ -250,8 +278,9 @@ def redmine_update_args(project: str, item: dict, issue_id: str) -> dict:
         args["subject"] = item["subject"]
     if item.get("assignee"):
         args["assigned_to"] = item["assignee"]
-    if item.get("due_date"):
-        args["due_date"] = item["due_date"]
+    due = to_redmine_date(item.get("due_date"))
+    if due:
+        args["due_date"] = due
     if item.get("description"):
         args["notes"] = item["description"]
     return args
