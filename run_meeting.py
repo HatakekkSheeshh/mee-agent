@@ -334,8 +334,8 @@ def _print_startup_banner(http_port: int, ws_port: int) -> None:
     {url(f'http://localhost:{http_port}/docs')}        {hint('(Swagger — test API)')}
     {url(f'http://localhost:{http_port}/redoc')}       {hint('(ReDoc — read API)')}
 
-  {c.BOLD}{c.CYAN}WebSocket{c.RESET} {hint('(Whisper realtime STT)')}
-    {url(f'ws://localhost:{ws_port}')}
+  {c.BOLD}{c.CYAN}WebSocket{c.RESET} {hint('(Whisper realtime STT — now on the HTTP port at /ws)')}
+    {url(f'ws://localhost:{http_port}/ws')}
 
   {c.BOLD}{c.CYAN}Postgres{c.RESET}    {status(pg_up)}
     {hint('host=')}{db.get('host', '?')}:{db.get('port', '?')}   {hint('db=')}{db.get('db', '?')}   {hint('user=')}{db.get('user', '?')}
@@ -412,9 +412,11 @@ def main():
         logger.error("WHISPER_BASE_URL is required. Set via --maas-url or .env file.")
         sys.exit(1)
 
-    # WebSocket server in a daemon thread (dies with main process).
-    ws_thread = threading.Thread(target=start_whisper_server, args=(args,), daemon=True)
-    ws_thread.start()
+    # Realtime-STT WebSocket is now mounted INTO the FastAPI app at /ws (see
+    # meeting.ws_transcribe.register_ws_route), so it shares the HTTP port —
+    # matching the single-port (8080) AgentBase runtime. The legacy standalone
+    # :9091 server (start_whisper_server) is no longer started; kept for
+    # reference / manual use only.
 
     # Celery worker as a separate subprocess. Skipped when broker is down
     # (MoM gen falls back to inline asyncio.to_thread, see endpoint) or when

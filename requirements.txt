@@ -33,7 +33,7 @@ celery[librabbitmq]>=5.3
 # Celery doesn't pick up new @task definitions until the process restarts.
 watchdog>=4.0
 psycopg[binary]
-
+greennode-agentbase==1.0.2
 # === Redmine MCP client (P2) ===
 mcp>=1.25.0
 

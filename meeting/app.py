@@ -935,7 +935,44 @@ def create_app(output_dir: str = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
-    # Serve frontend static files
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    # Live-transcription WebSocket — registered BEFORE the catch-all static
+    # serving so the /ws upgrade is routed here, not swallowed by StaticFiles.
+    # This is what lets the single-port (8080) AgentBase runtime serve realtime
+    # STT alongside the HTTP API (no separate :9091 server).
+    from meeting.ws_transcribe import register_ws_route
+    register_ws_route(app)
+
+    # Serve the frontend. Prefer the built React SPA (meeting_frontend_react/
+    # dist) when present — that's the production single-port image. Fall back to
+    # the legacy vanilla SPA for dev / back-compat when no React build exists.
+    react_dist = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "meeting_frontend_react", "dist"
+    )
+    if os.path.isdir(react_dist):
+        _mount_spa(app, react_dist)
+    else:
+        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 
     return app
+
+
+def _mount_spa(app, dist_dir: str) -> None:
+    """Serve a built Vite/React SPA with client-side-routing fallback.
+
+    `/assets/*` is served straight from disk; any other path that doesn't map to
+    a real file returns index.html, so deep links (/app, /onboard/voice) survive
+    a hard refresh. Registered last, so real routes (/api, /auth, /ws, /docs)
+    always win. Path traversal outside dist_dir is rejected.
+    """
+    assets_dir = os.path.join(dist_dir, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    index_file = os.path.join(dist_dir, "index.html")
+    dist_root = os.path.abspath(dist_dir)
+
+    @app.get("/{full_path:path}")
+    async def spa_catch_all(full_path: str):
+        candidate = os.path.abspath(os.path.join(dist_root, full_path))
+        if candidate.startswith(dist_root + os.sep) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(index_file)

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+
+# Node / Vite (rebuilt inside the image — never ship local copies)
+meeting_frontend_react/node_modules/
+meeting_frontend_react/dist/
+node_modules/
+
+# Secrets & local config (injected as runtime env on AgentBase)
+.env
+.env.*
+!.env.example
+.greennode.json
+*-credentials.json
+
+# Git / IDE / docs
+.git/
+.gitignore
+.claude/
+docs/
+*.md
+
+# Local runtime artifacts
+output/
+*.log
+.agentbase-state.json
+
+# Tests (not needed in the runtime image)
+tests/

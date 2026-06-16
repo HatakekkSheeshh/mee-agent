@@ -1,4 +1,8 @@
 .env
+.env.agentbase
+.env.local
+.agentbase/
+.agentbase_*
 output/
 __pycache__/
 *.pyc

@@ -82,6 +82,21 @@ def _consume_state(state: str) -> bool:
     return expiry is not None and expiry > time.time()
 
 
+def _enroll_optional() -> bool:
+    """VOICE_ENROLL_OPTIONAL=true skips the voice-enrollment gate. Set it on
+    deploys that don't ship the local pyannote/torch embedding stack (e.g. the
+    single-port AgentBase image), so login lands on /app instead of the
+    enrollment flow that would 500 on the missing dependency."""
+    return os.environ.get("VOICE_ENROLL_OPTIONAL", "").strip().lower() == "true"
+
+
+def _enrollment_satisfied(user) -> bool:
+    """Whether the enrollment gate is cleared — really enrolled, or bypassed
+    via VOICE_ENROLL_OPTIONAL. Used by both the callback redirect and /auth/me
+    (which the FE reads to route /onboard/voice vs /app)."""
+    return bool(user.voice_enrolled) or _enroll_optional()
+
+
 def _redirect_uri(request: Request) -> str:
     """Build the absolute /auth/callback URL Microsoft will redirect to.
 
@@ -277,7 +292,7 @@ async def callback(
     #   - first-time login → /onboard/voice (gate to enroll voice)
     #   - returning user   → /app (main workspace)
     cookie_value = issue_session_cookie(user.id, user.email)
-    if not user.voice_enrolled:
+    if not _enrollment_satisfied(user):
         target = "/onboard/voice"
     elif next_path and next_path != "/":
         target = next_path
@@ -381,6 +396,6 @@ async def me(user: Optional[User] = Depends(get_current_user_optional)):
         "email": user.email,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
-        "voice_enrolled": user.voice_enrolled,
+        "voice_enrolled": _enrollment_satisfied(user),
         "provider": _provider.name,
     }
