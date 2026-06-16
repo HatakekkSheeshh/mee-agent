@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Literal
 
 from meeting.graphs._chat_llm import _llm_client, _llm_model
+from meeting.graphs._chat_serde import strip_think
 from meeting.graphs._chat_prompts import CLASSIFY_SYSTEM_PROMPT
 from meeting.graphs._chat_state import ChatState, PM_AGENT_COMMAND
 
@@ -50,8 +52,9 @@ def make_classify_intent(llm=None):
                 # <think> and return empty content — disable it for this tiny task.
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
-            # content can be None (empty/refused/all-reasoning) — guard before strip.
-            raw = (resp.choices[0].message.content or "").strip()
+            # content can be None (empty/refused/all-reasoning) — guard, then strip
+            # any leaked <think> reasoning (minimax ignores enable_thinking at times).
+            raw = strip_think(resp.choices[0].message.content)
             if not raw:
                 logger.warning(
                     "[Node classify_intent] empty content from model — defaulting to agent/auto"
@@ -63,7 +66,19 @@ def make_classify_intent(llm=None):
                 if raw.startswith("json"):
                     raw = raw[4:]
                 raw = raw.strip()
-            parsed = json.loads(raw)
+            # Tolerate prose around the JSON object; a parse miss is a known,
+            # recovered condition (not a crash) → default quietly, no ERROR traceback.
+            if not raw.startswith("{"):
+                m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+                raw = m.group(0) if m else raw
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "[Node classify_intent] non-JSON content %r — defaulting to agent/auto",
+                    raw[:120],
+                )
+                return {"intent": "agent", "grounding": "auto"}
             # Opt-in only: intent is ALWAYS 'agent' off the /pm-agent prefix. Any
             # intent field the model emits is deliberately ignored — the LLM is a
             # grounding-only classifier now.

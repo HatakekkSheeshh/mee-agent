@@ -60,6 +60,13 @@ def test_prompt_omits_memory_block_when_absent():
     assert "Trạng thái project (bản chắt lọc" not in prompt
 
 
+def test_prompt_nudges_remember_fact_capability():
+    """The agent must know remember_fact exists so it stores durable facts the
+    user asserts (e.g. 'gọi tôi là Ronaldo') instead of letting them evaporate."""
+    prompt = _agent_system_prompt({"meeting_context": {"title": "X"}})
+    assert "remember_fact" in prompt
+
+
 # ── is_record_stale (pure, network-free) ─────────────────────────────────
 
 def test_is_record_stale_true_when_marker_hash_differs_from_live():

@@ -129,6 +129,13 @@ async def get_meeting(session: AsyncSession, meeting_id: uuid.UUID) -> Optional[
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
+async def get_user_ms_oid(session: AsyncSession, user_id: uuid.UUID) -> Optional[str]:
+    """The user's Entra OID (`User.ms_oid`), or None. Used as the per-user actor
+    key for remembered facts (`user_prefs/<ms_oid>`)."""
+    user = await session.get(User, user_id)
+    return (user.ms_oid or None) if user else None
+
+
 async def list_meetings_for_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> Sequence[Meeting]:

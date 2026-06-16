@@ -37,6 +37,7 @@ from meeting.services.tools import list_meetings as _list_meetings  # noqa: F401
 from meeting.services.tools import list_recordings as _list_recordings  # noqa: F401
 from meeting.services.tools import recording_mom as _recording_mom  # noqa: F401
 from meeting.services.tools import search_transcript as _search_transcript  # noqa: F401
+from meeting.services.tools import remember_fact as _remember_fact  # noqa: F401  (registers remember_fact + forget_fact)
 
 # Redmine MCP tools register DYNAMICALLY (network discovery) at app startup via
 # load_and_register_redmine_tools — importing the module here only loads the
