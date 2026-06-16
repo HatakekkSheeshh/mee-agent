@@ -50,7 +50,7 @@ flowchart TD
     RS --> GM
     EDT -->|preferred| GM[Click 'Biên bản phiên này']
 
-    GM -->|POST /recordings/{id}/generate-mom| LG[🧠 MomGraph 4 nodes]
+    GM -->|"POST /recordings/{id}/generate-mom"| LG[🧠 MomGraph 4 nodes]
     LG --> N1[load_transcript<br/>edited_text > raw]
     N1 --> N2[read_memory<br/>hybrid retrieval]
     N2 --> N3[generate_mom<br/>Qwen3-8B map-reduce]
