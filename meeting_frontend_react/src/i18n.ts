@@ -175,7 +175,7 @@ export const STRINGS = {
     "avatar.signOut": "Đăng xuất",
     // Sidebar
     "sidebar.newProject": "Project mới",
-    "sidebar.recentProjects": "Project gần đây",
+    "sidebar.recentProjects": "Meeting gần đây",
     "sidebar.loading": "Đang tải...",
     "sidebar.empty": "Chưa có project",
     "sidebar.noRecordings": "Chưa có phiên họp",
@@ -666,7 +666,7 @@ export const STRINGS = {
     "avatar.profile": "Profile",
     "avatar.signOut": "Sign out",
     "sidebar.newProject": "New project",
-    "sidebar.recentProjects": "Recent projects",
+    "sidebar.recentProjects": "Recent meetings",
     "sidebar.loading": "Loading...",
     "sidebar.empty": "No projects yet",
     "sidebar.noRecordings": "No recordings yet",

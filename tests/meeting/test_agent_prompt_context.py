@@ -73,6 +73,83 @@ async def test_load_context_loads_user_name_and_role(monkeypatch):
     assert out["user_email"] == "annd2@vng.com.vn"
 
 
+async def test_load_context_loads_user_meetings_roster(monkeypatch):
+    uid = uuid.uuid4()
+    user = SimpleNamespace(display_name="An", email="a@b.com", role=None)
+
+    async def fake_list_chat_messages(session, sid, limit=10):
+        return []
+
+    async def fake_roster(session, user_id):
+        return [
+            SimpleNamespace(id=uuid.uuid4(), title="GIP"),
+            SimpleNamespace(id=uuid.uuid4(), title="AI Innovation Projects"),
+        ]
+
+    monkeypatch.setattr(ctx.repo, "list_chat_messages", fake_list_chat_messages)
+    monkeypatch.setattr(ctx.repo, "list_meetings_for_user", fake_roster)
+
+    class _Sess:
+        async def get(self, model, key):
+            return user
+
+    load_context = ctx.make_load_context(_Sess())
+    out = await load_context(
+        {"session_id": str(uuid.uuid4()), "user_id": str(uid)}
+    )
+
+    titles = {m["title"] for m in out["user_meetings"]}
+    assert titles == {"GIP", "AI Innovation Projects"}
+
+
+# ── A2. project roster so the agent recognises OTHER projects ────────────
+
+def test_prompt_lists_user_projects_for_switch_recognition():
+    # The bug: bound to "AI Innovation Projects", asked about "GIP", the model
+    # had no roster so it assumed GIP == the current meeting and never switched.
+    p = _agent_system_prompt({
+        "meeting_context": {"title": "AI Innovation Projects"},
+        "user_meetings": [
+            {"id": "1", "title": "GIP"},
+            {"id": "2", "title": "AI Innovation Projects"},
+            {"id": "3", "title": "Project 2"},
+        ],
+    })
+    assert "Các cuộc họp của bạn" in p   # a roster block exists (meeting terms)
+    assert "GIP" in p                    # the other meeting is visible by name
+    # ...and an explicit anti-conflation rule: a named meeting is NOT an
+    # abbreviation of the current meeting — switch instead.
+    assert "viết tắt" in p
+
+
+def test_prompt_omits_meeting_roster_when_no_user_meetings():
+    p = _agent_system_prompt({"meeting_context": {"title": "X"}})
+    # The roster LISTING (distinguished by its parenthetical) is gone; the
+    # switch_meeting rule may still reference the roster heading by name.
+    assert "để nhận diện cuộc họp" not in p
+
+
+def test_prompt_splits_meeting_from_redmine_project():
+    # meeting/cuộc họp = Mee container; project = Redmine. The prompt must say so
+    # and name the Redmine tool so the model stops using it for meeting questions.
+    p = _agent_system_prompt({"user_meetings": [{"id": "1", "title": "GIP"}]})
+    assert "list_meetings" in p
+    assert "get_redmine_projects" in p
+    assert "Redmine" in p
+
+
+def test_prompt_roster_dedupes_titles():
+    p = _agent_system_prompt({
+        "user_meetings": [
+            {"id": "1", "title": "Test"},
+            {"id": "2", "title": "Test"},
+            {"id": "3", "title": "Test"},
+        ],
+    })
+    # Three rows, one title — listed once, not three times.
+    assert p.count("Test") == 1
+
+
 # ── B. don't auto-fix editable-field tool errors ─────────────────────────
 
 def test_prompt_tells_agent_not_to_autofix_editable_tool_errors():

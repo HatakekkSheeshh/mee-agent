@@ -90,12 +90,30 @@ def _agent_system_prompt(state: ChatState) -> str:
                 + " làm định danh Redmine.\n"
             )
         user_block += "\n"
+
+    # Project roster: the user's OTHER meetings by title. Without this the agent,
+    # bound to one meeting, can't tell that a name the user mentions ("GIP") is a
+    # SEPARATE project — it assumes the name is an alias of the current meeting and
+    # never calls switch_meeting. Listing distinct titles gives it that knowledge.
+    roster = state.get("user_meetings") or []
+    seen: list[str] = []
+    for m in roster:
+        t = (m.get("title") or "").strip()
+        if t and t not in seen:
+            seen.append(t)
+    roster_block = (
+        "Các cuộc họp của bạn trong Mee (để nhận diện cuộc họp người dùng nhắc tới — "
+        "đây là cuộc họp, KHÔNG phải project Redmine): "
+        f"{', '.join(seen[:40])}\n\n"
+        if seen else ""
+    )
     return (
         "Bạn là Mee — trợ lý cuộc họp. Trả lời ngắn gọn, tự nhiên, bằng tiếng Việt.\n\n"
         f"Hôm nay là {_today_vi()} (giờ Việt Nam). Dùng mốc này để hiểu các mốc thời "
         "gian tương đối như 'hôm nay', 'ngày mai', 'tuần này', 'cuối tháng'.\n\n"
         f"{user_block}"
         f"Cuộc họp hiện tại: {title}\n\n"
+        f"{roster_block}"
         f"{memory_block}"
         "Quy tắc:\n"
         "- KHI TOOL TẠO/CHỈNH ISSUE BÁO LỖI (create_task, create_redmine_issue, hoặc "
@@ -164,8 +182,18 @@ def _agent_system_prompt(state: ChatState) -> str:
         "cho MỘT issue đơn lẻ user đọc rõ. Khi đồng bộ cả cuộc họp → `create_task`.\n"
         "- Trường Redmine (`project_name`, `tracker`, `assigned_to`) là tên/định "
         "danh phía Redmine; truyền đúng tên project và người phụ trách.\n"
-        "- Khi user muốn chuyển sang project/cuộc họp khác (gọi tên project khác), GỌI "
-        "`switch_meeting` để đổi ngữ cảnh.\n"
+        "- PHÂN BIỆT 'cuộc họp (meeting)' với 'project': CUỘC HỌP/MEETING là vật thể "
+        "trong Mee (chứa các phiên ghi/recordings và biên bản MoM). Hỏi 'có những cuộc "
+        "họp/meeting nào', liệt kê hay đọc nội dung cuộc họp → dùng danh sách 'Các cuộc "
+        "họp của bạn' ở trên, hoặc `list_meetings` / `list_recordings` / `recording_mom` "
+        "/ `switch_meeting`. PROJECT là khái niệm bên Redmine — CHỈ gọi "
+        "`get_redmine_projects` hay công cụ Redmine khác khi user nói RÕ về Redmine/issue. "
+        "TUYỆT ĐỐI KHÔNG dùng công cụ Redmine để trả lời câu hỏi về cuộc họp Mee.\n"
+        "- Khi user nhắc tới một cuộc họp KHÁC cuộc họp hiện tại — nhất là một cái tên có "
+        "trong danh sách 'Các cuộc họp của bạn' ở trên — hãy COI ĐÓ LÀ CUỘC HỌP KHÁC và "
+        "GỌI `switch_meeting` với tên đó TRƯỚC khi đọc dữ liệu (vd `list_recordings` / "
+        "`recording_mom`). KHÔNG được mặc định rằng cái tên đó chỉ là viết tắt hay cách "
+        "gọi khác của cuộc họp hiện tại.\n"
         "- Tool có side-effect (create_task, send_email) cần người dùng DUYỆT; cứ gọi khi "
         "phù hợp, hệ thống sẽ tự hỏi duyệt.\n"
         "- Khi GỌI tool, KHÔNG viết text đi kèm — TUYỆT ĐỐI không khẳng định đã thực hiện "

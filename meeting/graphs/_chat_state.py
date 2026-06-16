@@ -34,6 +34,7 @@ class ChatState(TypedDict, total=False):
     project_memory: str        # distilled current-state recalled from AgentBase (best-effort)
     recent_messages: list[dict]  # last N messages from chat_messages
     resolved_meeting_id: Optional[str]  # bound meeting (or title-resolved) for tool scoping
+    user_meetings: list[dict]  # roster of the user's meetings [{id,title}] so the agent recognises OTHER projects → switch_meeting
     user_name: Optional[str]   # signed-in user's display name (for "tôi/của tôi")
     user_role: Optional[str]   # signed-in user's resolved role name
     user_email: Optional[str]  # signed-in user's email → Redmine/company login identity

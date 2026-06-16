@@ -18,10 +18,12 @@ from meeting.memory_client import (
     search_project_record,
     strip_project_marker,
 )
+from meeting.services.meeting_resolver import default_generate, llm_resolve_meeting
 from meeting.services.memory_sync import canonical_source_hash
 from meeting.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
+
 
 async def resolve_meeting(
     session: AsyncSession,
@@ -29,24 +31,49 @@ async def resolve_meeting(
     user_id,
     bound_meeting_id: Optional[str],
     title: Optional[str],
+    generate=None,
 ) -> dict:
     """Resolve which meeting the user means.
 
-    Default = the chat's bound meeting_id. If a `title` is named, ILIKE-resolve
-    the user's meetings (most-recent first) and pick the most recent match; on
-    no match, fall back to the bound meeting.
+    Default = the chat's bound meeting_id. If a `title` is named:
+      - ILIKE fast-path: exactly 1 match → use it (no LLM).
+      - 0 or >1 matches → LLM-resolve over the user's meetings by title
+        (handles acronyms/abbreviations ILIKE can't, e.g. "GIP").
+      - LLM finds nothing → fall back to bound, but return the user's meetings as
+        `candidates` so the agent can offer near-matches instead of creating new.
 
     Returns {meeting_id, resolved_by: "bound"|"title", candidates: [{id,title}]}.
     """
-    if title and title.strip():
-        matches = await repo.find_meetings_by_title(session, user_id, title)
-        if matches:
-            return {
-                "meeting_id": str(matches[0].id),
-                "resolved_by": "title",
-                "candidates": [{"id": str(m.id), "title": m.title} for m in matches],
-            }
-    return {"meeting_id": bound_meeting_id, "resolved_by": "bound", "candidates": []}
+    if not (title and title.strip()):
+        return {"meeting_id": bound_meeting_id, "resolved_by": "bound", "candidates": []}
+
+    matches = await repo.find_meetings_by_title(session, user_id, title)
+    if len(matches) == 1:
+        m = matches[0]
+        return {
+            "meeting_id": str(m.id),
+            "resolved_by": "title",
+            "candidates": [{"id": str(m.id), "title": m.title}],
+        }
+
+    # Ambiguous (0 or >1): LLM-resolve over ALL the user's meetings.
+    candidates = await repo.list_meetings_for_user(session, user_id)
+    candidate_dicts = [{"id": str(m.id), "title": m.title} for m in candidates]
+    chosen_id = llm_resolve_meeting(
+        title, candidates, generate=generate or default_generate
+    ) if candidates else None
+    if chosen_id:
+        return {
+            "meeting_id": chosen_id,
+            "resolved_by": "title",
+            "candidates": candidate_dicts,
+        }
+    # No confident match — keep the bound scope, surface near-matches.
+    return {
+        "meeting_id": bound_meeting_id,
+        "resolved_by": "bound",
+        "candidates": candidate_dicts,
+    }
 
 def make_load_context(session: AsyncSession, *, search_record=None, schedule_resync=None):
     # DI seams: real AgentBase browse + fire-and-forget bg re-sync by default;
@@ -64,13 +91,23 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
         # Signed-in user identity → injected into the agent prompt so it knows who
         # "tôi/của tôi" is and can scope role-based tool calls (not just kickoff).
         user_name = user_role = user_email = None
+        user_meetings: list[dict] = []
         uid_str = state.get("user_id")
         if session is not None and uid_str:
-            user = await session.get(User, uuid.UUID(uid_str))
+            uid = uuid.UUID(uid_str)
+            user = await session.get(User, uid)
             if user:
                 user_name = (user.display_name or "").strip() or None
                 user_role = user.role.name if user.role else None
                 user_email = (user.email or "").strip() or None
+            # Roster of the user's projects so the agent can recognise a name the
+            # user mentions as a SEPARATE project and call switch_meeting (instead
+            # of assuming it's an alias of the current meeting). Best-effort.
+            try:
+                roster = await repo.list_meetings_for_user(session, uid)
+                user_meetings = [{"id": str(m.id), "title": m.title} for m in roster]
+            except Exception as e:  # noqa: BLE001 — roster is non-critical orientation
+                logger.warning(f"[Node load_context] user meetings roster failed: {e}")
 
         meeting_ctx = {}
         project_memory = ""
@@ -145,6 +182,7 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
             "user_name": user_name,
             "user_role": user_role,
             "user_email": user_email,
+            "user_meetings": user_meetings,
         }
 
     return load_context

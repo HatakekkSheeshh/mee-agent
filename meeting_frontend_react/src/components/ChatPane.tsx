@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useApp } from "../store/AppContext";
-import { toolLabel as mapToolLabel } from "../i18n";
+import { toolLabel as mapToolLabel, argLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
 import type { ChatSessionSummary, ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
@@ -870,7 +870,18 @@ export function ChatPane() {
                 ))}
               </ul>
             ) : (
-              <pre className="pending-args">{JSON.stringify(pending.args, null, 2)}</pre>
+              <dl className="pending-args-list">
+                {Object.entries(pending.args ?? {}).map(([k, v]) =>
+                  v == null || v === "" ? null : (
+                    <div key={k} className="action-arg-row">
+                      <span className="task-label">{argLabel(t, k)}</span>
+                      <span className="action-arg-value">
+                        {typeof v === "string" ? v : JSON.stringify(v)}
+                      </span>
+                    </div>
+                  ),
+                )}
+              </dl>
             )}
             <div className="pending-buttons">
               <button className="btn btn-approve" type="button" disabled={busy} onClick={() => void decide(true)}>
@@ -1012,7 +1023,18 @@ function ArchivedCard({ card, status }: { card: PendingAction; status: string })
           ))}
         </ul>
       ) : !card.prompt && card.args ? (
-        <pre className="pending-args">{JSON.stringify(card.args, null, 2)}</pre>
+        <dl className="pending-args-list">
+          {Object.entries(card.args).map(([k, v]) =>
+            v == null || v === "" ? null : (
+              <div key={k} className="action-arg-row">
+                <span className="task-label">{argLabel(t, k)}</span>
+                <span className="action-arg-value">
+                  {typeof v === "string" ? v : JSON.stringify(v)}
+                </span>
+              </div>
+            ),
+          )}
+        </dl>
       ) : null}
     </div>
   );

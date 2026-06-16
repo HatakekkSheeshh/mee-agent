@@ -33,6 +33,7 @@ from meeting.services.tools.create_task import build_agenda_task_items, build_ta
 from meeting.services.tools import create_task as _create_task  # noqa: F401
 from meeting.services.tools import switch_meeting as _switch_meeting  # noqa: F401
 from meeting.services.tools import retrieve as _retrieve  # noqa: F401
+from meeting.services.tools import list_meetings as _list_meetings  # noqa: F401
 from meeting.services.tools import list_recordings as _list_recordings  # noqa: F401
 from meeting.services.tools import recording_mom as _recording_mom  # noqa: F401
 from meeting.services.tools import search_transcript as _search_transcript  # noqa: F401
