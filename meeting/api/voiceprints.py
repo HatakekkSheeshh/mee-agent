@@ -65,6 +65,48 @@ def _convert_to_wav(src_path: str, dst_path: str) -> None:
 
 
 def _embed_audio(wav_path: str) -> list[float]:
+    """Produce a 256-d speaker embedding for the clip.
+
+    Prefers a remote embedder when EMBED_REMOTE_URL is set (the GPU box that
+    already hosts STT — keeps the heavy pyannote/wespeaker + torch stack OFF
+    the AgentBase container, which would OOM/500 loading it on CPU). Falls back
+    to the in-process embedder when no remote is configured (dev / GPU host)."""
+    remote = os.getenv("EMBED_REMOTE_URL", "").strip().rstrip("/")
+    if remote:
+        return _embed_audio_remote(wav_path, remote)
+    return _embed_audio_local(wav_path)
+
+
+def _embed_audio_remote(wav_path: str, base_url: str) -> list[float]:
+    """POST the clip to the remote embedder ({base_url}/v1/audio/embed) and
+    return its 256-d vector. Auth: Bearer EMBED_REMOTE_TOKEN, else the shared
+    self-host STT key (same box)."""
+    import requests
+
+    key = (
+        os.getenv("EMBED_REMOTE_TOKEN")
+        or os.getenv("FASTER_WHISPER_API_KEY")
+        or os.getenv("PHOWHISPER_API_KEY")
+        or ""
+    ).strip()
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    with open(wav_path, "rb") as f:
+        resp = requests.post(
+            f"{base_url}/v1/audio/embed",
+            files={"file": ("audio.wav", f, "audio/wav")},
+            headers=headers,
+            timeout=60,
+        )
+    resp.raise_for_status()
+    emb = resp.json().get("embedding")
+    if not isinstance(emb, list) or len(emb) != 256:
+        raise RuntimeError(
+            f"remote embed returned dim {len(emb) if isinstance(emb, list) else 'n/a'}, expected 256"
+        )
+    return emb
+
+
+def _embed_audio_local(wav_path: str) -> list[float]:
     """Load pyannote wespeaker embedder and produce a single 256-d embedding
     for the whole clip. Embedder is cached after first call (see local_diarize)."""
     # Lazy import — pyannote is a heavy dep, defer until actually needed.
