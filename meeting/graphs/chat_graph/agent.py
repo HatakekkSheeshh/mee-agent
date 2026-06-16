@@ -194,11 +194,28 @@ def make_agent(llm=None, *, tools=None):
         messages = state.get("agent_messages") or _seed_agent_messages(state)
 
         if rounds >= MAX_AGENT_ROUNDS:
-            logger.warning("[Node agent] MAX_AGENT_ROUNDS reached — forcing finish")
+            # Cap reached after the loop kept calling tools. Do NOT echo an earlier
+            # assistant message (_last_assistant_text may be stale/unrelated — the
+            # GOAT/Ronaldo bug). Make ONE tool-less call so the model MUST answer
+            # from the tool results already gathered in `messages`.
+            logger.warning("[Node agent] MAX_AGENT_ROUNDS reached — final tool-less synthesis")
+            reply = ""
+            try:
+                client = llm or _llm_client()
+                resp = client.chat.completions.create(
+                    model=_llm_model(),
+                    messages=_to_llm_messages(state, messages),
+                    tool_choice="none",
+                    max_tokens=1024,
+                    timeout=60,
+                )
+                reply = strip_think(resp.choices[0].message.content)
+            except Exception as e:  # noqa: BLE001 — recovery must never raise
+                logger.warning("[Node agent] final synthesis failed: %s", e)
             return {
                 "agent_messages": messages,
                 "agent_route": "finish",
-                "final_reply": _last_assistant_text(messages)
+                "final_reply": reply
                 or "Mình đã thử nhiều bước nhưng chưa hoàn tất được, bạn thử lại nhé.",
             }
 

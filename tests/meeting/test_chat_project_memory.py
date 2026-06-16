@@ -60,6 +60,13 @@ def test_prompt_omits_memory_block_when_absent():
     assert "Trạng thái project (bản chắt lọc" not in prompt
 
 
+def test_prompt_meeting_n_is_session_not_a_switch():
+    """Anti-thrash: 'Meeting N'/'Phiên N' is a session in the CURRENT project →
+    list_recordings + recording_mom, NOT switch_meeting (which caused a 6-round loop)."""
+    prompt = _agent_system_prompt({"meeting_context": {"title": "X"}})
+    assert "là một PHIÊN trong dự án HIỆN TẠI" in prompt
+
+
 def test_prompt_nudges_remember_fact_capability():
     """The agent must know remember_fact exists so it stores durable facts the
     user asserts (e.g. 'gọi tôi là Ronaldo') instead of letting them evaporate."""
