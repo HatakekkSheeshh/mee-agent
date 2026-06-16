@@ -22,3 +22,6 @@ agentbase
 voiceprints_*.webm
 *.ipynb
 benchmarks
+AGENT.md
+AGENTS.md
+.agents/
