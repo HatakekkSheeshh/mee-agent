@@ -392,6 +392,12 @@ Ronaldo → "đừng gọi Ronaldo nữa" → ẩn (không xóa) → "gọi Rona
 **Inspect:** `venv/bin/python scripts/dump_agent_memory.py <meeting_id> <ms_oid>` in cả 3
 loại bộ nhớ (distillation, project-facts, user-facts).
 
+> ⚠️ Script này in **view hiệu lực** (active) — đã áp newest-wins + ẩn tombstone. Sau khi
+> `forget_fact`, fact KHÔNG còn hiện ở đây, nhưng dữ liệu **vẫn nằm nguyên** trong AgentBase
+> (cả record `active=1` cũ lẫn record `active=0` mới) — chỉ bị che, không xóa (DELETE 403).
+> Muốn xem record thô (gồm tombstone), browse trực tiếp namespace qua
+> `scripts/probe_memory_read.py`.
+
 Spec: `docs/superpowers/specs/2026-06-16-chat-knowledge-capture-design.md`
 
 ---
