@@ -3,6 +3,7 @@ FastAPI application for the Meeting Note Agent.
 Serves the web UI, handles note generation requests, and provides Markdown downloads.
 """
 import io
+import json
 import logging
 import os
 import threading
@@ -10,6 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+import httpx
 import requests
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -636,6 +638,194 @@ def create_app(output_dir: str = None) -> FastAPI:
             filename=os.path.basename(md_path),
         )
 
+    @app.get("/api/sse-test")
+    async def sse_test():
+        """Diagnostic: emits 5 SSE events 1 second apart. If `curl -N` to
+        this endpoint sees events 1-by-1, the Mee→FE path is fine and any
+        SSE delay on /api/transcribe/stream is the Kaggle→Mee leg
+        (Cloudflare quick-tunnel buffering). If everything arrives in a
+        single burst at the end, the buffering is on the Mee side and
+        we'll need to chase it here (httpx chunk size, Vite proxy, etc.).
+        """
+        from fastapi.responses import StreamingResponse
+        import asyncio as _asyncio
+
+        async def gen():
+            yield ":" + (" " * 2048) + "\n\n"  # padding to defeat proxy buffering
+            for i in range(5):
+                yield f"data: {{\"i\": {i}, \"t\": {i}}}\n\n"
+                await _asyncio.sleep(1)
+            yield "data: {\"type\": \"done\"}\n\n"
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/transcribe/stream")
+    async def transcribe_file_stream(
+        file: UploadFile = File(...),
+        language: str = Form(default=""),
+        vocab_hints: str = Form(default=""),
+        attendees: str = Form(default=""),
+        stt_model: str = Form(default=""),
+        recording_id: str = Form(default=""),
+    ):
+        """SSE-streamed transcription. Forwards the upload to the chosen STT
+        backend's /stream endpoint and pipes the event-stream straight to
+        the FE. Only `faster_whisper` profile supports this — VNG MaaS +
+        PhoWhisper return a single JSON. Caller should pick the right
+        profile before hitting this endpoint.
+
+        Persists audio_path the same way batch /api/transcribe does so the
+        Notta player can replay the file after the stream ends.
+        """
+        from fastapi.responses import StreamingResponse
+        from meeting.services.model_registry import resolve_stt
+        import httpx
+
+        profile = resolve_stt(recording_choice=(stt_model or None))
+        if not profile.get("has_word_timestamps"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"STT profile '{profile.get('id')}' does not support "
+                    f"streaming. Use stt_model=faster_whisper."
+                ),
+            )
+        base_url = (profile.get("base_url") or "").rstrip("/")
+        if not base_url:
+            raise HTTPException(
+                status_code=500,
+                detail=f"STT profile '{profile.get('id')}' missing base_url",
+            )
+
+        audio_bytes = await file.read()
+        filename = file.filename or "audio.wav"
+        if not language.strip():
+            language = profile.get("language") or "vi"
+        prompt = _build_whisper_prompt(vocab_hints, language, attendees)
+
+        # Mirror batch path: save audio for in-browser playback. R2 when
+        # configured, disk otherwise. See the batch endpoint's comment
+        # for the audio_path schema (`r2://...` vs relative disk path).
+        if recording_id:
+            from meeting.db import AsyncSessionLocal
+            from meeting.db.models import Recording as _Recording
+            from meeting.services import r2_storage
+            try:
+                _ext = os.path.splitext(filename)[1].lower() or ".wav"
+                if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                    _ext = ".wav"
+                if r2_storage.is_configured():
+                    _key = r2_storage.audio_key(recording_id, _ext)
+                    r2_storage.upload_bytes(_key, audio_bytes)
+                    _saved_path = f"r2://{_key}"
+                else:
+                    _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)), "output"
+                    )
+                    _audio_dir = os.path.join(_output_dir, "audio")
+                    os.makedirs(_audio_dir, exist_ok=True)
+                    _disk_path = os.path.join(_audio_dir, f"{recording_id}{_ext}")
+                    with open(_disk_path, "wb") as _f:
+                        _f.write(audio_bytes)
+                    _saved_path = os.path.relpath(
+                        _disk_path, os.path.dirname(os.path.dirname(__file__))
+                    )
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec is not None:
+                        _rec.audio_path = _saved_path
+                        await _sess.commit()
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe/stream] audio save failed: {_e}"
+                )
+
+        upstream_url = f"{base_url}/v1/audio/transcriptions/stream"
+        form_data = {
+            "language": language,
+            "prompt": prompt or "",
+        }
+        # Pass expected speaker count to pyannote — derived from the
+        # recording's `attendees` list (people the user marked as
+        # present in this session). Without this hint pyannote can
+        # cluster wildly for short utterances (3 sentences from one
+        # speaker → 3 clusters). We use a ±1 buffer so the user has
+        # some slack if they mis-checked attendance.
+        if recording_id:
+            try:
+                from meeting.db import AsyncSessionLocal
+                from meeting.db.models import Recording as _Recording
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec and isinstance(_rec.attendees, list) and _rec.attendees:
+                        n = len(_rec.attendees)
+                        if n > 0:
+                            form_data["min_speakers"] = str(max(1, n - 1))
+                            form_data["max_speakers"] = str(n + 1)
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe/stream] could not read attendees for speaker hint: {_e}"
+                )
+
+        async def event_stream():
+            """Open an httpx stream upstream, pipe SSE frames downstream
+            byte-for-byte. Using `aiter_raw()` instead of `aiter_text()`
+            is the critical detail: `aiter_text()` aggregates chunks to
+            UTF-8 boundaries and to its own buffer size (~64KB), which
+            held SSE frames hostage until enough bytes piled up. Raw
+            iteration yields whatever the socket delivers, so each
+            cloudflared-flushed frame reaches the FE immediately.
+
+            We open a fresh padding flush ahead of the upstream call
+            so the FE EventSource receives the response headers + first
+            bytes without waiting for the upstream's own padding to
+            traverse the chain."""
+            # First-byte flush: forces any reverse-proxy on this leg
+            # (uvicorn, possibly a future nginx) to commit response
+            # headers + open the stream window to the FE immediately.
+            yield ":" + (" " * 2048) + "\n\n"
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    files = {"file": (filename, audio_bytes, "audio/wav")}
+                    async with client.stream(
+                        "POST", upstream_url, files=files, data=form_data,
+                    ) as r:
+                        if r.status_code != 200:
+                            body = await r.aread()
+                            yield (
+                                "data: " + json.dumps({
+                                    "type": "error",
+                                    "detail": f"upstream {r.status_code}: {body.decode(errors='replace')[:200]}",
+                                }) + "\n\n"
+                            )
+                            return
+                        async for chunk in r.aiter_raw():
+                            if chunk:
+                                yield chunk
+            except Exception as e:
+                logging.exception("[/api/transcribe/stream] proxy failed")
+                yield (
+                    "data: " + json.dumps({
+                        "type": "error", "detail": str(e),
+                    }) + "\n\n"
+                )
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # disable nginx buffering if any
+            },
+        )
+
     @app.post("/api/transcribe")
     async def transcribe_file(
         file: UploadFile = File(...),
@@ -679,37 +869,50 @@ def create_app(output_dir: str = None) -> FastAPI:
         original_size_mb = len(audio_bytes) / 1024 / 1024
 
         # ─── Persist the upload for Notta-style in-browser playback ───
-        # Save before transcription so /api/recordings/{id}/audio works as
-        # soon as the upload completes (the user can hit Play even while
-        # the LLM is still cleaning). Path written to recording.audio_path.
+        # Prefer R2 object storage when configured (production). Fall back
+        # to disk under output/audio/ for dev / no-R2 setups so the path
+        # works in both modes. recording.audio_path stores either:
+        #   • "r2://<key>"    – Cloudflare R2 object key (e.g. r2://audio/<rid>.wav)
+        #   • "<rel path>"    – legacy local path under project root
+        # The audio GET endpoint detects the prefix and redirects (R2) or
+        # serves the file (local).
         if recording_id:
             from meeting.db import AsyncSessionLocal
             from meeting.db.models import Recording as _Recording
+            from meeting.services import r2_storage
             try:
-                _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)), "output"
-                )
-                _audio_dir = os.path.join(_output_dir, "audio")
-                os.makedirs(_audio_dir, exist_ok=True)
                 _ext = os.path.splitext(filename)[1].lower() or ".wav"
                 if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
                     _ext = ".wav"
-                _saved_name = f"{recording_id}{_ext}"
-                _saved_path = os.path.join(_audio_dir, _saved_name)
-                with open(_saved_path, "wb") as _f:
-                    _f.write(audio_bytes)
-                _rel = os.path.relpath(_saved_path, os.path.dirname(os.path.dirname(__file__)))
+
+                if r2_storage.is_configured():
+                    _key = r2_storage.audio_key(recording_id, _ext)
+                    r2_storage.upload_bytes(_key, audio_bytes)
+                    _saved_path = f"r2://{_key}"
+                    _saved_desc = _saved_path
+                else:
+                    _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)), "output"
+                    )
+                    _audio_dir = os.path.join(_output_dir, "audio")
+                    os.makedirs(_audio_dir, exist_ok=True)
+                    _disk_path = os.path.join(_audio_dir, f"{recording_id}{_ext}")
+                    with open(_disk_path, "wb") as _f:
+                        _f.write(audio_bytes)
+                    _saved_path = os.path.relpath(
+                        _disk_path, os.path.dirname(os.path.dirname(__file__))
+                    )
+                    _saved_desc = _saved_path
+
                 async with AsyncSessionLocal() as _sess:
                     _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
                     if _rec is not None:
-                        _rec.audio_path = _rel
+                        _rec.audio_path = _saved_path
                         await _sess.commit()
                 logging.info(
-                    f"[/api/transcribe] saved audio for recording {recording_id} → {_rel}"
+                    f"[/api/transcribe] saved audio for recording {recording_id} → {_saved_desc}"
                 )
             except Exception as _e:
-                # Non-fatal — transcription proceeds even if save fails;
-                # user just won't be able to play back the audio later.
                 logging.warning(
                     f"[/api/transcribe] failed to persist audio for recording {recording_id}: {_e}"
                 )

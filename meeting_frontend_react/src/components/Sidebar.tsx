@@ -3,8 +3,9 @@ import { createPortal } from "react-dom";
 import { useApp } from "../store/AppContext";
 import { api } from "../api/client";
 import { PromptDialog } from "./PromptDialog";
+import { UserControls } from "./UserControls";
 
-export function Sidebar() {
+export function Sidebar({ user }: { user: { email: string; display_name: string | null } }) {
   const {
     meetings,
     meetingsLoading,
@@ -15,8 +16,9 @@ export function Sidebar() {
     selectRecording,
     reloadMeetings,
     reloadCurrentMeeting,
-    toggleSidebar,
     confirm,
+    sidebarOpen,
+    toggleSidebar,
     t,
   } = useApp();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -43,20 +45,19 @@ export function Sidebar() {
       await selectMeeting(m.id);
       setExpanded((s) => new Set(s).add(m.id));
     } catch (e) {
-      alert(`Tạo project lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.createProject", { msg: (e as Error).message }));
     }
   }
 
   async function handleNewRecording(meetingId: string) {
-    const isEn = t("sidebar.recordingPlaceholder") === "Untitled recording";
     const existingCount = currentMeeting?.recordings.length || 0;
-    const label = `${isEn ? "Meeting" : "Phiên"} ${existingCount + 1}`;
+    const label = t("sidebar.meetingDefault", { n: existingCount + 1 });
     try {
       const r = await api.recordings.create(meetingId, label);
       await reloadCurrentMeeting();
       selectRecording(r.id);
     } catch (e) {
-      alert(`Tạo phiên lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.createRecording", { msg: (e as Error).message }));
     }
   }
 
@@ -75,7 +76,7 @@ export function Sidebar() {
       await api.meetings.patch(m.id, { is_pinned: !m.is_pinned });
       await reloadMeetings();
     } catch (e) {
-      alert(`Lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.generic", { msg: (e as Error).message }));
     }
   }
 
@@ -97,7 +98,7 @@ export function Sidebar() {
       await reloadMeetings();
       if (currentMeetingId === renamingId) await reloadCurrentMeeting();
     } catch (e) {
-      alert(`Đổi tên lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.rename", { msg: (e as Error).message }));
     } finally {
       setRenamingId(null);
     }
@@ -118,7 +119,7 @@ export function Sidebar() {
       if (currentMeetingId === meetingId) selectMeeting(null);
       await reloadMeetings();
     } catch (e) {
-      alert(`Xóa lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.delete", { msg: (e as Error).message }));
     }
   }
 
@@ -136,13 +137,13 @@ export function Sidebar() {
       if (currentRecordingId === recordingId) selectRecording(null);
       await reloadCurrentMeeting();
     } catch (e) {
-      alert(`Xóa lỗi: ${(e as Error).message}`);
+      alert(t("sidebar.error.delete", { msg: (e as Error).message }));
     }
   }
 
   async function handleShare() {
     setMenuFor(null);
-    alert("Chia sẻ — chưa implement");
+    alert(t("sidebar.share.notImplemented"));
   }
 
   function openMenu(e: React.MouseEvent, mid: string) {
@@ -168,6 +169,23 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar" id="sidebar">
+      <button
+        type="button"
+        className="sidebar-brand"
+        title={sidebarOpen ? "Về trang chọn project" : "Mở sidebar"}
+        onClick={() => {
+          if (!sidebarOpen) {
+            toggleSidebar();
+          } else {
+            // Clear selection → TranscriptPane shows "no project" landing
+            // where user can pick or create one.
+            void selectMeeting(null);
+          }
+        }}
+      >
+        <span className="sidebar-brand-mark"></span>
+        <span className="sidebar-brand-name">Mee</span>
+      </button>
       <div className="sidebar-header">
         <button
           className="btn btn-primary btn-sm sidebar-new-btn"
@@ -179,7 +197,7 @@ export function Sidebar() {
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
-          {t("sidebar.newProject")}
+          <span className="sidebar-new-btn-label">{t("sidebar.newProject")}</span>
         </button>
       </div>
 
@@ -216,12 +234,40 @@ export function Sidebar() {
               >
                 <div
                   className={`sidebar-meeting${isActive ? " active" : ""}`}
+                  title={m.title}
                   onClick={() => {
                     if (renamingId === m.id) return;
                     selectMeeting(m.id);
                     setExpanded((s) => new Set(s).add(m.id));
                   }}
                 >
+                  {/* Initial letter shown ONLY in collapsed icon-rail
+                   * mode (display:none by default; CSS toggles via
+                   * body.sidebar-collapsed). Using SVG <text> with
+                   * dominantBaseline="central" + textAnchor="middle"
+                   * gives pixel-perfect optical centering regardless
+                   * of font cap-height bias (DOM text centering drifts
+                   * upward because line-box ≠ glyph box). */}
+                  <svg
+                    className="sidebar-meeting-initial"
+                    viewBox="0 0 36 36"
+                    width="36"
+                    height="36"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <text
+                      x="18"
+                      y="18"
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fontSize="14"
+                      fontWeight="700"
+                      fill="currentColor"
+                    >
+                      {(m.title || "?").trim().charAt(0).toUpperCase() || "?"}
+                    </text>
+                  </svg>
                   <svg
                     className="sidebar-caret"
                     viewBox="0 0 12 12"
@@ -288,7 +334,7 @@ export function Sidebar() {
                           {m.has_summary && (
                             <span
                               className="sidebar-meeting-badge"
-                              title="Đã có tổng kết project"
+                              title={t("sidebar.hasProjectSummary")}
                               style={{ marginLeft: 6 }}
                             >
                               Σ
@@ -360,19 +406,6 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="sidebar-footer">
-        <button
-          className="icon-btn"
-          type="button"
-          title="Thu gọn sidebar"
-          onClick={toggleSidebar}
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-        </button>
-      </div>
-
       {/* ─── Project context menu (portaled) ─── */}
       {menuMeeting &&
         createPortal(
@@ -418,6 +451,9 @@ export function Sidebar() {
           </div>,
           document.body,
         )}
+      <div className="sidebar-footer">
+        <UserControls user={user} />
+      </div>
     </aside>
   );
 }

@@ -318,6 +318,23 @@ async def _run_clean(recording_id: str) -> None:
                         user_id=user.id,
                         speaker_embeddings=recording.speaker_embeddings,
                     )
+                # Merge in any user-applied renames from a prior clean_segments
+                # run — without this, regenerate clean clobbers manual renames
+                # because the LLM only sees voiceprint-derived pre_mapped and
+                # outputs cluster ids for any cluster the voiceprint match
+                # didn't cover.
+                prev_clean = recording.clean_segments or {}
+                prev_cluster_map = (
+                    prev_clean.get("cluster_mapping")
+                    if isinstance(prev_clean, dict) else None
+                )
+                if isinstance(prev_cluster_map, dict):
+                    for cid, name in prev_cluster_map.items():
+                        nm = (name or "").strip()
+                        # Skip placeholders so they don't override real voice
+                        # matches; only carry forward explicit user renames.
+                        if nm and nm.lower() not in ("unknown", ""):
+                            pre_mapped.setdefault(cid, nm)
 
                 # Estimate chunk count for progress reporting (cleaner internally
                 # chunks at MAX_TRANSCRIPT_CHARS = 14_000). Approximate so FE
@@ -386,8 +403,84 @@ async def _run_clean(recording_id: str) -> None:
                     return
 
                 existing: dict = recording.clean_segments or {}
+                # Stamp `cluster_id` onto every cleaner-emitted segment
+                # so the PATCH-speaker scope=all endpoint can rename by
+                # cluster instead of by label. Without this, when the
+                # LLM happens to emit the same label for multiple
+                # clusters (e.g. all "Unknown" because no voiceprint
+                # match), "Apply to all" renames every shared-label
+                # segment together — including ones from other speakers.
+                #
+                # Strategy: walk the cleaner output IN ORDER and match
+                # each segment positionally to the original SPEAKER_NN
+                # labels in `raw_text` (which is "SPEAKER_NN: ..." lines
+                # from pyannote). This is robust regardless of what the
+                # LLM did with the speaker label.
+                import re as _re
+
+                # Step 1: extract SPEAKER_NN per raw line, in order.
+                # raw_text looks like "SPEAKER_01: text...\nSPEAKER_00: ...".
+                raw_clusters: list[str] = []
+                for ln in raw_text.split("\n"):
+                    m = _re.search(r"SPEAKER_\d+", ln)
+                    if m:
+                        raw_clusters.append(m.group(0))
+
+                # Step 2: also build the reverse-lookup map as a backup
+                # (when LLM did substitute a unique name we can recover
+                # cluster_id from that).
+                result_cluster_map = result.get("cluster_mapping", {}) or {}
+                name_count: dict[str, int] = {}
+                for _cid, _nm in result_cluster_map.items():
+                    nm = (_nm or "").strip()
+                    name_count[nm] = name_count.get(nm, 0) + 1
+                name_to_cid: dict[str, str] = {}
+                for _cid, _nm in result_cluster_map.items():
+                    nm = (_nm or "").strip()
+                    if nm and nm.lower() != "unknown" and name_count[nm] == 1:
+                        name_to_cid[nm] = _cid
+
+                # Step 3: assign cluster_id to each cleaner segment.
+                # Cleaner preserves order, so segs[i] aligns to the i-th
+                # speaker turn in raw_text. The cleaner may merge a few
+                # consecutive same-cluster lines into one segment, so we
+                # advance the raw pointer only when the inferred cluster
+                # changes.
+                raw_ptr = 0
+                last_seg_cid = ""
+                for s in segs:
+                    spk = (s.get("speaker") or "").strip()
+                    chosen_cid = ""
+                    # 1) If LLM kept SPEAKER_NN literally → trust it.
+                    m = _re.match(r"^SPEAKER_\d+$", spk)
+                    if m:
+                        chosen_cid = spk
+                    # 2) Else if speaker label is a unique name → reverse lookup.
+                    elif spk in name_to_cid:
+                        chosen_cid = name_to_cid[spk]
+                    # 3) Else positional match against raw_clusters.
+                    elif raw_ptr < len(raw_clusters):
+                        chosen_cid = raw_clusters[raw_ptr]
+                    if chosen_cid:
+                        s["cluster_id"] = chosen_cid
+                        # Advance raw pointer past consecutive same-cluster
+                        # lines (cleaner merged them) — but stay on current
+                        # if the next raw line is a DIFFERENT cluster
+                        # (cleaner will produce another seg for it).
+                        while (
+                            raw_ptr < len(raw_clusters)
+                            and raw_clusters[raw_ptr] == chosen_cid
+                        ):
+                            raw_ptr += 1
+                            # Only consume one line if this is a brand-new
+                            # cluster for the segs sequence. Detect by
+                            # comparing with last_seg_cid; if same as last,
+                            # this seg is continuation — keep going.
+                            if chosen_cid != last_seg_cid:
+                                break
+                        last_seg_cid = chosen_cid
                 existing["segments"] = segs
-                existing["cluster_mapping"] = result.get("cluster_mapping", {})
+                existing["cluster_mapping"] = result_cluster_map
                 for cid, name in pre_mapped.items():
                     existing["cluster_mapping"][cid] = name
                 recording.clean_segments = existing
