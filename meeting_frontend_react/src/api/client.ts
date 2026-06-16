@@ -281,6 +281,32 @@ export const api = {
         `/api/recordings/${id}/segments/${seq}/text`,
         { text },
       ),
+    /** Rewrite a run of transcript segments into a new list of pieces — the
+     * single primitive behind the Notta clean editor:
+     *   • 1 piece  → collapse a merged turn the user edited into one segment
+     *   • 2 pieces → split a turn (Enter); 2nd piece often gets speaker:"" so
+     *     it renders separately and prompts a speaker assignment.
+     * `speaker: null` keeps the run's first speaker. Operates on
+     * transcript_segments (the store the view renders). */
+    rewriteSegments: (
+      id: string,
+      seqs: number[],
+      pieces: { text: string; speaker?: string | null }[],
+    ) =>
+      http<{ recording_id: string; first_seq: number; pieces: number; speakers: (string | null)[] }>(
+        "POST",
+        `/api/recordings/${id}/segments/rewrite`,
+        { seqs, pieces: pieces.map((p) => ({ text: p.text, speaker: p.speaker ?? null })) },
+      ),
+    /** Assign a speaker to ONE clean block ('apply to current') — writes
+     * transcript_segments.speaker for the block's seqs, so it shows
+     * immediately and doesn't leak cluster-wide. */
+    setSegmentSpeakerBySeqs: (id: string, seqs: number[], speaker: string) =>
+      http<{ recording_id: string; seqs: number[]; renamed: number }>(
+        "POST",
+        `/api/recordings/${id}/segments/set-speaker`,
+        { seqs, speaker },
+      ),
     /** Save the user-edited MoM HTML body (rich text editor in MoM tab). */
     patchMomBody: (id: string, html: string, text?: string) =>
       http<{ recording_id: string; saved_chars: number }>(

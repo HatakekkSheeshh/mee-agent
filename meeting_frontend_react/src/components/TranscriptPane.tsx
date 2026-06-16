@@ -145,6 +145,23 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
       /* ignore — banner already set elsewhere */
     }
   }
+
+  // Re-pull the raw transcript segments after a structural change (e.g. a
+  // user split one block into two via Enter in the Notta edit view). Only
+  // refreshes rawSegments/rawText — leaves clusterMapping + clean cache
+  // intact (the split keeps cluster/speaker, and clean_segments resyncs on
+  // the next regenerate, matching existing edit-then-regenerate behaviour).
+  async function reloadTranscript() {
+    if (!currentRecordingId) return;
+    try {
+      const r = await api.recordings.transcript(currentRecordingId);
+      setRawText(r.transcript || "");
+      setRawSegments(r.segments || []);
+      dbTextRef.current = r.transcript || "";
+    } catch {
+      /* ignore — transient fetch error, user can retry */
+    }
+  }
   const [busy, setBusy] = useState(false);
   // True only while the SSE upload pipeline (faster-whisper + diarize +
   // word-align) is mid-flight. NottaCleanView hides the segment list and
@@ -1276,6 +1293,7 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                   clusterMapping={clusterMapping}
                   onRegenerate={regenerateClean}
                   onClusterMappingSaved={reloadClean}
+                  onSegmentsChanged={reloadTranscript}
                   busy={busy}
                   // streaming=false here: per-word streaming animation is
                   // disabled because we now hide all output during the
@@ -1298,6 +1316,30 @@ export function TranscriptPane({ overviewContent }: Props = {}) {
                       ?.attendees?.map((a) => a.name)
                       .filter(Boolean) ?? []
                   }
+                  // A guest name applied to a block but not a project member →
+                  // append it to recording.attendees + reload so it becomes a
+                  // reusable speaker option across all blocks.
+                  onAddGuest={async (name) => {
+                    if (!currentRecordingId) return;
+                    const rec = currentMeeting?.recordings.find(
+                      (r) => r.id === currentRecordingId,
+                    );
+                    const existing = rec?.attendees ?? [];
+                    const dup = existing.some(
+                      (a) =>
+                        (a.name || "").trim().toLowerCase() ===
+                        name.trim().toLowerCase(),
+                    );
+                    if (dup) return;
+                    try {
+                      await api.recordings.patch(currentRecordingId, {
+                        attendees: [...existing, { name: name.trim() }],
+                      });
+                      await reloadCurrentMeeting();
+                    } catch {
+                      /* non-fatal — the speaker was already applied to the block */
+                    }
+                  }}
                 />
               );
             })()}

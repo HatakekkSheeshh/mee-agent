@@ -152,6 +152,10 @@ export interface RawSegment {
    * FE Notta view uses these for word-accurate highlight; falls back to
    * even-distribute approximation when NULL. */
   words?: WordTimestamp[] | null;
+  /** True once the user edited this segment's text. The stored `words` are
+   * raw STT tokens that no longer match the edited text, so the Notta view
+   * renders `text` instead of word spans for edited segments. */
+  edited?: boolean;
 }
 
 export interface RecordingTranscript {

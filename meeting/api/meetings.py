@@ -816,6 +816,11 @@ async def get_recording_transcript_endpoint(
             "end_ms": s.end_time_ms,
             # Optional per-word timestamps (faster-whisper). NULL for VNG MaaS.
             "words": s.words,
+            # True once the user edited the text — the stored `words` are the
+            # RAW STT tokens and no longer match `text`, so the Notta view must
+            # render `text` (not word spans) for this segment or it would show
+            # the pre-edit words. See NottaCleanView displayBlocks.
+            "edited": s.edited_text is not None,
         }
         for s in db_segs
     ]
@@ -1070,6 +1075,226 @@ async def patch_segment_text(
     return {"recording_id": recording_id, "seq": seq, "saved_chars": len(new_text)}
 
 
+def _distribute_words(all_words: list, piece_texts: list) -> list:
+    """Split a flat word list across N pieces proportional to each piece's
+    char length (best-effort — words[].text joined ≈ the piece text). Used by
+    the rewrite endpoint to keep per-word timestamps after a collapse/split."""
+    groups: list = [[] for _ in piece_texts]
+    if not all_words or not piece_texts:
+        return groups
+    if len(piece_texts) == 1:
+        groups[0] = list(all_words)
+        return groups
+    total_chars = sum(len(t) for t in piece_texts) or 1
+    # Cumulative char-fraction at the END of each piece (last ≈ 1.0).
+    cum, bounds = 0, []
+    for t in piece_texts:
+        cum += len(t)
+        bounds.append(cum / total_chars)
+    total_wchars = sum(len((w.get("text") or "")) + 1 for w in all_words) or 1
+    wacc, pi = 0, 0
+    for w in all_words:
+        wacc += len((w.get("text") or "")) + 1
+        frac = wacc / total_wchars
+        while pi < len(piece_texts) - 1 and frac > bounds[pi]:
+            pi += 1
+        groups[pi].append(w)
+    return groups
+
+
+class RewritePiece(BaseModel):
+    """One output segment of a rewrite. `speaker=None` keeps the run's first
+    speaker; "" blanks it (so the Notta clean view shows '?' and prompts the
+    user to assign — used for the 2nd half of an Enter-split)."""
+    text: str
+    speaker: Optional[str] = None
+
+
+class SegmentRewriteBody(BaseModel):
+    """Body for `POST /recordings/{id}/segments/rewrite`.
+
+    Replaces a contiguous run of transcript segments (`seqs`) with `pieces`.
+    This is the single structural primitive behind the Notta clean editor:
+      • 1 piece  → COLLAPSE: a merged turn the user edited (or renamed) becomes
+                   one segment (edited_text = the piece text, words merged).
+      • 2 pieces → SPLIT: an Enter mid-turn breaks it into two.
+    transcript_segments is the store the clean view actually renders (raw
+    segments with word timestamps), so all clean edits route here — keeping
+    text, split and speaker on ONE source of truth instead of the legacy
+    clean_segments/cluster_mapping split-brain. Per-word timestamps are
+    partitioned across pieces by char proportion so audio sync survives."""
+    seqs: list[int]
+    pieces: list[RewritePiece]
+
+
+@router.post("/recordings/{recording_id}/segments/rewrite")
+async def rewrite_segments(
+    recording_id: str,
+    req: SegmentRewriteBody,
+    session: AsyncSession = Depends(get_session),
+):
+    """Replace a run of transcript segments with a new list of pieces."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select, update
+    from sqlalchemy.orm.attributes import flag_modified
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    seqs = sorted({int(s) for s in req.seqs})
+    texts = [(p.text or "").strip() for p in req.pieces]
+    if not seqs or not texts or any(not t for t in texts):
+        raise HTTPException(
+            status_code=400,
+            detail="rewrite cần seqs + pieces có text không rỗng.",
+        )
+
+    segs = (
+        await session.execute(
+            select(TranscriptSegment)
+            .where(
+                TranscriptSegment.recording_id == rid,
+                TranscriptSegment.seq.in_(seqs),
+                TranscriptSegment.is_deleted.is_(False),
+            )
+            .order_by(TranscriptSegment.seq)
+        )
+    ).scalars().all()
+    if not segs:
+        raise HTTPException(status_code=404, detail=f"No segments for seqs={seqs}")
+
+    all_words: list = []
+    for s in segs:
+        if isinstance(s.words, list):
+            all_words.extend(s.words)
+    span_start, span_end = segs[0].start_time_ms, segs[-1].end_time_ms
+    default_speaker = segs[0].speaker
+    range_min, range_max = segs[0].seq, segs[-1].seq
+    P, S = len(req.pieces), len(segs)
+
+    word_groups = _distribute_words(all_words, texts)
+
+    def _spec(i: int) -> dict:
+        wg = word_groups[i]
+        st = en = None
+        if wg:
+            f, l = wg[0], wg[-1]
+            if isinstance(f.get("start"), (int, float)):
+                st = int(f["start"] * 1000)
+            if isinstance(l.get("end"), (int, float)):
+                en = int(l["end"] * 1000)
+        if (st is None or en is None) and span_start is not None and span_end is not None and span_end > span_start:
+            seg_len = (span_end - span_start) / P
+            if st is None:
+                st = int(span_start + i * seg_len)
+            if en is None:
+                en = int(span_start + (i + 1) * seg_len)
+        spk = req.pieces[i].speaker
+        return {
+            "speaker": (spk if spk is not None else default_speaker),
+            "text": texts[i],
+            "words": wg or None,
+            "start": st,
+            "end": en,
+        }
+
+    specs = [_spec(i) for i in range(P)]
+    now = datetime.now(timezone.utc)
+
+    if P > S:
+        # Need room for P-S extra segments after the run; shift later seqs up.
+        await session.execute(
+            update(TranscriptSegment)
+            .where(
+                TranscriptSegment.recording_id == rid,
+                TranscriptSegment.seq > range_max,
+                TranscriptSegment.is_deleted.is_(False),
+            )
+            .values(seq=TranscriptSegment.seq + (P - S))
+        )
+
+    reused = min(P, S)
+    for i in range(reused):
+        s, spec = segs[i], specs[i]
+        s.seq = range_min + i
+        s.edited_text = spec["text"]
+        s.speaker = spec["speaker"]
+        s.words = spec["words"]
+        flag_modified(s, "words")
+        s.start_time_ms = spec["start"]
+        s.end_time_ms = spec["end"]
+        s.edited_at = now
+    # Extra pieces (split) → brand-new segments right after the reused ones.
+    for i in range(reused, P):
+        spec = specs[i]
+        session.add(TranscriptSegment(
+            recording_id=rid,
+            seq=range_min + i,
+            start_time_ms=spec["start"],
+            end_time_ms=spec["end"],
+            speaker=spec["speaker"],
+            original_text=spec["text"],
+            edited_text=None,
+            words=spec["words"],
+        ))
+    # Surplus existing segs (collapse) → soft-delete.
+    for i in range(reused, S):
+        segs[i].is_deleted = True
+
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "first_seq": range_min,
+        "pieces": P,
+        "speakers": [sp["speaker"] for sp in specs],
+    }
+
+
+class SegmentSetSpeakerBody(BaseModel):
+    """Body for `POST /recordings/{id}/segments/set-speaker` — assign a speaker
+    to a single clean block in the Notta view (the 'apply to current' path).
+    Writes transcript_segments.speaker for the block's seqs directly — the
+    store the clean view renders — so the rename shows immediately without
+    touching the cluster-wide cluster_mapping (that's the 'apply to all'
+    path, handled by /segment-speaker)."""
+    seqs: list[int]
+    speaker: str
+
+
+@router.post("/recordings/{recording_id}/segments/set-speaker")
+async def set_segment_speaker(
+    recording_id: str,
+    req: SegmentSetSpeakerBody,
+    session: AsyncSession = Depends(get_session),
+):
+    """Set speaker on the given transcript segments (current-block rename)."""
+    from sqlalchemy import select, update
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    seqs = sorted({int(s) for s in req.seqs})
+    if not seqs:
+        raise HTTPException(status_code=400, detail="seqs required")
+    name = (req.speaker or "").strip()
+    result = await session.execute(
+        update(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == rid,
+            TranscriptSegment.seq.in_(seqs),
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .values(speaker=name or None)
+    )
+    await session.commit()
+    return {"recording_id": recording_id, "seqs": seqs, "renamed": result.rowcount}
+
+
 class MomBodyPatch(BaseModel):
     """Body for `PATCH /api/recordings/{id}/mom/body` — user edited the
     MoM in the rich-text editor. Stored on `recording.mom_json["edited_html"]`
@@ -1225,20 +1450,17 @@ async def patch_segment_speaker(
             if target_label.startswith("SPEAKER_") and target_label not in cluster_mapping:
                 cluster_mapping[target_label] = new_name
     else:
-        # scope=current: rename this seg. ALSO update cluster_mapping
-        # when we know the cluster_id — without that, FE's display
-        # layer (resolveSpeakerName via clusterMapping) won't pick up
-        # the new name for OTHER segs in the same cluster which
-        # contribute to the same visual block (rawAsClean merging).
+        # scope=current: rename ONLY this segment. We deliberately do NOT
+        # touch cluster_mapping here. cluster_mapping is cluster-global and
+        # the FE's display layer resolves names through it
+        # (resolveSpeakerName = clusterMapping[speaker] || speaker), so
+        # writing it would make a "current" rename leak onto EVERY other
+        # block sharing this cluster_id (the reported bug: renaming one
+        # "..." block renamed all unknown-speaker blocks at once). When a
+        # merged view-block spans several rows the FE already PATCHes each
+        # row's index individually, so per-segment writes are sufficient.
         seg_list[resolved_index]["speaker"] = new_name
         renamed = 1
-        anchor_cid = (
-            req.cluster_id
-            or seg_list[resolved_index].get("cluster_id")
-            or ""
-        ).strip()
-        if anchor_cid:
-            cluster_mapping[anchor_cid] = new_name
 
     # Persist the updated cluster_mapping back into the segs dict so the
     # next /clean fetch returns the latest names.

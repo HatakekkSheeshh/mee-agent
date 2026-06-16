@@ -28,6 +28,14 @@ interface Props {
   clusterMapping: Record<string, string>;
   onRegenerate: () => void;
   onClusterMappingSaved: () => void;
+  /** Called after a structural change to the segments (e.g. the user split
+   * one block into two via Enter in edit mode) so the parent re-pulls the
+   * raw transcript segments and the new block appears. */
+  onSegmentsChanged?: () => void;
+  /** Called when a speaker name not already among the project members is
+   * applied to a block — the parent persists it to recording.attendees so
+   * the guest becomes reusable in the dropdown for every other block. */
+  onAddGuest?: (name: string) => void | Promise<void>;
   busy: boolean;
   /** Hint set by TranscriptPane while an SSE stream is mid-flight. Triggers
    * a per-word reveal animation on the LAST (newest) segment — words pop
@@ -68,6 +76,19 @@ function fmtTime(sec: number): string {
   const s = Math.floor(sec % 60);
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
+// Char offset of the caret from the start of a contentEditable element.
+// Robust to the element holding multiple text nodes (we only ever render a
+// single text node in edit mode, but a stray <br> from a prior Enter would
+// otherwise throw off a naive anchorOffset read).
+function caretOffsetIn(el: HTMLElement): number {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return 0;
+  const range = sel.getRangeAt(0);
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.endContainer, range.endOffset);
+  return pre.toString().length;
+}
 
 export function NottaCleanView({
   recordingId,
@@ -77,6 +98,8 @@ export function NottaCleanView({
   clusterMapping,
   onRegenerate,
   onClusterMappingSaved,
+  onSegmentsChanged,
+  onAddGuest,
   busy,
   streaming = false,
   autoPlayKaraoke = false,
@@ -286,10 +309,17 @@ export function NottaCleanView({
     text: string;            // joined for merged blocks, original for single
     startMs: number | null;
     endMs: number | null;
-    /** Indices into `cleanSegments` that contributed (length 1 in edit). */
+    /** Indices into `cleanSegments` that contributed. */
     cleanIndices: number[];
+    /** transcript_segments.seq of every contributing row — the keys all
+     * clean edits (text/split/speaker) target, since the view renders raw
+     * segments. */
+    seqs: number[];
     /** All `RawSegment.words` flattened in playback order. */
     words: { text: string; start: number; end: number }[];
+    /** True if ANY contributing segment was user-edited → render `text`, not
+     * the (now-stale raw STT) word spans, in view mode. */
+    edited: boolean;
   };
   const displayBlocks = useMemo<DisplayBlock[]>(() => {
     const wordsFor = (i: number) => {
@@ -297,29 +327,32 @@ export function NottaCleanView({
       const r = rIdx != null ? rawSegments[rIdx] : null;
       return r?.words || [];
     };
-    if (editMode) {
-      // Edit mode → one block per cleanSegment (no merging).
-      return cleanSegments.map((s, i) => ({
-        speaker: s.speaker || "",
-        text: s.text || "",
-        startMs: segTimes[i]?.start_ms ?? null,
-        endMs: segTimes[i]?.end_ms ?? null,
-        cleanIndices: [i],
-        words: wordsFor(i),
-      }));
-    }
-    // View mode → merge consecutive same-speaker.
+    const seqFor = (i: number): number | undefined => {
+      const rIdx = segTimes[i]?.rawIdx;
+      const sq = rIdx != null ? rawSegments[rIdx]?.seq : undefined;
+      return typeof sq === "number" ? sq : undefined;
+    };
+    const editedFor = (i: number): boolean => {
+      const rIdx = segTimes[i]?.rawIdx;
+      return rIdx != null ? !!rawSegments[rIdx]?.edited : false;
+    };
+    // Merge consecutive same-speaker rows into one readable turn — in BOTH
+    // view and edit mode. (Edit used to keep them split per-segment, which
+    // surfaced raw STT fragments as tiny unreadable blocks. Now editing a
+    // merged turn collapses its segments server-side on save.)
     const blocks: DisplayBlock[] = [];
     for (let i = 0; i < cleanSegments.length; i++) {
       const seg = cleanSegments[i];
       const last = blocks[blocks.length - 1];
       const segWords = wordsFor(i);
+      const sq = seqFor(i);
       if (last && (last.speaker || "") === (seg.speaker || "")) {
-        // Append to existing block.
         last.text = (last.text + " " + (seg.text || "")).trim();
         last.endMs = segTimes[i]?.end_ms ?? last.endMs;
         last.cleanIndices.push(i);
+        if (sq != null) last.seqs.push(sq);
         if (segWords.length) last.words.push(...segWords);
+        if (editedFor(i)) last.edited = true;
       } else {
         blocks.push({
           speaker: seg.speaker || "",
@@ -327,8 +360,22 @@ export function NottaCleanView({
           startMs: segTimes[i]?.start_ms ?? null,
           endMs: segTimes[i]?.end_ms ?? null,
           cleanIndices: [i],
+          seqs: sq != null ? [sq] : [],
           words: [...segWords],
+          edited: editedFor(i),
         });
+      }
+    }
+    // Drop the raw word-spans whenever they no longer reconstruct the block's
+    // text — this happens after a user edit OR hallucination-filtering (the
+    // STT `words` keep e.g. "đăng ký kênh…" boilerplate that was stripped from
+    // `text`). View mode then renders `text` (the source of truth) instead of
+    // the stale words, so it matches edit mode. Words are kept (precise
+    // highlight) only when they DO match.
+    const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    for (const b of blocks) {
+      if (b.words.length && norm(b.words.map((w) => w.text).join("")) !== norm(b.text)) {
+        b.words = [];
       }
     }
     return blocks;
@@ -633,20 +680,39 @@ export function NottaCleanView({
       clusterId = rawSpk;
     }
 
-    async function patchOne(idx: number, sc: "current" | "all") {
-      return api.recordings.patchSegmentSpeaker(
-        recordingId, idx, name, sc, clusterId,
-      );
-    }
     try {
       if (scope === "all") {
-        const r = await patchOne(indices[0], "all");
+        // Cluster-wide rename: keep the cluster_mapping path so EVERY block of
+        // this speaker updates (matched by cluster_id / label server-side).
+        const r = await api.recordings.patchSegmentSpeaker(
+          recordingId, indices[0], name, "all", clusterId,
+        );
         console.log("[applyName] PATCH scope=all OK", r);
+        onClusterMappingSaved();
       } else {
-        const results = await Promise.all(indices.map((idx) => patchOne(idx, "current")));
-        console.log("[applyName] PATCH scope=current OK", results);
+        // Current block only: write transcript_segments.speaker for THIS
+        // turn's seqs directly — the store the view renders — so the rename
+        // shows immediately and never leaks to other blocks of the cluster.
+        const seqs = block?.seqs || [];
+        if (!seqs.length) {
+          onClusterMappingSaved();
+        } else {
+          const r = await api.recordings.setSegmentSpeakerBySeqs(
+            recordingId, seqs, name,
+          );
+          console.log("[applyName] set-speaker current OK", r);
+          onSegmentsChanged?.();
+        }
       }
-      onClusterMappingSaved();
+      // Persist a non-member name as a recording guest → reusable in the
+      // dropdown for every other block (and added to attendees).
+      if (
+        !members.some(
+          (m) => m.display_name.trim().toLowerCase() === name.trim().toLowerCase(),
+        )
+      ) {
+        await onAddGuest?.(name);
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.detail : (e as Error).message;
       console.error("[applyName] PATCH failed", e);
@@ -662,16 +728,37 @@ export function NottaCleanView({
   // If the attendees list is empty we fall back to ALL project members so
   // an unconfigured recording isn't locked out of speaker labelling.
   const recordingMembers = useMemo(() => {
-    if (!attendees || attendees.length === 0) return members;
+    const memberNames = new Set(
+      members.map((m) => m.display_name.trim().toLowerCase()),
+    );
+    // Guests = attendee names with NO matching project member. Surface them as
+    // synthetic member entries so a name added on one block (→ recording
+    // attendees) is reusable in the dropdown for every other block.
+    const guests: MeetingMember[] = (attendees || [])
+      .map((n) => n.trim())
+      .filter(
+        (n, i, arr) =>
+          n &&
+          !memberNames.has(n.toLowerCase()) &&
+          arr.findIndex((x) => x.toLowerCase() === n.toLowerCase()) === i,
+      )
+      .map((n) => ({
+        user_id: `guest:${n.toLowerCase()}`,
+        email: "",
+        display_name: n,
+        avatar_url: null,
+        voice_enrolled: false,
+        role: "viewer" as const,
+      }));
+    if (!attendees || attendees.length === 0) return [...members, ...guests];
     const allow = new Set(attendees.map((n) => n.trim().toLowerCase()).filter(Boolean));
-    if (allow.size === 0) return members;
     const scoped = members.filter((m) =>
       allow.has(m.display_name.trim().toLowerCase()),
     );
-    // Defensive fallback: if the intersection is empty (attendees names
-    // don't match any member, e.g. external guests typed in), show all
-    // members so user has SOMETHING to pick.
-    return scoped.length > 0 ? scoped : members;
+    // Fallback to all members if no attendee matched a real member, but always
+    // keep the typed-in guests so they remain pickable.
+    const base = scoped.length > 0 ? scoped : members;
+    return [...base, ...guests];
   }, [members, attendees]);
 
   // Filter members for the dropdown search. When the search is empty show
@@ -890,12 +977,7 @@ export function NottaCleanView({
                 </div>
                 <div
                   className={`notta-row-text${editMode ? " editable" : ""}${
-                    (() => {
-                      const cIdx = block.cleanIndices[0];
-                      const rIdx = segTimes[cIdx]?.rawIdx;
-                      const seq = rIdx != null ? rawSegments[rIdx]?.seq : undefined;
-                      return seq != null && savingSeqs.has(seq) ? " saving" : "";
-                    })()
+                    block.seqs[0] != null && savingSeqs.has(block.seqs[0]) ? " saving" : ""
                   }`}
                   // In edit mode, the text turns into a contentEditable
                   // <div>. We deliberately render the PLAIN seg.text (not
@@ -904,29 +986,104 @@ export function NottaCleanView({
                   contentEditable={editMode}
                   suppressContentEditableWarning
                   onClick={editMode ? (e) => e.stopPropagation() : undefined}
+                  onKeyDown={
+                    editMode
+                      ? async (e) => {
+                          // Backspace at the START of a block → merge it INTO
+                          // the block ABOVE (adopting that block's speaker),
+                          // like joining two paragraphs. Anywhere else it's a
+                          // normal character delete.
+                          if (
+                            e.key === "Backspace" &&
+                            !(e.nativeEvent as { isComposing?: boolean }).isComposing
+                          ) {
+                            const elB = e.currentTarget as HTMLElement;
+                            const sel = window.getSelection();
+                            const atStart =
+                              caretOffsetIn(elB) === 0 && (!sel || sel.isCollapsed);
+                            const prev = displayBlocks[i - 1];
+                            if (!atStart || i === 0 || !prev) return;
+                            e.preventDefault();
+                            const curText = (elB.textContent || "").trim();
+                            const mergedSeqs = [...prev.seqs, ...block.seqs];
+                            if (!mergedSeqs.length || !recordingId) return;
+                            const joined = [prev.text, curText]
+                              .filter(Boolean)
+                              .join(" ")
+                              .trim();
+                            try {
+                              await api.recordings.rewriteSegments(
+                                recordingId, mergedSeqs,
+                                [{ text: joined, speaker: prev.speaker }],
+                              );
+                              onSegmentsChanged?.();
+                            } catch (err) {
+                              const msg =
+                                err instanceof ApiError ? err.detail : (err as Error).message;
+                              alert(t("notta.error.saveSegment", { msg }));
+                            }
+                            return;
+                          }
+                          // Notta "Enter to split a mixed-speaker turn".
+                          // Shift+Enter is left alone (in case a soft break
+                          // is ever wanted); IME composition Enter (Telex/
+                          // Vietnamese) must NOT trigger a split — it's just
+                          // confirming a character.
+                          if (
+                            e.key !== "Enter" ||
+                            e.shiftKey ||
+                            (e.nativeEvent as { isComposing?: boolean }).isComposing
+                          ) {
+                            return;
+                          }
+                          // Always swallow the Enter so contentEditable never
+                          // injects a stray <br>/<div> (which textContent save
+                          // would silently drop anyway).
+                          e.preventDefault();
+                          const el = e.currentTarget as HTMLElement;
+                          const fullText = el.textContent || "";
+                          const offset = caretOffsetIn(el);
+                          const before = fullText.slice(0, offset).trim();
+                          const after = fullText.slice(offset).trim();
+                          // Caret at an edge → nothing to split.
+                          if (!before || !after) return;
+                          const seqs = block.seqs;
+                          if (!seqs.length || !recordingId) return;
+                          try {
+                            // Split = rewrite the turn's segments into two
+                            // pieces. The 2nd piece gets a BLANK speaker so it
+                            // renders separately (won't re-merge) and prompts
+                            // the user to assign who actually speaks it.
+                            await api.recordings.rewriteSegments(recordingId, seqs, [
+                              { text: before, speaker: block.speaker },
+                              { text: after, speaker: "" },
+                            ]);
+                            onSegmentsChanged?.();
+                          } catch (err) {
+                            const msg =
+                              err instanceof ApiError ? err.detail : (err as Error).message;
+                            alert(t("notta.error.splitSegment", { msg }));
+                          }
+                        }
+                      : undefined
+                  }
                   onBlur={
                     editMode
                       ? async (e) => {
                           const newText = (e.currentTarget.textContent || "").trim();
-                          // In edit mode each block is one cleanSegment
-                          // (no merging) so cleanIndices[0] is the index
-                          // into rawSegments — pull its `seq` for the
-                          // PATCH path.
-                          const cIdx = block.cleanIndices[0];
-                          const rIdx = segTimes[cIdx]?.rawIdx;
-                          const rawSeg = rIdx != null ? rawSegments[rIdx] : null;
-                          const seq = rawSeg?.seq;
-                          if (seq == null) return;
                           if (newText === (seg.text || "").trim()) return; // no change
-                          setSavingSeqs((prev) => {
-                            const next = new Set(prev);
-                            next.add(seq);
-                            return next;
-                          });
+                          const seqs = block.seqs;
+                          if (!seqs.length || !recordingId || !newText) return;
+                          const key = seqs[0];
+                          setSavingSeqs((prev) => new Set(prev).add(key));
                           try {
-                            await api.recordings.patchSegmentText(
-                              recordingId, seq, newText,
-                            );
+                            // Save = rewrite the turn into ONE segment with the
+                            // edited text (collapses a merged turn's rows). The
+                            // refetch makes the edit persist on toggle to view.
+                            await api.recordings.rewriteSegments(recordingId, seqs, [
+                              { text: newText, speaker: block.speaker },
+                            ]);
+                            onSegmentsChanged?.();
                           } catch (err) {
                             const msg =
                               err instanceof ApiError ? err.detail : (err as Error).message;
@@ -934,7 +1091,7 @@ export function NottaCleanView({
                           } finally {
                             setSavingSeqs((prev) => {
                               const next = new Set(prev);
-                              next.delete(seq);
+                              next.delete(key);
                               return next;
                             });
                           }
@@ -950,6 +1107,9 @@ export function NottaCleanView({
                     // render one continuous run with the current word
                     // highlighted regardless of which sub-segment it
                     // originally came from.
+                    // block.words is already cleared in displayBlocks when it
+                    // diverges from block.text (edit / hallucination-filter),
+                    // so word-spans render only when they match the text.
                     const rawWords = block.words;
                     if (rawWords && rawWords.length > 0) {
                       // Show ALL words — playback UX. The currently-spoken
