@@ -426,11 +426,41 @@ class AddMemberRequest(BaseModel):
     role: str = "editor"  # 'owner' | 'editor' | 'viewer'
 
 
+async def _require_owner_or_editor(session: AsyncSession, meeting, user: User) -> str:
+    """Authorize a member-management action. Returns the caller's role
+    ('owner' | 'editor'). Raises 403 for viewers / non-members.
+
+    Owner = the project creator (meeting.user_id). Otherwise the caller must
+    hold an active (non-revoked) editor/owner membership.
+    """
+    from sqlalchemy import select
+    from meeting.db.models import MeetingMember
+
+    if meeting.user_id == user.id:
+        return "owner"
+    row = (
+        await session.execute(
+            select(MeetingMember).where(
+                MeetingMember.meeting_id == meeting.id,
+                MeetingMember.user_id == user.id,
+                MeetingMember.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row and row.role in ("owner", "editor"):
+        return row.role
+    raise HTTPException(
+        status_code=403,
+        detail="Chỉ owner hoặc editor mới được mời/xoá thành viên.",
+    )
+
+
 @router.post("/meetings/{meeting_id}/members")
 async def add_meeting_member(
     meeting_id: str,
     req: AddMemberRequest,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """Invite a user (by email) to this meeting/project. The invited user
     must exist in `users` (logged in O365 once). Re-invite of a previously
@@ -442,6 +472,7 @@ async def add_meeting_member(
     meeting = await repo.get_meeting(session, mid)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    caller_role = await _require_owner_or_editor(session, meeting, user)
 
     email = (req.email or "").strip().lower()
     if not email:
@@ -449,6 +480,12 @@ async def add_meeting_member(
     role = (req.role or "editor").strip().lower()
     if role not in ("owner", "editor", "viewer"):
         raise HTTPException(status_code=400, detail="invalid role")
+    # Only the owner may grant the 'owner' role — stops an editor from
+    # escalating someone (or themselves via re-invite) to owner.
+    if role == "owner" and caller_role != "owner":
+        raise HTTPException(
+            status_code=403, detail="Chỉ chủ project mới được gán quyền owner."
+        )
 
     target = (
         await session.execute(select(UserM).where(UserM.email == email))
@@ -489,6 +526,7 @@ async def remove_meeting_member(
     meeting_id: str,
     user_id: str,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """Revoke a member's access. Soft-delete via revoked_at — keeps
     historical attribution intact. Cannot remove the meeting creator."""
@@ -501,6 +539,7 @@ async def remove_meeting_member(
     meeting = await repo.get_meeting(session, mid)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    await _require_owner_or_editor(session, meeting, user)
     if meeting.user_id == uid:
         raise HTTPException(status_code=400, detail="Cannot remove project creator")
 
