@@ -11,7 +11,7 @@ from typing import Literal, Optional, TypedDict
 PM_MAX_ROUNDS = 6
 
 # Safety cap on the unified agent ⇄ tools loop (number of LLM tool-calling rounds).
-MAX_AGENT_ROUNDS = 6
+MAX_AGENT_ROUNDS = 10
 
 # Explicit opt-in to the pm-agent A2A branch. A message starting with this
 # command (case-insensitive, leading whitespace ok) routes deterministically to

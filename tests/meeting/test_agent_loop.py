@@ -323,8 +323,9 @@ async def test_agent_max_rounds_cap(monkeypatch):
 
     assert not await _interrupted(graph, cfg)
     assert result.get("final_reply")
-    # Cap stops further LLM calls at MAX_AGENT_ROUNDS.
-    assert len(llm.calls) == MAX_AGENT_ROUNDS
+    # Cap stops tool-CALLING rounds at MAX_AGENT_ROUNDS, then makes ONE final
+    # tool-less synthesis call to answer from gathered results (+1).
+    assert len(llm.calls) == MAX_AGENT_ROUNDS + 1
 
 
 async def test_agent_grounding_required_no_longer_forces_tool(monkeypatch):
