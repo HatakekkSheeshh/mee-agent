@@ -2030,8 +2030,11 @@ html { scroll-behavior: smooth; }
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
-  /* Primary action → brand green, matching the app's other CTAs. */
-  color: var(--bg);
+  /* Primary action → brand green, matching the app's other CTAs.
+     Fixed near-black-green text (like .brand-mark) reads well on BOTH the
+     dark-theme bright green (#00E89B) and the light-theme emerald (#10b981);
+     var(--bg) would be white-on-emerald (~2.5:1) in light mode. */
+  color: #001a10;
   background: var(--accent);
   border: none;
   border-radius: 7px;
@@ -2040,6 +2043,15 @@ html { scroll-behavior: smooth; }
 }
 .welcome-banner-warning-action:hover {
   background: var(--accent-h);
+}
+/* Light theme: --warn amber (#f5a623) on the light surface is too low-contrast
+   for the label text → use a darker amber. (Dark theme keeps the bright amber,
+   which is high-contrast on the dark surface.) */
+[data-theme="light"] .welcome-banner-warning-label {
+  color: #b45309;
+}
+[data-theme="light"] .welcome-banner-warning {
+  border-left-color: #d97706;
 }
 @media (prefers-reduced-motion: reduce) {
   .welcome-banner-warning-action { transition: none; }
