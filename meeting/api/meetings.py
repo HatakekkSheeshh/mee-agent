@@ -27,6 +27,8 @@ import os
 
 from meeting.db import get_session
 from meeting.db import repositories as repo
+from meeting.db.models import User
+from meeting.auth import get_current_user
 from meeting.graphs import get_checkpointer, run_mom_graph
 from meeting.note_generator import generate_meeting_notes
 from meeting.services import clean_transcript
@@ -176,9 +178,10 @@ async def list_available_models():
 
 @router.post("/meetings", response_model=MeetingOut)
 async def create_meeting_endpoint(
-    req: MeetingCreate, session: AsyncSession = Depends(get_session)
+    req: MeetingCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    user = await repo.get_or_create_dev_user(session)
     meeting = await repo.create_meeting(
         session,
         user_id=user.id,
@@ -189,8 +192,10 @@ async def create_meeting_endpoint(
 
 
 @router.get("/meetings", response_model=list[MeetingOut])
-async def list_meetings_endpoint(session: AsyncSession = Depends(get_session)):
-    user = await repo.get_or_create_dev_user(session)
+async def list_meetings_endpoint(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     meetings = await repo.list_meetings_for_user(session, user.id)
     return [_meeting_to_out(m) for m in meetings]
 
@@ -636,6 +641,7 @@ async def create_recording_comment(
     recording_id: str,
     req: CommentCreate,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """Create a new comment on the recording. Author = current user
     (resolved via the dev-user shortcut until auth migration lands)."""
@@ -648,7 +654,6 @@ async def create_recording_comment(
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text required")
-    user = await repo.get_or_create_dev_user(session)
     c = RecordingComment(
         recording_id=rid,
         user_id=user.id,
@@ -1432,6 +1437,7 @@ async def clean_recording_endpoint(
     recording_id: str,
     regenerate: bool = False,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """LLM clean transcript for 1 recording, cached per-recording in DB.
 
@@ -1517,6 +1523,7 @@ async def clean_recording_endpoint(
     # Capture parameters now — the coroutine runs later in a fresh session.
     target_rid_str = recording_id
     target_regenerate = regenerate
+    target_user_id = user.id
 
     async def _run_inline_clean():
         from meeting.db.base import AsyncSessionLocal
@@ -1539,9 +1546,8 @@ async def clean_recording_endpoint(
                 )
             pm: dict[str, str] = {}
             if r.speaker_embeddings:
-                u = await repo.get_or_create_dev_user(s2)
                 pm = await match_clusters_to_names(
-                    s2, user_id=u.id, speaker_embeddings=r.speaker_embeddings,
+                    s2, user_id=target_user_id, speaker_embeddings=r.speaker_embeddings,
                 )
             vocab_parts = [
                 (m.vocab_hints or "").strip() if m else "",
@@ -1637,7 +1643,6 @@ async def clean_recording_endpoint(
     pre_mapped: dict[str, str] = {}
     if recording.speaker_embeddings:
         from meeting.services.speaker_matcher import match_clusters_to_names
-        user = await repo.get_or_create_dev_user(session)
         pre_mapped = await match_clusters_to_names(
             session,
             user_id=user.id,
@@ -2357,6 +2362,7 @@ async def bind_voiceprint_endpoint(
     recording_id: str,
     req: VoiceprintBind,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """User labelled a SPEAKER_NN with a real name → save its embedding to
     the user's voiceprint DB so future meetings auto-recognise this voice.
@@ -2379,7 +2385,6 @@ async def bind_voiceprint_endpoint(
     embeddings = recording.speaker_embeddings or {}
     emb = embeddings.get(req.cluster_id)
     new_name = req.name.strip()
-    user = await repo.get_or_create_dev_user(session)
     vp = None
     voiceprint_saved = False
 
@@ -2550,10 +2555,10 @@ async def bind_voiceprint_endpoint(
 @router.get("/voiceprints")
 async def list_voiceprints_endpoint(
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import list_voiceprints
 
-    user = await repo.get_or_create_dev_user(session)
     rows = await list_voiceprints(session, user.id)
     return [
         {
@@ -2572,11 +2577,11 @@ async def rename_voiceprint_endpoint(
     voiceprint_id: str,
     req: VoiceprintRename,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import rename_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
-    user = await repo.get_or_create_dev_user(session)
     vp = await rename_voiceprint(session, vp_id, user.id, req.name)
     if not vp:
         raise HTTPException(status_code=404, detail="Voiceprint not found")
@@ -2587,11 +2592,11 @@ async def rename_voiceprint_endpoint(
 async def delete_voiceprint_endpoint(
     voiceprint_id: str,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import delete_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
-    user = await repo.get_or_create_dev_user(session)
     ok = await delete_voiceprint(session, vp_id, user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Voiceprint not found")
