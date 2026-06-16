@@ -964,7 +964,7 @@ export function ChatPane() {
           <button
             className="chat-send"
             type="button"
-            title="Send"
+            title={t("chat.sendTitle")}
             disabled={!input.trim()}
             onClick={() => void handleSend()}
           >

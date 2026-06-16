@@ -118,7 +118,11 @@ log.info("Loading faster-whisper large-v3...")
 ASR = WhisperModel(
     "large-v3",
     device=DEVICE,
-    compute_type="int8_float16" if DEVICE == "cuda" else "int8",
+    # Upgraded from int8_float16 → float16. int8 quantization was losing
+    # ~30-40% of content on Vietnamese meeting audio (silence hallucination
+    # "Ừm. Ừm." plus dropped/repeated segments). float16 uses ~6GB VRAM
+    # instead of ~3GB but T4 still has 15GB headroom with pyannote loaded.
+    compute_type="float16" if DEVICE == "cuda" else "int8",
     download_root="/kaggle/working/models",
 )
 log.info("✓ faster-whisper large-v3 loaded")
@@ -156,6 +160,7 @@ print("="*50)
 # ════════════════════════════════════════════════════════════════════
 
 import io
+import json
 import tempfile
 import numpy as np
 import soundfile as sf
@@ -401,10 +406,25 @@ async def transcribe(
             audio_np,
             language=language or "vi",
             word_timestamps=True,
-            vad_filter=True,           # skip silence — faster + cleaner output
+            vad_filter=True,
+            # Tighter VAD so genuine silence is skipped (no "Ừm. Ừm. Ừm."
+            # hallucinations like we saw at 3:00-3:45 on AI_Innovation_16phut)
+            # but short between-sentence pauses aren't accidentally dropped.
+            # Config locked at "Iter 5" (fp16 + VAD 0.45 + no_speech 0.7).
+            # Aggressive params from later iterations (VAD 0.35,
+            # compression_ratio 2.0, log_prob -0.7) did not measurably
+            # improve recall on AI_Innovation_16phut.flac while raising
+            # the risk of dropping genuine quiet speech. Keep this as the
+            # known-good baseline; revisit only with a wider eval corpus.
+            vad_parameters={
+                "threshold": 0.45,
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 200,
+            },
             initial_prompt=prompt or None,
             beam_size=5,
-            condition_on_previous_text=True,
+            condition_on_previous_text=False,
+            no_speech_threshold=0.7,
         )
 
         # Materialize the generator (faster-whisper is lazy) + flatten words.
@@ -453,6 +473,168 @@ async def transcribe(
     finally:
         try: os.unlink(tmp_path)
         except: pass
+
+
+# ── Streaming endpoint (SSE) — Notta-style progressive output ──────────
+# Yields each ASR segment as it lands instead of buffering until the full
+# audio is decoded. Diarization runs first (it's batch — pyannote needs
+# the whole file to cluster speakers), then ASR streams over it; each
+# segment carries its speaker label + per-word timestamps. The Mee
+# backend proxies this stream straight to the FE EventSource.
+
+from fastapi.responses import StreamingResponse
+
+def _sse(event_obj: dict) -> str:
+    """Serialize one SSE 'message' frame. EventSource API splits on the
+    `data:` prefix and double newline, so we keep both."""
+    return f"data: {json.dumps(event_obj, ensure_ascii=False)}\n\n"
+
+
+@app.post("/v1/audio/transcriptions/stream")
+async def transcribe_stream(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(default=None),
+    prompt: Optional[str] = Form(default=None),
+    min_speakers: Optional[int] = Form(default=None),
+    max_speakers: Optional[int] = Form(default=None),
+):
+    """Same as /v1/audio/transcriptions but emits Server-Sent Events.
+
+    Event sequence:
+      {type:"meta",     duration, language}         — first frame
+      {type:"diarize",  turns:[...], embeddings}    — after pyannote runs
+      {type:"segment",  speaker, text, start, end,  — one per ASR segment
+                        words:[{text,start,end}]}     (yielded live)
+      {type:"done",     segments_count}             — terminator
+      {type:"error",    detail}                     — on failure
+    """
+    audio_bytes = await file.read()
+    size_mb = len(audio_bytes) / 1024 / 1024
+    log.info(f"[STREAM] Received {size_mb:.1f}MB audio")
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    async def event_stream():
+        try:
+            # Padding comment first — Cloudflare's free tunnel + uvicorn
+            # buffer up to ~4KB before flushing. A 2KB SSE comment forces
+            # an immediate flush so the FE's reader.read() returns frame-
+            # by-frame instead of in one big delayed burst (which would
+            # collapse the Notta word-reveal animation into "everything
+            # appears at once"). EventSource clients ignore `:` lines.
+            yield ":" + (" " * 2048) + "\n\n"
+
+            # 1. Load + diarize (batch — must finish before streaming ASR so
+            #    each emitted segment already has its speaker).
+            waveform, sr = _load_audio(tmp_path)
+            audio_np = waveform.squeeze(0).numpy()
+            duration = float(audio_np.shape[0]) / sr
+            yield _sse({"type": "meta", "duration": duration, "language": language or "vi"})
+
+            d_kwargs = {}
+            if min_speakers is not None: d_kwargs["min_speakers"] = min_speakers
+            if max_speakers is not None: d_kwargs["max_speakers"] = max_speakers
+            log.info("[STREAM] diarize…")
+            annotation = DIARIZE({"waveform": waveform, "sample_rate": sr}, **d_kwargs)
+            if hasattr(annotation, "speaker_diarization"):
+                annotation = annotation.speaker_diarization
+            elif hasattr(annotation, "diarization"):
+                annotation = annotation.diarization
+            diarize_segs = []
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                diarize_segs.append({
+                    "speaker": speaker, "start": float(turn.start), "end": float(turn.end),
+                })
+            cluster_embeddings = _compute_cluster_embeddings(waveform, sr, diarize_segs)
+            merged_turns = _merge_diarize_turns(diarize_segs)
+            yield _sse({
+                "type": "diarize",
+                "turns": merged_turns,
+                "embeddings": cluster_embeddings,
+            })
+
+            # 2. ASR streaming — faster-whisper returns a generator; iterate
+            #    and emit each segment as it's produced. ~3-5s to first
+            #    segment vs ~60s for full audio in batch mode.
+            log.info("[STREAM] ASR streaming…")
+            segments_gen, info = ASR.transcribe(
+                audio_np,
+                language=language or "vi",
+                word_timestamps=True,
+                vad_filter=True,
+                vad_parameters={
+                    "threshold": 0.45,
+                    "min_silence_duration_ms": 500,
+                    "speech_pad_ms": 200,
+                },
+                initial_prompt=prompt or None,
+                beam_size=5,
+                # Disable context spillover — see batch endpoint comment.
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+            )
+            import asyncio
+            seg_count = 0
+            for seg in segments_gen:
+                seg_text = (seg.text or "").strip()
+                if not seg_text:
+                    continue
+                words_payload = []
+                if seg.words:
+                    for w in seg.words:
+                        txt = (w.word or "").strip()
+                        if not txt:
+                            continue
+                        words_payload.append({
+                            "text": txt,
+                            "start": float(w.start),
+                            "end": float(w.end),
+                        })
+                # Resolve speaker via diarize turns + word midpoint.
+                mid_s = (float(seg.start) + float(seg.end)) / 2
+                spk = _word_speaker(mid_s, mid_s, merged_turns) if merged_turns else "SPEAKER_UNKNOWN"
+                yield _sse({
+                    "type": "segment",
+                    "speaker": spk,
+                    "text": seg_text,
+                    "start": float(seg.start),
+                    "end": float(seg.end),
+                    "words": words_payload,
+                })
+                # Yield control to the event loop so uvicorn's writer can
+                # actually flush the chunk before the next iteration eats
+                # CPU on faster-whisper's decode. Without this, the entire
+                # iteration runs synchronously and all SSE frames pile up
+                # in one network packet.
+                await asyncio.sleep(0)
+                seg_count += 1
+
+            yield _sse({"type": "done", "segments_count": seg_count})
+            log.info(f"[STREAM] ✓ Done: {seg_count} segments")
+
+        except Exception as e:
+            log.exception("[STREAM] failed")
+            yield _sse({"type": "error", "detail": str(e)})
+        finally:
+            try: os.unlink(tmp_path)
+            except: pass
+
+    # Explicit SSE headers — Cloudflare's free tunnel buffers responses by
+    # default, which collapses the stream into one giant response (or 520s
+    # when the buffer fills before EOF). `X-Accel-Buffering: no` is honoured
+    # by most reverse proxies including cloudflared; `Cache-Control: no-cache`
+    # plus `Connection: keep-alive` close the remaining buffering loopholes.
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ════════════════════════════════════════════════════════════════════

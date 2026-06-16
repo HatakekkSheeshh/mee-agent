@@ -35,11 +35,27 @@ interface AppState {
   setTheme: (t: Theme) => void;
   chatOpen: boolean;
   toggleChat: () => void;
+  momOpen: boolean;
+  toggleMom: () => void;
+  setMomOpen: (v: boolean) => void;
+  detailsOpen: boolean;
+  toggleDetails: () => void;
+  insightsOpen: boolean;
+  toggleInsights: () => void;
+  commentsOpen: boolean;
+  toggleComments: () => void;
   sidebarOpen: boolean;
   toggleSidebar: () => void;
   lang: Lang;
   setLang: (l: Lang) => void;
   t: (key: StringKey, vars?: Record<string, string | number>) => string;
+  // Audio device prefs — null = browser/OS default.
+  audioInputDeviceId: string | null;
+  setAudioInputDeviceId: (id: string | null) => void;
+  audioOutputDeviceId: string | null;
+  setAudioOutputDeviceId: (id: string | null) => void;
+  audioDevices: { inputs: MediaDeviceInfo[]; outputs: MediaDeviceInfo[] };
+  refreshAudioDevices: () => Promise<void>;
 
   // Per-pane status banners — split so MoM-related ops show in MoMPane
   // (not the pane the button lives in).
@@ -205,6 +221,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // MoM pane is now a togglable side panel (Notta-style). Default open
+  // so existing flows still see it; users can hide it via the floating
+  // rail button to reclaim transcript width.
+  const [momOpen, setMomOpenState] = useState<boolean>(
+    () => localStorage.getItem("mee.momOpen") !== "false",
+  );
+  const setMomOpen = useCallback((v: boolean) => {
+    localStorage.setItem("mee.momOpen", String(v));
+    setMomOpenState(v);
+  }, []);
+  const toggleMom = useCallback(() => {
+    setMomOpenState((v) => {
+      localStorage.setItem("mee.momOpen", String(!v));
+      return !v;
+    });
+  }, []);
+
+  // Meeting "Chi tiết" panel — the expandable form (date, attendees,
+  // vocab, model picks) lives in MeetingControl but the toggle button
+  // now sits in Topbar, so the state needs to be shared.
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const toggleDetails = useCallback(() => setDetailsOpen((v) => !v), []);
+
+  // Floating-rail side panes — Insights (analytics) + Comments.
+  // Both slide in from the right like ChatPane; only one of the three
+  // (chat / insights / comments) is meaningful at a time so toggling
+  // one closes the others.
+  const [insightsOpen, setInsightsOpenState] = useState(false);
+  const [commentsOpen, setCommentsOpenState] = useState(false);
+  const toggleInsights = useCallback(() => {
+    setInsightsOpenState((v) => {
+      const next = !v;
+      if (next) setCommentsOpenState(false);
+      return next;
+    });
+  }, []);
+  const toggleComments = useCallback(() => {
+    setCommentsOpenState((v) => {
+      const next = !v;
+      if (next) setInsightsOpenState(false);
+      return next;
+    });
+  }, []);
+
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(
     () => localStorage.getItem("mee.sidebarOpen") !== "0",
   );
@@ -218,6 +278,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.body.classList.toggle("sidebar-open", sidebarOpen);
     document.body.classList.toggle("sidebar-collapsed", !sidebarOpen);
   }, [sidebarOpen]);
+
+  // ─── Audio device preferences ─────────────────────────────────
+  // Persisted deviceIds for mic + speaker. null = use browser/OS
+  // default. Mic deviceId is also read directly by useLiveRecording
+  // (legacy localStorage path); the state here keeps the UI in sync.
+  const [audioInputDeviceId, setAudioInputDeviceIdState] = useState<string | null>(
+    () => localStorage.getItem("mee.audioInputDeviceId") || null,
+  );
+  const setAudioInputDeviceId = useCallback((id: string | null) => {
+    if (id) localStorage.setItem("mee.audioInputDeviceId", id);
+    else localStorage.removeItem("mee.audioInputDeviceId");
+    setAudioInputDeviceIdState(id);
+  }, []);
+  const [audioOutputDeviceId, setAudioOutputDeviceIdState] = useState<string | null>(
+    () => localStorage.getItem("mee.audioOutputDeviceId") || null,
+  );
+  const setAudioOutputDeviceId = useCallback((id: string | null) => {
+    if (id) localStorage.setItem("mee.audioOutputDeviceId", id);
+    else localStorage.removeItem("mee.audioOutputDeviceId");
+    setAudioOutputDeviceIdState(id);
+  }, []);
+  const [audioDevices, setAudioDevices] = useState<{
+    inputs: MediaDeviceInfo[];
+    outputs: MediaDeviceInfo[];
+  }>({ inputs: [], outputs: [] });
+  const refreshAudioDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      // Chrome/Edge emit synthetic "default" and "communications"
+      // deviceIds that mirror whichever real device is currently the
+      // system default. We render our own "System default" entry, so
+      // filter these out to avoid duplicates in the picker.
+      const isAlias = (d: MediaDeviceInfo) =>
+        d.deviceId === "default" || d.deviceId === "communications";
+      setAudioDevices({
+        inputs: all.filter((d) => d.kind === "audioinput" && !isAlias(d)),
+        outputs: all.filter((d) => d.kind === "audiooutput" && !isAlias(d)),
+      });
+    } catch {
+      /* ignore — surface in UI as empty list */
+    }
+  }, []);
+  // Initial enumerate + react to device hotplug.
+  useEffect(() => {
+    void refreshAudioDevices();
+    if (!navigator.mediaDevices?.addEventListener) return;
+    const onChange = () => { void refreshAudioDevices(); };
+    navigator.mediaDevices.addEventListener("devicechange", onChange);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", onChange);
+  }, [refreshAudioDevices]);
 
   const [lang, setLangState] = useState<Lang>(
     () => (localStorage.getItem("mee.lang") as Lang) || "vi",
@@ -280,11 +391,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTheme,
     chatOpen,
     toggleChat,
+    momOpen,
+    toggleMom,
+    setMomOpen,
+    detailsOpen,
+    toggleDetails,
+    insightsOpen,
+    toggleInsights,
+    commentsOpen,
+    toggleComments,
     sidebarOpen,
     toggleSidebar,
     lang,
     setLang,
     t,
+    audioInputDeviceId,
+    setAudioInputDeviceId,
+    audioOutputDeviceId,
+    setAudioOutputDeviceId,
+    audioDevices,
+    refreshAudioDevices,
     momStatus,
     setMomStatus,
     transcriptStatus,
