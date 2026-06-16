@@ -1740,6 +1740,14 @@ body.sidebar-collapsed { --sidebar-w: 56px; }
     min-height: 30px;
     box-sizing: border-box;
 }
+.task-due-group { display: flex; flex-direction: column; gap: 2px; }
+.task-due-selects { display: flex; gap: 6px; }
+.task-due-day, .task-due-month, .task-due-year {
+    flex: 1;
+    min-width: 0;
+    min-height: 30px;
+    box-sizing: border-box;
+}
 .task-reason { width: 100%; box-sizing: border-box; resize: vertical; min-height: 38px; }
 .task-remove {
     flex-shrink: 0;

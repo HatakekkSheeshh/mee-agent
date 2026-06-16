@@ -49,12 +49,53 @@ export function parseTaskTemplate(
 
 interface GroupItem {
   subject: string;
-  due_date: string;
+  // Due date is edited as three independent select parts so a partial choice
+  // (e.g. only the year) is preserved while the user fills the rest. Combined
+  // to YYYY-MM-DD on flatten; empty parts → no due date.
+  day: string;
+  month: string;
+  year: string;
   description: string;
 }
 interface TaskGroup {
   name: string; // assignee
   items: GroupItem[];
+}
+
+interface DateParts {
+  day: string;
+  month: string;
+  year: string;
+}
+
+/** Parse a stored due_date into select parts. Prefers ISO (YYYY-MM-DD) but
+ * tolerates the agent/MoM day-first DD/MM/YYYY (or DD-MM-YYYY). Unparseable
+ * (incl. "Chưa xác định", "") → all-empty parts so the selects start blank. */
+export function parseDateParts(s: string): DateParts {
+  const text = (s ?? "").trim();
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return { year: iso[1], month: String(+iso[2]), day: String(+iso[3]) };
+  const dmy = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmy) return { day: String(+dmy[1]), month: String(+dmy[2]), year: dmy[3] };
+  return { day: "", month: "", year: "" };
+}
+
+/** Combine select parts into YYYY-MM-DD, or "" unless all three are set. */
+export function combineDateParts(p: DateParts): string {
+  if (!p.day || !p.month || !p.year) return "";
+  return `${p.year}-${p.month.padStart(2, "0")}-${p.day.padStart(2, "0")}`;
+}
+
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => String(i + 1));
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => String(i + 1));
+
+/** Current year .. +2, always including a pre-filled `selected` year. */
+function yearOptions(selected: string): string[] {
+  const now = new Date().getFullYear();
+  const years = new Set<string>();
+  for (let y = now; y <= now + 2; y++) years.add(String(y));
+  if (selected) years.add(selected);
+  return Array.from(years).sort();
 }
 
 function groupByAssignee(items: TaskTemplateItem[]): TaskGroup[] {
@@ -68,7 +109,8 @@ function groupByAssignee(items: TaskTemplateItem[]): TaskGroup[] {
       byName.set(name, g);
       order.push(name);
     }
-    g.items.push({ subject: it.subject, due_date: it.due_date, description: it.description });
+    const parts = parseDateParts(it.due_date);
+    g.items.push({ subject: it.subject, ...parts, description: it.description });
   }
   return order.map((n) => byName.get(n)!);
 }
@@ -80,7 +122,7 @@ function flattenGroups(groups: TaskGroup[]): TaskTemplateItem[] {
       .map((it) => ({
         subject: it.subject.trim(),
         assignee: g.name.trim(),
-        due_date: it.due_date,
+        due_date: combineDateParts({ day: it.day, month: it.month, year: it.year }),
         description: it.description,
       })),
   );
@@ -121,7 +163,7 @@ export function CreateTaskCard({ template, busy, onApprove, onReject }: CreateTa
         .filter((g) => g.items.length > 0),
     );
 
-  const blankItem = (): GroupItem => ({ subject: "", due_date: "", description: "" });
+  const blankItem = (): GroupItem => ({ subject: "", day: "", month: "", year: "", description: "" });
 
   const addItem = (gi: number) =>
     setGroups((prev) =>
@@ -186,17 +228,47 @@ export function CreateTaskCard({ template, busy, onApprove, onReject }: CreateTa
                           onChange={(e) => updateItem(gi, ii, "subject", e.target.value)}
                         />
                       </label>
-                      <label className="task-mini">
+                      <div className="task-mini task-due-group">
                         <span className="task-mini-label">{t("chat.task.due")}</span>
-                        <input
-                          className="chat-input task-due"
-                          type="text"
-                          value={it.due_date}
-                          disabled={busy}
-                          placeholder={t("chat.task.duePlaceholder")}
-                          onChange={(e) => updateItem(gi, ii, "due_date", e.target.value)}
-                        />
-                      </label>
+                        <div className="task-due-selects">
+                          <select
+                            className="chat-input task-due-day"
+                            aria-label={t("chat.task.dueDay")}
+                            value={it.day}
+                            disabled={busy}
+                            onChange={(e) => updateItem(gi, ii, "day", e.target.value)}
+                          >
+                            <option value="">{t("chat.task.dueDay")}</option>
+                            {DAY_OPTIONS.map((d) => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                          <select
+                            className="chat-input task-due-month"
+                            aria-label={t("chat.task.dueMonth")}
+                            value={it.month}
+                            disabled={busy}
+                            onChange={(e) => updateItem(gi, ii, "month", e.target.value)}
+                          >
+                            <option value="">{t("chat.task.dueMonth")}</option>
+                            {MONTH_OPTIONS.map((m) => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                          <select
+                            className="chat-input task-due-year"
+                            aria-label={t("chat.task.dueYear")}
+                            value={it.year}
+                            disabled={busy}
+                            onChange={(e) => updateItem(gi, ii, "year", e.target.value)}
+                          >
+                            <option value="">{t("chat.task.dueYear")}</option>
+                            {yearOptions(it.year).map((y) => (
+                              <option key={y} value={y}>{y}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
                       <label className="task-mini">
                         <span className="task-mini-label">{t("chat.task.description")}</span>
                         <input

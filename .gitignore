@@ -25,4 +25,7 @@ voiceprints_*.webm
 *.ipynb
 AGENT.md
 AGENTS.md
+.agents/benchmarks
+AGENT.md
+AGENTS.md
 .agents/
