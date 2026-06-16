@@ -18,6 +18,7 @@ Confirmed write contract (memory `memory-0a6ff6dc-…`, namespace `project_facts
        body {"memoryRecords": ["<text>"]}        (raw namespace, no %2F)
 """
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -262,22 +263,22 @@ def _user_prefs_namespace(actor_id: str) -> str:
 
 
 def parse_user_role(records: list) -> str | None:
-    """Extract the role from the newest `user_prefs` record, or None.
+    """Extract the role from the newest `user_prefs` record carrying one, or None.
 
-    Pure newest-wins read: picks the record with the max `created_at`, then finds
-    a `role:` / `vai trò:` line in its text. None if no role line is present.
+    Newest-wins, but role-aware: scans records newest-first and returns the role
+    from the first one that HAS a `role:` / `vai trò:` line. A newer record
+    without a role line (e.g. a remembered `[mee-fact]` written to the same
+    `user_prefs/{actor}` namespace) is skipped, not treated as "role cleared".
     """
     recs = [r for r in (records or []) if isinstance(r, dict)]
-    if not recs:
-        return None
-    newest = max(recs, key=lambda r: r.get("created_at") or "")
-    text = newest.get("memory") or ""
-    for line in text.splitlines():
-        m = _ROLE_LINE_RE.search(line)
-        if m:
-            role = m.group("role").strip().strip('".')
-            if role:
-                return role
+    for rec in sorted(recs, key=lambda r: r.get("created_at") or "", reverse=True):
+        text = rec.get("memory") or ""
+        for line in text.splitlines():
+            m = _ROLE_LINE_RE.search(line)
+            if m:
+                role = m.group("role").strip().strip('".')
+                if role:
+                    return role
     return None
 
 
@@ -363,3 +364,182 @@ def upsert_project_record(
     )
     record_text = build_project_record_text(project_id, source_hash, text, title=title)
     return call("POST", url, {"memoryRecords": [record_text]}, token)
+
+
+# ── Chat-captured fact records (remember_fact) ───────────────────────────────
+# A durable fact the chat agent stored (user-asserted or agent-deduced, always
+# HITL-approved). Distinct from the `[mee-sync …]` distillation blob: it carries
+# a `[mee-fact scope=… author=… session=…]` marker (audit + disambiguation) and
+# lives in a scope-specific namespace so read==write (the actor-granularity
+# decision): user facts → `user_prefs/<ms_oid>`, project facts →
+# `project_facts/<meeting_id>`. Insert-only, newest-wins (DELETE is denied).
+FACT_MARKER = "mee-fact"
+_FACT_MARKER_RE = re.compile(rf"^\[{FACT_MARKER}\s+(?P<fields>[^\]]*)\]")
+
+
+def fact_key(text: str) -> str:
+    """Stable short key identifying a logical fact by its NORMALIZED text.
+
+    Same key ⇒ same fact, so a later `active=0` record (forget_fact) supersedes an
+    earlier `active=1` one (and vice-versa) under newest-wins. Normalization is
+    lowercase + whitespace-collapse — enough to match re-assertions of "the same"
+    fact without over-merging distinct ones.
+    """
+    norm = " ".join((text or "").lower().split())
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+
+
+def build_fact_record_text(
+    text: str,
+    *,
+    scope: str,
+    active: bool = True,
+    author_oid: str = "",
+    session_id: str = "",
+    key: str | None = None,
+) -> str:
+    """Embed the audit/control marker as the record's first line; `text` is the body.
+
+    Marker carries `key` (logical-fact identity for newest-wins supersede),
+    `active` (0 = a forget tombstone hides this fact), plus `author`/`session` for
+    audit. `key` defaults to `fact_key(text)` — callers pass it explicitly when the
+    display body differs from the raw text used to key the fact (e.g. a project
+    fact decorated with "(Dự án …)").
+    """
+    k = key or fact_key(text)
+    a = "1" if active else "0"
+    marker = (
+        f"[{FACT_MARKER} scope={scope} key={k} active={a} "
+        f"author={author_oid or '-'} session={session_id or '-'}]"
+    )
+    return f"{marker}\n{(text or '').strip()}"
+
+
+def _grab_field(fields: str, name: str) -> str | None:
+    m = re.search(rf"{name}=(\S+)", fields)
+    return m.group(1) if m else None
+
+
+def parse_fact_marker(memory_text: str | None) -> dict | None:
+    """Extract {'scope','key','active','author','session'} from a fact marker, or None.
+
+    Tolerant of field order and of legacy markers without key/active (active
+    defaults True, key None). Returns None for unmarked text and `[mee-sync …]`
+    distillation blobs so the record kinds never get confused in one namespace.
+    """
+    m = _FACT_MARKER_RE.match((memory_text or "").lstrip())
+    if not m:
+        return None
+    fields = m.group("fields")
+    scope = _grab_field(fields, "scope")
+    if scope is None:
+        return None
+    active_raw = _grab_field(fields, "active")
+    active = True if active_raw is None else active_raw not in ("0", "false", "False")
+    return {
+        "scope": scope,
+        "key": _grab_field(fields, "key"),
+        "active": active,
+        "author": _grab_field(fields, "author"),
+        "session": _grab_field(fields, "session"),
+    }
+
+
+def strip_fact_marker(memory_text: str | None) -> str:
+    """Human-readable body of a fact record — the marker line removed."""
+    text = (memory_text or "").lstrip()
+    if _FACT_MARKER_RE.match(text):
+        parts = text.split("\n", 1)
+        return parts[1].strip() if len(parts) > 1 else ""
+    return text.strip()
+
+
+def fact_namespace(scope: str, actor_id: str) -> str:
+    """AgentBase namespace for a fact of `scope` keyed by `actor_id`.
+
+    user → `user_prefs/<ms_oid>` (per-user); project → `project_facts/<meeting_id>`
+    (shared across the project's users, partitioned by meeting — never ms_oid,
+    which would silo project knowledge per user).
+    """
+    if scope == "user":
+        return f"{USER_PREFS_PREFIX}/{actor_id}"
+    if scope == "project":
+        return f"{PROJECT_FACTS_PREFIX}/{actor_id}"
+    raise ValueError(f"unknown fact scope: {scope!r}")
+
+
+def insert_fact_record(
+    text: str,
+    *,
+    namespace: str,
+    scope: str,
+    active: bool = True,
+    key: str | None = None,
+    author_oid: str = "",
+    session_id: str = "",
+    memory_id: str | None = None,
+    token: str | None = None,
+    call=_default_call,
+) -> object:
+    """Insert ONE fact record into `namespace` (insert-only; DELETE is denied).
+
+    `active=False` writes a forget tombstone that hides the fact with this `key`.
+    """
+    memory_id = memory_id or os.getenv("MEMORY_ID", "")
+    if not memory_id:
+        raise RuntimeError("MEMORY_ID not set")
+    token = token or _get_token()
+    url = (
+        f"{_MEMORY_BASE}/memories/{memory_id}/memory-records:insert-directly"
+        f"?namespace={namespace}"
+    )
+    record_text = build_fact_record_text(
+        text, scope=scope, active=active, author_oid=author_oid,
+        session_id=session_id, key=key,
+    )
+    return call("POST", url, {"memoryRecords": [record_text]}, token)
+
+
+def list_fact_records(
+    namespace: str,
+    *,
+    memory_id: str | None = None,
+    token: str | None = None,
+    call=_default_call,
+) -> list[str]:
+    """Browse `namespace` → ACTIVE fact bodies (marker-stripped), newest-first.
+
+    Newest-wins per `key`: for each logical fact only the latest record counts, and
+    if that latest record is a forget tombstone (`active=0`) the fact is hidden.
+    Re-asserting later (a newer `active=1`) brings it back. Only `[mee-fact …]`
+    records are considered; distillation blobs are ignored. [] when MEMORY_ID unset.
+    """
+    memory_id = memory_id or os.getenv("MEMORY_ID", "")
+    if not memory_id:
+        return []
+    token = token or _get_token()
+    url = (
+        f"{_MEMORY_BASE}/memories/{memory_id}/memory-records"
+        f"?namespace={namespace}&limit=200"
+    )
+    resp = call("GET", url, None, token)
+    parsed = []
+    for r in _records_of(resp):
+        if not isinstance(r, dict):
+            continue
+        marker = parse_fact_marker(r.get("memory"))
+        if marker:
+            parsed.append((r.get("created_at") or "", marker, r))
+    parsed.sort(key=lambda t: t[0], reverse=True)  # newest first
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for _created, marker, r in parsed:
+        body = strip_fact_marker(r.get("memory"))
+        key = marker.get("key") or f"_nokey:{body}"  # legacy records key by body
+        if key in seen:
+            continue  # an older record for a fact already decided by its newest
+        seen.add(key)
+        if marker.get("active", True):
+            out.append(body)
+    return out

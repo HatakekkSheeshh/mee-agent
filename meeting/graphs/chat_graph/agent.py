@@ -29,6 +29,7 @@ from meeting.graphs._chat_serde import (
     parse_leaked_tool_calls,
     redmine_create_args,
     redmine_update_args,
+    strip_think,
     summarize_redmine_apply,
 )
 from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
@@ -74,6 +75,10 @@ def _tool_error(result) -> Optional[str]:
 # summaries the projection can't serve. `retrieve` (heavy RAG) + `search_transcript`
 # stay detached: memory replaces them for Q&A. Re-attach by removing from this set.
 DETACHED_TOOLS = frozenset({"retrieve", "search_transcript"})
+
+# Tools that audit which chat session asserted a fact. We inject state["session_id"]
+# into their args server-side (it's not in their schema, so the LLM never supplies it).
+_SESSION_AWARE_TOOLS = frozenset({"remember_fact", "forget_fact"})
 
 
 def _openai_tools(*, tools=_services) -> list[dict]:
@@ -236,7 +241,8 @@ def make_agent(llm=None, *, tools=None):
                 logger.info("[Node agent] recovered %d leaked tool call(s) from content", len(tc_dicts))
 
         if not tc_dicts:
-            reply = (msg.content or "").strip()
+            # Strip leaked <think>…</think> reasoning before it reaches the user.
+            reply = strip_think(msg.content)
             logger.info(f"[Node agent] final answer (len={len(reply)})")
             return {
                 "agent_messages": messages + [{"role": "assistant", "content": reply}],
@@ -279,6 +285,8 @@ def make_agent_tools(session: AsyncSession, *, tools=None):
             args = _inject_meeting(
                 _parse_tool_args(tc["function"]["arguments"]), name, resolved, tools=ts
             )
+            if name in _SESSION_AWARE_TOOLS and state.get("session_id") and "session_id" not in args:
+                args = {**args, "session_id": state["session_id"]}
             spec = ts.get_tool(name)
             if spec and spec.get("side_effect"):
                 if pending is None:

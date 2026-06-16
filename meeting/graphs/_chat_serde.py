@@ -22,6 +22,20 @@ def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
+# Leaked chain-of-thought: some serving layers emit Qwen3/minimax reasoning as raw
+# `<think>…</think>` text in the message content. Strip complete blocks AND an
+# unclosed opener (truncation) — same contract as note_generator's MoM cleaner.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>.*$", flags=re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text: Optional[str]) -> str:
+    """Remove leaked `<think>…</think>` reasoning from a reply. None → ''."""
+    out = _THINK_TAG_RE.sub("", text or "")
+    out = _THINK_OPEN_RE.sub("", out)
+    return out.strip()
+
+
 def _tc_to_dict(tc) -> dict:
     """Serialize an OpenAI tool_call object into a checkpointable dict."""
     return {

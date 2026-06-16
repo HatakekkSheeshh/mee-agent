@@ -14,7 +14,9 @@ from meeting.db.models import User
 from meeting.graphs._chat_state import ChatState
 from meeting.memory_client import (
     STALE_NOTE,
+    fact_namespace,
     is_record_stale,
+    list_fact_records,
     search_project_record,
     strip_project_marker,
 )
@@ -23,6 +25,11 @@ from meeting.services.memory_sync import canonical_source_hash
 from meeting.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
+
+# Cap how many remembered facts are injected into the prompt so context doesn't
+# bloat as memory grows. list_fact_records returns newest-first, so we keep the
+# N most recent.
+MAX_RECALLED_FACTS = 20
 
 
 async def resolve_meeting(
@@ -75,11 +82,14 @@ async def resolve_meeting(
         "candidates": candidate_dicts,
     }
 
-def make_load_context(session: AsyncSession, *, search_record=None, schedule_resync=None):
+def make_load_context(
+    session: AsyncSession, *, search_record=None, schedule_resync=None, list_facts=None
+):
     # DI seams: real AgentBase browse + fire-and-forget bg re-sync by default;
     # tests inject fakes.
     _search = search_record or search_project_record
     _schedule_resync = schedule_resync or schedule_project_sync
+    _list_facts = list_facts or list_fact_records
 
     async def load_context(state: ChatState) -> dict:
         """Load meeting context + recent messages for the LLM prompt."""
@@ -91,6 +101,7 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
         # Signed-in user identity → injected into the agent prompt so it knows who
         # "tôi/của tôi" is and can scope role-based tool calls (not just kickoff).
         user_name = user_role = user_email = None
+        user_oid: str | None = None
         user_meetings: list[dict] = []
         uid_str = state.get("user_id")
         if session is not None and uid_str:
@@ -100,6 +111,7 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
                 user_name = (user.display_name or "").strip() or None
                 user_role = user.role.name if user.role else None
                 user_email = (user.email or "").strip() or None
+                user_oid = (getattr(user, "ms_oid", None) or "").strip() or None
             # Roster of the user's projects so the agent can recognise a name the
             # user mentions as a SEPARATE project and call switch_meeting (instead
             # of assuming it's an alias of the current meeting). Best-effort.
@@ -166,11 +178,37 @@ def make_load_context(session: AsyncSession, *, search_record=None, schedule_res
                     ],
                 }
 
+        # Remembered facts (remember_fact): user-scoped recall happens even with no
+        # meeting bound ("gọi tôi là Ronaldo" must surface in general chat too);
+        # project-scoped recall is keyed by the turn's meeting. Best-effort + off the
+        # event loop (sync urllib); a recall failure never blocks the turn.
+        remembered: list[str] = []
+        if user_oid:
+            try:
+                remembered += await asyncio.to_thread(
+                    _list_facts, fact_namespace("user", user_oid)
+                )
+            except Exception as e:  # noqa: BLE001 — recall is non-critical
+                logger.warning(f"[Node load_context] user fact recall failed: {e}")
+        if turn_meeting_id and meeting_ctx.get("id"):
+            try:
+                remembered += await asyncio.to_thread(
+                    _list_facts, fact_namespace("project", meeting_ctx["id"])
+                )
+            except Exception as e:  # noqa: BLE001 — recall is non-critical
+                logger.warning(f"[Node load_context] project fact recall failed: {e}")
+        if remembered:
+            block = "Ghi nhớ (đã lưu từ hội thoại trước):\n" + "\n".join(
+                f"- {f}" for f in remembered[:MAX_RECALLED_FACTS]
+            )
+            project_memory = f"{project_memory}\n\n{block}" if project_memory else block
+
         logger.info(
             f"[Node load_context] session={state['session_id'][:8]}, "
             f"recent_msgs={len(recent)}, meeting={meeting_ctx.get('title', 'none')!r}, "
             f"project_memory={len(project_memory)} chars"
-            f"{' (recalled)' if project_memory else ' (none)'}"
+            f"{' (recalled)' if project_memory else ' (none)'}, "
+            f"facts={len(remembered)}"
         )
         return {
             "recent_messages": recent,
