@@ -748,6 +748,13 @@ def create_app(output_dir: str = None) -> FastAPI:
                 )
 
         upstream_url = f"{base_url}/v1/audio/transcriptions/stream"
+        # Forward the STT profile's key as Bearer — the self-host server
+        # (faster-whisper/phowhisper on the 2080) enforces auth, so a
+        # keyless /stream call 401s. Mirrors the batch path's header.
+        stt_headers = {}
+        _stt_key = (profile.get("api_key") or "").strip()
+        if _stt_key:
+            stt_headers["Authorization"] = f"Bearer {_stt_key}"
         form_data = {
             "language": language,
             "prompt": prompt or "",
@@ -796,6 +803,7 @@ def create_app(output_dir: str = None) -> FastAPI:
                     files = {"file": (filename, audio_bytes, "audio/wav")}
                     async with client.stream(
                         "POST", upstream_url, files=files, data=form_data,
+                        headers=stt_headers,
                     ) as r:
                         if r.status_code != 200:
                             body = await r.aread()
