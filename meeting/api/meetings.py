@@ -2296,6 +2296,11 @@ async def generate_recording_mom_endpoint(
             )
             if fs.get("error") and not fs.get("mom_json"):
                 return {"error": fs["error"]}
+            # save_recording_mom only flush()es — the graph never commits its
+            # session. The Celery path commits in the task; the inline fallback
+            # must commit here or recording.mom_json is rolled back on close
+            # (memory + .md persist via their own sessions, masking the loss).
+            await s2.commit()
             return {
                 "recording_id": target_rid,
                 "meeting_id": fs.get("meeting_id"),

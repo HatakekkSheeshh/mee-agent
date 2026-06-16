@@ -469,7 +469,11 @@ button { background: none; border: none; cursor: pointer; outline: none; }
     transform: scaleY(calc(1 - var(--collapse) * 0.92));
     max-height: calc((1 - var(--collapse)) * 600px);
     margin-bottom: calc((1 - var(--collapse)) * 18px - 18px);
-    overflow: hidden;
+    /* Scroll the panel body when its content exceeds the 600px clamp
+     * (long member/attendance lists). overflow-x stays hidden so the
+     * scaleY collapse animation doesn't reveal a horizontal scrollbar. */
+    overflow-y: auto;
+    overflow-x: hidden;
     transition:
         transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
         opacity 180ms cubic-bezier(0.22, 0.61, 0.36, 1),
