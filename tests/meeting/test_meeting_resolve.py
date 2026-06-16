@@ -1,13 +1,17 @@
-"""Task 3 — resolve which meeting the user means.
+"""resolve_meeting — resolve which meeting the user means.
 
-Default = the chat's bound meeting_id. If a title is named, ILIKE-resolve via
-repo.find_meetings_by_title (most-recent first); on ambiguity pick the most
-recent; on no match fall back to bound.
+Default = the chat's bound meeting_id. If a title is named:
+  - ILIKE fast-path: exactly 1 match → use it, no LLM.
+  - 0 or >1 matches → fetch the user's meetings and LLM-resolve over their titles
+    (handles acronyms ILIKE can't, e.g. "GIP" → "Giải pháp Internet Platform").
+  - LLM finds nothing → fall back to bound, but return the user's meetings as
+    `candidates` so the agent can offer near-matches instead of creating new.
 
-Unit tests monkeypatch repo.find_meetings_by_title (no DB).
+Unit tests monkeypatch repo lookups + inject a fake `generate` (no DB, no network).
 """
 from __future__ import annotations
 
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -20,15 +24,20 @@ def _meeting(title: str):
     return SimpleNamespace(id=uuid.uuid4(), title=title)
 
 
+def _boom_generate(messages):  # must never be called on the fast paths
+    raise AssertionError("LLM should not be called")
+
+
 async def test_resolve_bound_default_when_no_title():
     out = await chat_graph.resolve_meeting(
-        object(), user_id=UID, bound_meeting_id="bound-id", title=None
+        object(), user_id=UID, bound_meeting_id="bound-id", title=None,
+        generate=_boom_generate,
     )
     assert out["meeting_id"] == "bound-id"
     assert out["resolved_by"] == "bound"
 
 
-async def test_resolve_title_override(monkeypatch):
+async def test_resolve_single_ilike_match_fast_path(monkeypatch):
     m = _meeting("Dự án Mee")
 
     async def fake(session, user_id, q):
@@ -37,37 +46,100 @@ async def test_resolve_title_override(monkeypatch):
     monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake)
 
     out = await chat_graph.resolve_meeting(
-        object(), user_id=UID, bound_meeting_id="bound-id", title="Mee"
+        object(), user_id=UID, bound_meeting_id="bound-id", title="Mee",
+        generate=_boom_generate,  # exactly 1 ILIKE hit → no LLM
     )
     assert out["meeting_id"] == str(m.id)
     assert out["resolved_by"] == "title"
 
 
-async def test_resolve_ambiguous_picks_most_recent(monkeypatch):
-    # repo returns most-recent first (ORDER BY created_at DESC); resolver takes [0].
-    newer = _meeting("Mee Sprint 2")
-    older = _meeting("Mee Sprint 1")
+async def test_resolve_ambiguous_uses_llm(monkeypatch):
+    # Near-duplicate real titles: ILIKE "AI Innovation Project" hits BOTH.
+    singular = _meeting("AI Innovation Project")
+    plural = _meeting("AI Innovation Projects")
 
-    async def fake(session, user_id, q):
-        return [newer, older]
+    async def fake_ilike(session, user_id, q):
+        return [singular, plural]
 
-    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake)
+    async def fake_list(session, user_id):
+        return [singular, plural]
+
+    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake_ilike)
+    monkeypatch.setattr(chat_graph.repo, "list_meetings_for_user", fake_list)
+
+    def generate(messages):
+        return json.dumps({"meeting_id": str(plural.id)})
 
     out = await chat_graph.resolve_meeting(
-        object(), user_id=UID, bound_meeting_id="bound-id", title="Mee"
+        object(), user_id=UID, bound_meeting_id="bound-id",
+        title="AI Innovation Projects", generate=generate,
     )
-    assert out["meeting_id"] == str(newer.id)
-    assert len(out["candidates"]) == 2
+    assert out["meeting_id"] == str(plural.id)
+    assert out["resolved_by"] == "title"
 
 
-async def test_resolve_title_no_match_falls_back_to_bound(monkeypatch):
-    async def fake(session, user_id, q):
+async def test_resolve_longer_phrase_no_ilike_match_uses_llm(monkeypatch):
+    # title "GIP" is NOT a substring of "meeting GIP có gì" → ILIKE returns [].
+    gip = _meeting("GIP")
+    other = _meeting("AI Innovation Project")
+
+    async def fake_ilike(session, user_id, q):
         return []
 
-    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake)
+    async def fake_list(session, user_id):
+        return [gip, other]
+
+    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake_ilike)
+    monkeypatch.setattr(chat_graph.repo, "list_meetings_for_user", fake_list)
+
+    def generate(messages):
+        return json.dumps({"meeting_id": str(gip.id)})
 
     out = await chat_graph.resolve_meeting(
-        object(), user_id=UID, bound_meeting_id="bound-id", title="Nonexistent"
+        object(), user_id=UID, bound_meeting_id="bound-id", title="meeting GIP có gì",
+        generate=generate,
+    )
+    assert out["meeting_id"] == str(gip.id)
+    assert out["resolved_by"] == "title"
+
+
+async def test_resolve_llm_none_falls_back_to_bound_with_candidates(monkeypatch):
+    m1 = _meeting("Dự án A")
+    m2 = _meeting("Dự án B")
+
+    async def fake_ilike(session, user_id, q):
+        return []
+
+    async def fake_list(session, user_id):
+        return [m1, m2]
+
+    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake_ilike)
+    monkeypatch.setattr(chat_graph.repo, "list_meetings_for_user", fake_list)
+
+    out = await chat_graph.resolve_meeting(
+        object(), user_id=UID, bound_meeting_id="bound-id", title="Nonexistent",
+        generate=lambda messages: "NONE",
     )
     assert out["meeting_id"] == "bound-id"
     assert out["resolved_by"] == "bound"
+    # Candidates returned so the agent can offer near-matches, not "create new".
+    assert {c["id"] for c in out["candidates"]} == {str(m1.id), str(m2.id)}
+
+
+async def test_resolve_no_meetings_at_all(monkeypatch):
+    async def fake_ilike(session, user_id, q):
+        return []
+
+    async def fake_list(session, user_id):
+        return []
+
+    monkeypatch.setattr(chat_graph.repo, "find_meetings_by_title", fake_ilike)
+    monkeypatch.setattr(chat_graph.repo, "list_meetings_for_user", fake_list)
+
+    out = await chat_graph.resolve_meeting(
+        object(), user_id=UID, bound_meeting_id="bound-id", title="Whatever",
+        generate=_boom_generate,  # no candidates → no LLM call
+    )
+    assert out["meeting_id"] == "bound-id"
+    assert out["resolved_by"] == "bound"
+    assert out["candidates"] == []

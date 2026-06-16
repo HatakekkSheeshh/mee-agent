@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @tool(
     name="list_recordings",
     description=(
-        "List the recordings (phiên/buổi họp) of the current project, with "
+        "List the recordings (phiên/buổi họp) of the current meeting (cuộc họp), with "
         "each recording's label, date, and whether it has minutes (MoM). "
         "Call this FIRST when the user asks about a SPECIFIC recording / "
         "phiên / 'Meeting N' / a date, to resolve which recording they mean "
