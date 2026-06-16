@@ -111,7 +111,7 @@ def _need_more_info_task() -> dict:
     }
 
 
-async def test_send_message_builds_jsonrpc_with_api_key():
+async def test_send_message_builds_jsonrpc_graph_only():
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -129,8 +129,8 @@ async def test_send_message_builds_jsonrpc_with_api_key():
     assert msg["role"] == "user"
     text_parts = [p for p in msg["parts"] if p.get("kind") == "text"]
     assert text_parts and text_parts[0]["text"] == "liệt kê issue overdue"
-    # X-API-KEY header present (case-insensitive header lookup)
-    assert captured["headers"]["x-api-key"] == KEY
+    # Graph-only auth: the legacy X-API-KEY header is no longer sent.
+    assert "x-api-key" not in captured["headers"]
 
 
 async def test_bearer_overrides_authorization_header():
@@ -149,9 +149,9 @@ async def test_bearer_overrides_authorization_header():
     assert captured["headers"]["authorization"] == "Bearer 11111111-2222-3333-4444-555555555555"
 
 
-async def test_no_bearer_keeps_api_key_authorization():
-    """Backward-compatible: without `bearer`, the static api_key still drives
-    both Authorization and X-API-KEY (existing behavior, must not break)."""
+async def test_no_bearer_sends_no_static_auth():
+    """Graph-only: without a per-request `bearer` (the user's Graph JWT) there is
+    NO static-key fallback and NO X-API-KEY — pm-agent auths solely via the JWT."""
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -161,8 +161,8 @@ async def test_no_bearer_keeps_api_key_authorization():
     client = _make_client(handler)
     await client.send_message("liệt kê issue")
 
-    assert captured["headers"]["authorization"] == f"Bearer {KEY}"
-    assert captured["headers"]["x-api-key"] == KEY
+    assert captured["headers"]["authorization"] == "Bearer "
+    assert "x-api-key" not in captured["headers"]
 
 
 async def test_resume_includes_task_id_and_datapart():

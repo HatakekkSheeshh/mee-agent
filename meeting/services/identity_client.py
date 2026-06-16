@@ -59,6 +59,20 @@ def build_request_key_url(base_url: str, provider_name: str, agent_identity: str
     )
 
 
+def pick_return_url(raw: str) -> str:
+    """AGENTBASE_REDMINE_RETURN_URL may list several allowed return URLs
+    (comma-separated, one per deployment), but AgentBase Identity's ``returnUrl``
+    must be a SINGLE value. The active deployment lists its URL FIRST; this
+    returns that first non-empty entry (a single value is returned unchanged).
+    Register all listed URLs in the AgentBase provider allowlist.
+    """
+    for u in (raw or "").split(","):
+        u = u.strip()
+        if u:
+            return u
+    return ""
+
+
 class IdentityClient:
     def __init__(
         self,
@@ -110,7 +124,10 @@ class IdentityClient:
     ) -> RequestKeyResult:
         token = await self._get_token()
         url = build_request_key_url(self._base_url, self._provider, self._agent_identity)
-        payload = {"agentUserId": agent_user_id, "returnUrl": return_url or self._return_url}
+        payload = {
+            "agentUserId": agent_user_id,
+            "returnUrl": return_url or pick_return_url(self._return_url),
+        }
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             resp = await client.post(
                 url, json=payload, headers={"Authorization": f"Bearer {token}"}

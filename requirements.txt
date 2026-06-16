@@ -44,7 +44,6 @@ opentelemetry-instrumentation-fastapi>=0.48b0
 openinference-instrumentation-openai>=0.1.18
 openinference-instrumentation-langchain>=0.1.29
 
-
 # deeplearning
 torch>=2.8.0
 # pyannote.audio — local speaker embedding for voiceprint enroll/match
@@ -55,3 +54,9 @@ pyannote.audio>=3.1
 
 # === Object storage (Cloudflare R2 — audio persistence) ===
 boto3>=1.34
+
+# === Object storage (Cloudflare R2 — audio persistence) ===
+boto3>=1.34
+
+# load test
+locust

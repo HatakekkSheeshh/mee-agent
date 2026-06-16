@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/redmine", tags=["redmine"])
 
-# The deployed Redmine MCP server exposes ~15 tools (README documented 5; live
-# surface is larger). A mismatch means discovery failed or the surface drifted.
-EXPECTED_REDMINE_TOOL_COUNT = 15
+# Minimum Redmine MCP tools we expect registered (live surface ~14; README
+# documented 5). Treated as a FLOOR (>=) — fewer means discovery failed/drifted;
+# more is fine (the surface can grow).
+EXPECTED_REDMINE_TOOL_COUNT = 14
 
 # Hints that mark a registered tool as part of the Redmine MCP surface (tools are
 # dynamically registered, so we count by name rather than a static list).
@@ -50,7 +51,7 @@ def build_redmine_status(
     pm_agent_ok: bool,
     gate_url: Optional[str],
 ) -> dict:
-    tools_ok = key_present and registered_tool_count == EXPECTED_REDMINE_TOOL_COUNT
+    tools_ok = key_present and registered_tool_count >= EXPECTED_REDMINE_TOOL_COUNT
     status = {
         "redmine_key_present": key_present,
         "redmine_tools_ok": tools_ok,
@@ -63,9 +64,12 @@ def build_redmine_status(
     return status
 
 
-def _pm_agent_configured() -> bool:
-    # v1: configuration presence, NOT a live A2A handshake (see plan scope note).
-    return bool(os.getenv("PM_AGENT_URL", "") and os.getenv("TOKEN_AUTHEN_PM_AGENT", ""))
+def _pm_agent_configured(key_present: bool) -> bool:
+    # pm-agent now authenticates via the SAME agent-identity outbound key
+    # (provider "redmine") — no separate TOKEN_AUTHEN_PM_AGENT. Configured =
+    # its URL is set AND the per-user identity key resolved. Presence check, not
+    # a live A2A handshake (see plan scope note).
+    return bool(os.getenv("PM_AGENT_URL", "")) and key_present
 
 
 @router.get("/status")
@@ -87,6 +91,6 @@ async def redmine_status(user: User = Depends(get_current_user)) -> dict:
     return build_redmine_status(
         key_present=key_present,
         registered_tool_count=count_registered_redmine_tools(),
-        pm_agent_ok=_pm_agent_configured(),
+        pm_agent_ok=_pm_agent_configured(key_present),
         gate_url=gate_url,
     )
