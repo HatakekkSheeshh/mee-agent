@@ -159,17 +159,12 @@ class PmAgentClient:
             "method": method,
             "params": params,
         }
-        # The deployed agentbase endpoint authenticates via
-        # `Authorization: Bearer <token>` (verified: X-API-KEY → 401, Bearer →
-        # 200). A locally-run pm-agent uses X-API-KEY = API_SEC_KEY. Send both
-        # so the client works against either; the server reads whichever it wants.
-        #
-        # `bearer` (per-request user identity — e.g. the logged-in user's OID)
-        # takes priority on Authorization so each user's request reaches
-        # pm-agent's direct-oid path as themselves; falls back to api_key.
+        # pm-agent authenticates ONLY via the per-request Graph JWT, which it
+        # validates by calling Graph /me. `bearer` is that token (the signed-in
+        # user's Graph access token). The legacy X-API-KEY header + static
+        # api_key fallback have been removed — there is no other auth path.
         headers = {
-            "Authorization": f"Bearer {bearer or self._api_key}",
-            "X-API-KEY": self._api_key,
+            "Authorization": f"Bearer {bearer or ''}",
             "Content-Type": "application/json",
         }
         try:

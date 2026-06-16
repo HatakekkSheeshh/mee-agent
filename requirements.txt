@@ -44,7 +44,6 @@ opentelemetry-instrumentation-fastapi>=0.48b0
 openinference-instrumentation-openai>=0.1.18
 openinference-instrumentation-langchain>=0.1.29
 
-
 # deeplearning
 torch>=2.8.0
 # pyannote.audio — local speaker embedding for voiceprint enroll/match
@@ -52,3 +51,6 @@ torch>=2.8.0
 # NOTE: the wespeaker-voxceleb-resnet34-LM model is gated on Hugging Face —
 # first load needs a HF token + accepting the model terms.
 pyannote.audio>=3.1
+
+# load test
+locust
