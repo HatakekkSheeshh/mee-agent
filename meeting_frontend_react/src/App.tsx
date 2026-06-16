@@ -88,7 +88,14 @@ export default function App() {
             ? <Navigate to="/" replace />
             : user!.voice_enrolled
               ? <Navigate to="/app" replace />
-              : <VoiceEnrollment user={user!} onEnrolled={refreshAuth} />
+              : (
+                // VoiceEnrollment calls useApp() (for `t`), so it must live
+                // inside AppProvider. This route is authed-only, so mounting
+                // the provider here is safe (its meetings fetch succeeds).
+                <AppProvider>
+                  <VoiceEnrollment user={user!} onEnrolled={refreshAuth} />
+                </AppProvider>
+              )
         }
       />
 
