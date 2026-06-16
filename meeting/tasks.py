@@ -108,13 +108,19 @@ def gen_mom_task(self, recording_id: str, ui_lang: str = "vi") -> dict:
         except RuntimeError:
             checkpointer = await init_checkpointer()
         async with AsyncSessionLocal() as session:
-            return await run_mom_graph(
+            result = await run_mom_graph(
                 recording_id=recording_id,
                 session=session,
                 output_dir=output_dir,
                 checkpointer=checkpointer,
                 mom_language=ui_lang,
             )
+            # save_recording_mom only flush()es; run_mom_graph never commits.
+            # Without this, recording.mom_json is rolled back on session close
+            # (memory + .md persist via their own sessions, so the graph still
+            # reports db:True — masking the loss). Same fix as _run_inline_mom.
+            await session.commit()
+            return result
 
     try:
         # Celery worker is sync — run the async graph in a fresh event loop.
