@@ -29,9 +29,11 @@ COPY main.py .
 # Built React SPA from stage 1 → FastAPI serves it at / (with SPA fallback).
 COPY --from=frontend /fe/dist ./meeting_frontend_react/dist
 
-RUN mkdir -p output
+COPY start.sh .
+RUN mkdir -p output && chmod +x start.sh
 
 EXPOSE 8080
 
-# main.py runs the full FastAPI app (HTTP + /ws live transcription) on :8080.
-CMD ["python", "main.py"]
+# start.sh picks the role from MEE_ROLE: web (default, API only) or worker
+# (Celery worker + API on :8080 for the health check). See start.sh.
+CMD ["bash", "start.sh"]
