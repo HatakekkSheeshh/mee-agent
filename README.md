@@ -2,6 +2,11 @@
 
 > AI meeting agent cho tiếng Việt: **paste / upload audio / live record** → transcript → **WYSIWYG Clean editor** → **Biên bản phiên họp (MoM)** + **Tổng kết project**. Powered by LangGraph + Qwen3 LLM + PhoWhisper STT.
 
+**🌐 Agent runtime (GreenNode AgentBase)** — docs / playground:
+https://endpoint-e2c26683-c6aa-4f05-8502-57eec4d78c35.agentbase-runtime.aiplatform.vngcloud.vn
+
+> Credentials runtime + container registry nằm trong `.greennode.json` (gitignored — KHÔNG commit).
+
 ---
 
 ## ✨ Tính năng chính
@@ -244,16 +249,6 @@ mee-meeting-agent/
 ├── docker-compose.yml            # Local Postgres+pgvector (profile=local)
 ├── requirements.txt · .env.example · README.md
 ```
-
----
-
-## 🌐 Agent runtime (GreenNode AgentBase)
-
-Agent được deploy trên **GreenNode AgentBase runtime**. Endpoint (docs / playground):
-
-> https://endpoint-e2c26683-c6aa-4f05-8502-57eec4d78c35.agentbase-runtime.aiplatform.vngcloud.vn
-
-> Credentials runtime + container registry nằm trong `.greennode.json` (gitignored — KHÔNG commit).
 
 ---
 
