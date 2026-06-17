@@ -1,0 +1,45 @@
+# Mee STT server deps for nhihb-gpu-2080 (RTX 2080 Ti, 11GB).
+#
+# Install torch FIRST (CUDA-aware), THEN this file. See setup.sh.
+#   pip install torch==2.4.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r requirements.txt
+#
+# VERIFIED working set (2026-06-15, deployed on the box):
+#   torch 2.4.1+cu121 + torchaudio 2.4.1+cu121 — CUDA 12.1 runtime runs on the
+#   535 driver (CUDA 12.2). torch>=2.3 supports numpy 2.x; torchaudio 2.4 still
+#   exposes torchaudio.AudioMetaData that pyannote.audio 3.3.2 imports.
+#   GOTCHAS we hit and why these exact pins matter:
+#     • A bare `pip install torch` pulls torch 2.12+cu130 → driver-too-old, CUDA
+#       unavailable. MUST use the cu121 index + pin the version.
+#     • torch 2.1.2 + numpy 2.x → "Failed to initialize NumPy" → CUDA init
+#       cascades to "unknown error". torch 2.4.1 fixes it (numpy 2 support).
+#     • pyannote.audio 3.3.2 requires torchaudio>=2.2.0, so 2.1.2 is too old.
+#     • torchaudio >=2.9-ish removed AudioMetaData → pyannote import breaks.
+#     2.4.1 is the sweet spot satisfying all four constraints.
+#
+# Pins mirror the Sprint-04 known-good Kaggle set (see tools/kaggle/*_server.py
+# headers): huggingface_hub<1.0 keeps pyannote 3.x's use_auth_token path alive;
+# transformers 4.46.x has LossKwargs that pyannote→lightning→torchmetrics needs.
+
+# ── STT backends ───────────────────────────────────────────────
+faster-whisper>=1.0           # CTranslate2 Whisper-large-v3 (word timestamps)
+transformers==4.46.3          # PhoWhisper via HF pipeline
+torchmetrics==1.4.3           # last version compatible with transformers 4.46.x
+
+# ── Diarization + embeddings ───────────────────────────────────
+pyannote.audio==3.3.2
+huggingface_hub==0.26.5       # <1.0 — still exposes is_offline_mode / use_auth_token
+matplotlib                    # pyannote.metrics imports it; not pulled transitively
+
+# ── Audio I/O ──────────────────────────────────────────────────
+soundfile
+librosa
+
+# ── Server ─────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+python-multipart
+
+# NOTE: do NOT pip-install torch / torchaudio from here — install them from the
+# CUDA index in setup.sh BEFORE this file, so the C++ ABI of torchaudio matches
+# torch. Upgrading torchaudio in isolation breaks `_torchaudio.abi3.so` loading.

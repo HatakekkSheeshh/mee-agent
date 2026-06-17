@@ -39,9 +39,9 @@ class MemoryEvent:
     topic: str
     text: str
     event_type: str = "update"          # action_item / decision / commitment / blocker / update / summary
+    metadata: dict = field(default_factory=dict)
     speaker: Optional[str] = None
     deadline: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
 
 
 class MemoryService:
@@ -62,6 +62,7 @@ class MemoryService:
         user_id: Optional[uuid.UUID] = None,
         topic: Optional[str] = None,
         exclude_meeting_id: Optional[uuid.UUID] = None,
+        meeting_id: Optional[uuid.UUID] = None,
         event_types: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> list[MemoryEvent]:
@@ -75,6 +76,7 @@ class MemoryService:
             user_id: required to scope to user's events
             topic: optional topic filter (ILIKE match)
             exclude_meeting_id: skip events from this meeting (avoid retrieving from "self")
+            meeting_id: scope to ONLY this meeting's events (chat auto-retrieval)
             event_types: filter by type (vd ['action_item', 'commitment'])
         """
         if db_session is None or user_id is None:
@@ -90,6 +92,7 @@ class MemoryService:
             query=query,
             topic=topic,
             exclude_meeting_id=exclude_meeting_id,
+            meeting_id=meeting_id,
             event_types=event_types,
             limit=top_k,
         )

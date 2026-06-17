@@ -4,7 +4,7 @@ Meeting Note Agent — Main Entry Point
 
 Starts two servers:
 1. WebSocket server (port 9091) — real-time transcription via MaaS
-2. FastAPI HTTP server (port 8001) — web UI + MoM generation API
+2. FastAPI HTTP server (port 8002) — web UI + MoM generation API
 
 Usage:
     python run_meeting.py
@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -146,6 +147,19 @@ def start_whisper_server(args):
         except Exception as e:
             logger.error(f"Error in recv_audio: {e}", exc_info=True)
         finally:
+            # Post-record diarization: send the full buffered audio to
+            # PhoWhisper to extract per-cluster embeddings, then POST them to
+            # the backend. This is the live-record path's parity with file
+            # upload — it's what lets voiceprint enrollment + cross-meeting
+            # speaker recognition work after live recording. Runs in a
+            # dedicated thread so the WebSocket close path isn't blocked
+            # (PhoWhisper diarization on a 1-hour audio can take minutes).
+            if client and hasattr(client, "post_record_diarize"):
+                threading.Thread(
+                    target=client.post_record_diarize,
+                    daemon=False,  # let it finish even after WS closes
+                    name=f"post-diarize-{getattr(client, 'client_uid', '?')}",
+                ).start()
             if client_manager.get_client(websocket):
                 client_manager.remove_client(websocket)
             try:
@@ -190,6 +204,86 @@ def _docker_running(container_name: str) -> bool:
         return False
 
 
+def _rabbitmq_reachable(timeout: float = 1.0) -> bool:
+    """TCP probe to RabbitMQ broker (default localhost:5672). Used by the
+    banner + main() to decide whether to spawn a Celery worker subprocess."""
+    import socket
+    host = os.getenv("RABBITMQ_HOST", "localhost")
+    port = int(os.getenv("RABBITMQ_PORT", "5672"))
+    s = socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def start_celery_worker() -> subprocess.Popen:
+    """Spawn Celery worker as a child subprocess so MoM gen runs in the
+    background. Lifetime tied to this script — main()'s finally block
+    terminates it on Ctrl+C.
+
+    concurrency=4 → 4 LLM gens in parallel per worker process. The real
+    cap is MaaS rate limits / token quota, not local CPU.
+
+    When `watchmedo` (from the `watchdog` package) is on PATH, wrap the
+    worker so it auto-restarts on any .py change under meeting/. Celery
+    doesn't pick up new @celery_app.task definitions until the worker
+    process is restarted; without auto-reload, the dev loop is "edit
+    tasks.py → manually kill + restart worker" which is annoying.
+    """
+    # Pool + concurrency tuned for dev on a 2-4 vCPU laptop:
+    #   pool=solo (default)  → single-process worker, no fork overhead, fastest
+    #                          startup, easiest to debug. One task at a time
+    #                          (fine — MoM/clean are minute-scale, not high QPS).
+    #   pool=prefork         → multi-process, set CELERY_CONCURRENCY for #workers.
+    # Override via env to switch back to prefork for production-like behaviour.
+    pool = os.getenv("CELERY_POOL", "solo")
+    concurrency = os.getenv("CELERY_CONCURRENCY", "2")
+    loglevel = os.getenv("CELERY_LOGLEVEL", "warning")
+    celery_cmd = [
+        sys.executable, "-m", "celery",
+        "-A", "meeting.celery_app",
+        "worker",
+        f"--loglevel={loglevel}",
+        f"--pool={pool}",
+    ]
+    # `concurrency` is only meaningful for multi-process pools.
+    if pool not in ("solo", "threads"):
+        celery_cmd.append(f"--concurrency={concurrency}")
+    # Try PATH first, then fall back to the venv's bin dir alongside the
+    # current Python — handles the case where the user runs the script
+    # via `.venv/bin/python run_meeting.py` without activating the venv.
+    watchmedo_bin = shutil.which("watchmedo") or shutil.which(
+        "watchmedo", path=os.path.dirname(sys.executable)
+    )
+    if watchmedo_bin:
+        cmd = [
+            watchmedo_bin, "auto-restart",
+            "--directory=meeting",
+            "--pattern=*.py",
+            "--recursive",
+            "--signal=SIGTERM",
+            "--",
+            *celery_cmd,
+        ]
+        logger.info("Starting Celery worker (auto-reload via watchmedo)…")
+    else:
+        cmd = celery_cmd
+        logger.info(
+            "Starting Celery worker (no auto-reload — install watchdog "
+            "for hot-reload: pip install watchdog)"
+        )
+    logger.info(f"  {' '.join(cmd)}")
+    return subprocess.Popen(cmd)
+
+
 class _C:
     """ANSI colors. Auto-disabled if stdout is not a tty (eg. piped to file)."""
     _enabled = sys.stdout.isatty()
@@ -211,6 +305,7 @@ def _print_startup_banner(http_port: int, ws_port: int) -> None:
     db = _parse_db_url(os.getenv("DATABASE_URL", ""))
     pg_up = _docker_running("mee-postgres")
     adminer_up = _docker_running("mee-adminer")
+    rabbit_up = _rabbitmq_reachable()
 
     def status(running: bool) -> str:
         if running:
@@ -250,6 +345,11 @@ def _print_startup_banner(http_port: int, ws_port: int) -> None:
     {url('http://localhost:8080/')}
     {hint(f"Login: System=PostgreSQL  Server=postgres  User={db.get('user', 'mee')}")}
 
+  {c.BOLD}{c.CYAN}RabbitMQ + Celery{c.RESET} {hint('(background MoM gen)')} {status(rabbit_up)}
+    {hint('AMQP:')}  amqp://localhost:5672/
+    {hint('UI:')}    {url('http://localhost:15672/')}  {hint('(login: mee / mee_dev_password)')}
+    {hint('Worker:')} {'auto-spawned' if rabbit_up else 'skipped — broker down'} {hint('(falls back to inline asyncio.to_thread)')}
+
   {c.BOLD}{c.CYAN}Key endpoints{c.RESET} {hint('(DB-backed, Phase A+B)')}
     {method('POST')} /api/meetings                       {hint('create meeting')}
     {method('GET')} /api/meetings                       {hint('list meetings')}
@@ -274,14 +374,20 @@ def _print_startup_banner(http_port: int, ws_port: int) -> None:
 
 
 def start_http_server(args):
-    from meeting.app import create_app
-
-    output_dir = os.path.join(os.path.dirname(__file__), "output")
-    app = create_app(output_dir=output_dir)
-
     _print_startup_banner(args.http_port, args.ws_port)
     logger.info(f"Starting Meeting Note HTTP server on http://0.0.0.0:{args.http_port}")
-    uvicorn.run(app, host="0.0.0.0", port=args.http_port, log_level="info")
+    # Use factory + import string so uvicorn's reloader can re-import on
+    # file changes. create_app() defaults output_dir to <repo>/output when
+    # None is passed, which matches the previous behavior.
+    uvicorn.run(
+        "meeting.app:create_app",
+        host="0.0.0.0",
+        port=args.http_port,
+        log_level="info",
+        reload=True,
+        factory=True,
+        reload_dirs=[os.path.join(os.path.dirname(__file__), "meeting")],
+    )
 
 
 def main():
@@ -291,9 +397,14 @@ def main():
     parser.add_argument("--maas-key", default=os.getenv("WHISPER_API_KEY", ""))
     parser.add_argument("--maas-model", default=os.getenv("WHISPER_MODEL", "openai/whisper-large-v3"))
     parser.add_argument("--ws-port", type=int, default=9091)
-    parser.add_argument("--http-port", type=int, default=8001)
+    parser.add_argument("--http-port", type=int, default=8002)
     parser.add_argument("--max-clients", type=int, default=4)
     parser.add_argument("--max-connection-time", type=int, default=7200)
+    parser.add_argument(
+        "--no-celery", action="store_true",
+        help="Skip spawning the Celery worker (eg. when running it manually "
+             "in a separate terminal for hot-reload during task development)",
+    )
 
     args = parser.parse_args()
 
@@ -301,10 +412,36 @@ def main():
         logger.error("WHISPER_BASE_URL is required. Set via --maas-url or .env file.")
         sys.exit(1)
 
+    # WebSocket server in a daemon thread (dies with main process).
     ws_thread = threading.Thread(target=start_whisper_server, args=(args,), daemon=True)
     ws_thread.start()
 
-    start_http_server(args)
+    # Celery worker as a separate subprocess. Skipped when broker is down
+    # (MoM gen falls back to inline asyncio.to_thread, see endpoint) or when
+    # --no-celery is passed (eg. running worker manually for hot-reload).
+    celery_proc = None
+    if not args.no_celery:
+        if _rabbitmq_reachable():
+            celery_proc = start_celery_worker()
+        else:
+            logger.warning(
+                "⚠ RabbitMQ broker not reachable on localhost:5672 — skipping "
+                "Celery worker. MoM gen will use inline fallback. To enable "
+                "background tasks: `docker compose up -d rabbitmq` then "
+                "restart this script."
+            )
+
+    try:
+        start_http_server(args)
+    finally:
+        if celery_proc is not None:
+            logger.info("Stopping Celery worker…")
+            celery_proc.terminate()
+            try:
+                celery_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                logger.warning("Celery worker didn't exit cleanly — killing.")
+                celery_proc.kill()
 
 
 if __name__ == "__main__":
