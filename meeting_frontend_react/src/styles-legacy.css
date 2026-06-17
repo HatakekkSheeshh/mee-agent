@@ -47,32 +47,37 @@
 }
 
 [data-theme="light"] {
-    /* Pink "blush" palette — tuned for visible-but-not-loud. A touch
-     * more saturation than the cream variant so UI elements have enough
-     * contrast to read, without going back to the saturated original. */
-    --bg:            #fdf2f4;
-    --bg-2:          #fae7eb;
+    /* Notta-style clean light palette — pure white canvas, cool gray
+     * neutrals, emerald accent for actions. Replaces the previous
+     * pink blush so the UI reads as a clinical office tool. */
+
+    /* Backgrounds — main canvas white, elevated tones get progressively
+     * grayer for hover states + sidebar surfaces. */
+    --bg:            #ffffff;
+    --bg-2:          #f7f8fa;
     --surface:       #ffffff;
-    --surface-2:     #fbedef;
-    --surface-3:     #fae7eb;
-    --hover:         #f5d8df;
+    --surface-2:     #f5f6f8;
+    --surface-3:     #eef0f3;
+    --hover:         #f0f2f5;
 
-    --text:          #2d1b1f;
-    --text-2:        #4a2a31;
-    --text-mute:     #7d5862;
-    --text-faint:    #b5919a;
+    /* Text — cool dark gray (not pure black) for softer reading. */
+    --text:          #1f2937;
+    --text-2:        #4b5563;
+    --text-mute:     #6b7280;
+    --text-faint:    #9ca3af;
 
-    --border:        rgba(150, 50, 70, 0.09);
-    --border-2:      rgba(150, 50, 70, 0.14);
-    --border-3:      rgba(150, 50, 70, 0.20);
+    /* Borders use alpha black so they blend on any surface tint. */
+    --border:        rgba(17, 24, 39, 0.08);
+    --border-2:      rgba(17, 24, 39, 0.14);
+    --border-3:      rgba(17, 24, 39, 0.22);
 
-    /* Light theme uses a muted rose — pairs with the pink page without
-     * shouting. Dark theme keeps the brand green (see :root). */
-    --accent:        #ea7080;
-    --accent-h:      #f08a98;
-    --accent-deep:   #a8485a;
-    --accent-soft:   rgba(234, 112, 128, 0.11);
-    --accent-glow:   rgba(234, 112, 128, 0.26);
+    /* Action accent — emerald (Notta Play button green). Mirrors the
+     * dark-theme brand green just toned down for legibility on white. */
+    --accent:        #10b981;
+    --accent-h:      #059669;
+    --accent-deep:   #047857;
+    --accent-soft:   rgba(16, 185, 129, 0.10);
+    --accent-glow:   rgba(16, 185, 129, 0.18);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -113,6 +118,11 @@ body::before {
     border-color: rgba(150, 50, 70, 0.14);
     box-shadow: 0 8px 22px -12px rgba(120, 30, 50, 0.18), 0 1px 2px rgba(120, 30, 50, 0.05);
 }
+[data-theme="light"] .topbar {
+    background: #ffffff;
+    border-color: rgba(150, 50, 70, 0.14);
+    box-shadow: 0 8px 22px -12px rgba(120, 30, 50, 0.18), 0 1px 2px rgba(120, 30, 50, 0.05);
+}
 [data-theme="light"] body::before { opacity: 1; }
 [data-theme="light"] body::before {
     background:
@@ -139,7 +149,7 @@ body::before {
     background: rgba(234, 112, 128, 0.06);
 }
 [data-theme="light"] .sidebar-recording.active:hover {
-    background: rgba(234, 112, 128, 0.16);
+    background: rgba(16, 185, 129, 0.16);
 }
 
 .app { position: relative; z-index: 1; }
@@ -151,6 +161,7 @@ button, input, textarea, select {
 }
 button { background: none; border: none; cursor: pointer; outline: none; }
 ::selection { background: var(--accent); color: #000; }
+[data-theme="light"] ::selection { background: rgba(16, 185, 129, 0.22); color: var(--text); }
 [data-theme="light"] ::selection { background: rgba(234, 112, 128, 0.22); color: var(--text); }
 
 /* ══════════════════════════════════════════════════════════════
@@ -443,13 +454,88 @@ button { background: none; border: none; cursor: pointer; outline: none; }
 /* ── Details collapsible panel ─────────────────────────────── */
 
 .details-panel {
+    --collapse: 0;
     margin-top: 18px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     padding: 20px 22px;
-    animation: slideDown 0.22s var(--ease);
+    /* Scroll-driven collapse — --collapse 0 → 1 over first 120px.
+     * Fold via opacity + max-height + a gentle translateY lift. We do
+     * NOT scaleY-squash: squashing vertically distorts the live text
+     * (letters get crushed) which reads as a janky/ugly stretch. A
+     * max-height clamp folds the panel cleanly while the content keeps
+     * its true proportions; the small translateY adds organic motion. */
+    opacity: calc(1 - var(--collapse));
+    transform-origin: top center;
+    transform: translateY(calc(var(--collapse) * -8px));
+    max-height: calc((1 - var(--collapse)) * 600px);
+    margin-bottom: calc((1 - var(--collapse)) * 18px - 18px);
+    /* Scroll the panel body when its content exceeds the 600px clamp (long
+     * member/attendance lists) — otherwise it's clipped and unreachable.
+     * overflow-x stays hidden so the collapse never reveals a horizontal bar. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    transition:
+        transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+        opacity 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+        max-height 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+        margin-bottom 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+        padding 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    animation: detailsSlideDown 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
+/* Closing — runs when toggling off (or after scroll-collapse fires
+ * toggleDetails). React keeps the element mounted for 280ms so this
+ * keyframe sequence plays out before unmount. */
+.details-panel.closing {
+    animation: detailsSlideUp 0.28s cubic-bezier(0.55, 0, 0.68, 0.4) forwards;
+    pointer-events: none;
+}
+@keyframes detailsSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+        max-height: 0;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+        max-height: 600px;
+    }
+}
+@keyframes detailsSlideUp {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+        max-height: 600px;
+        margin-bottom: 0;
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-10px);
+        max-height: 0;
+        padding-top: 0;
+        padding-bottom: 0;
+        margin-top: 0;
+        margin-bottom: -18px;
+        border-color: transparent;
+    }
+}
+/* When fully collapsed (--collapse ≥ 1), block clicks so the
+ * invisible panel doesn't intercept transcript clicks. JS sets
+ * --collapse-pe to "none" only when collapsed; CSS variable can't
+ * branch on calc, so we approximate with a media-query-free
+ * keyframe-less guard via direct JS would be cleaner — for now
+ * pointer-events auto works fine since opacity 0 elements still
+ * receive clicks. Use a child selector instead: */
+.details-panel > * {
+    pointer-events: auto;
+}
+/* When --collapse hits 1 (or near), kill interaction entirely. CSS
+ * @container queries don't help here — we use a fully-collapsed
+ * inert class set from JS instead (see MeetingControl effect). */
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-4px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -564,7 +650,7 @@ textarea.field { resize: vertical; min-height: 60px; line-height: 1.5; font-fami
 .correction-row .from { color: var(--danger); }
 .correction-row .arrow { color: var(--text-faint); }
 .correction-row .to { color: var(--accent); }
-.correction-row .del-btn { margin-left: auto; color: var(--text-faint); padding: 0 4px; }
+.correction-row .del-btn { margin-left: auto; color: var(--text-faint); padding: 0 25px; }
 .correction-row .del-btn:hover { color: var(--danger); }
 
 /* ══════════════════════════════════════════════════════════════
@@ -577,6 +663,14 @@ textarea.field { resize: vertical; min-height: 60px; line-height: 1.5; font-fami
     grid-template-columns: 1fr 1px 1fr;
     overflow: hidden;
     min-height: 0;
+    /* Small top inset reveals the green radial glow on body::before
+     * between the topbar and the transcript pane. Panes round their
+     * top corners so the gap reads as intentional, not a layout bug. */
+    padding-top: 10px;
+}
+.workspace > .pane {
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
 }
 .workspace.chat-open {
     grid-template-columns: 1fr 1px 1fr 1px var(--chat-width, 380px);
@@ -633,8 +727,8 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
 }
 [data-theme="light"] .pane-header {
     background: #ffffff;
-    border-color: rgba(150, 50, 70, 0.12);
-    box-shadow: 0 6px 16px -12px rgba(120, 30, 50, 0.16), 0 1px 2px rgba(120, 30, 50, 0.04);
+    border-color: var(--border);
+    box-shadow: 0 1px 0 var(--border);
 }
 .pane-title {
     font-family: var(--font-sans);
@@ -812,6 +906,34 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     letter-spacing: 0;
 }
 
+/* Markdown-rendered chat replies (react-markdown + remark-gfm). GFM tables ARE
+   parsed into real <table>s, but browser defaults render them borderless/cramped
+   so they read as a run-together blob — these rules make them legible. */
+.markdown { overflow-x: auto; }   /* wide tables scroll inside the bubble */
+.markdown table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    overflow: hidden;
+    font-size: 13px;
+    margin: 10px 0;
+}
+.markdown th,
+.markdown td {
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+    border: 1px solid var(--border);
+}
+.markdown th {
+    font-weight: 600;
+    color: var(--text-mute);
+    background: var(--surface);
+    white-space: nowrap;
+}
+.markdown tr:nth-child(even) td { background: var(--surface); }
+
 .agenda-item {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -979,6 +1101,98 @@ body.resizing * { cursor: col-resize !important; user-select: none !important; }
     border-color: var(--border-2);
 }
 
+/* /pm-agent command — inline prefix highlight (see .chat-input-ce below) + in-bubble chip */
+.pm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 6px;
+    padding: 1px 8px 1px 3px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    color: var(--accent-deep);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    vertical-align: middle;
+}
+.pm-chip-ava {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+/* Slash-command suggestion menu (floats above the input) */
+.slash-menu {
+    position: absolute;
+    bottom: calc(100% - 6px);
+    left: 16px;
+    right: 56px;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border-radius: var(--r);
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    z-index: 5;
+    animation: pmPillIn 0.14s var(--ease);
+}
+.slash-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    transition: background var(--dur) var(--ease);
+}
+.slash-item-active { background: var(--accent-soft); }
+.slash-ava {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.slash-cmd { font-size: 12.5px; font-weight: 700; letter-spacing: -0.01em; }
+.slash-desc {
+    font-size: 11.5px;
+    color: var(--text-mute);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Resolved pending cards archived read-only into the chat thread */
+.card-archived { opacity: 0.85; }
+.card-archived .pending-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.card-badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+}
+.card-archived.card-rejected .card-badge {
+    background: var(--surface-2);
+    color: var(--text-mute);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Left Sidebar (collapsible, ChatGPT/Gemini-style)
    ═══════════════════════════════════════════════════════════════ */
@@ -989,7 +1203,9 @@ body {
     transition: grid-template-columns 0.22s var(--ease);
 }
 body.sidebar-open    { --sidebar-w: 268px; }
-body.sidebar-collapsed { --sidebar-w: 0px; }
+/* Collapsed = narrow icon rail (ChatGPT-style) instead of fully hidden.
+ * Shows: Mee mark at top, "+" button, project initials, avatar at bottom. */
+body.sidebar-collapsed { --sidebar-w: 56px; }
 
 .sidebar {
     height: 100vh;
@@ -1526,6 +1742,14 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
     min-height: 30px;
     box-sizing: border-box;
 }
+.task-due-group { display: flex; flex-direction: column; gap: 2px; }
+.task-due-selects { display: flex; gap: 6px; }
+.task-due-day, .task-due-month, .task-due-year {
+    flex: 1;
+    min-width: 0;
+    min-height: 30px;
+    box-sizing: border-box;
+}
 .task-reason { width: 100%; box-sizing: border-box; resize: vertical; min-height: 38px; }
 .task-remove {
     flex-shrink: 0;
@@ -1541,6 +1765,22 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .task-remove:hover:not(:disabled) { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
 .task-remove:disabled { opacity: 0.5; cursor: default; }
 .task-empty { color: var(--text-mute); margin-bottom: 12px; }
+.task-add-item, .task-add-group {
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 0.85em;
+    cursor: pointer;
+}
+.task-add-group { margin-top: 10px; }
+.task-add-item:hover:not(:disabled), .task-add-group:hover:not(:disabled) {
+    color: var(--accent, #3b82f6);
+    border-color: var(--accent, #3b82f6);
+}
+.task-add-item:disabled, .task-add-group:disabled { opacity: 0.5; cursor: default; }
 
 .chat-input-wrap {
     padding: 14px 16px 16px;
@@ -1574,6 +1814,27 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .chat-input:focus {
     border-color: var(--border-3);
     box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* contenteditable chat editor: plain-text box with an inline /pm-agent highlight */
+.chat-input-ce {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+    cursor: text;
+}
+.chat-input-ce:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-faint);
+    pointer-events: none;
+}
+.chat-input-ce[aria-disabled="true"] {
+    opacity: 0.6;
+    cursor: default;
+}
+/* The literal /pm-agent prefix — coloured in place, no node inserted (IME-safe). */
+::highlight(pm-cmd) {
+    color: var(--accent);
 }
 
 .chat-send {
@@ -1870,24 +2131,279 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 .mono   { font-family: var(--font-mono); letter-spacing: 0; }
 .small  { font-size: 12px; }
 
-/* Scrollbar */
+/* Scrollbar — single look for every internal scroll area (transcript
+ * segments, chat, MoM editor, notta dropdown member list). Same width,
+ * same accent, same hover bump. */
 .pane-content::-webkit-scrollbar,
 .chat-thread::-webkit-scrollbar,
-.transcript-box::-webkit-scrollbar { width: 6px; }
+.transcript-box::-webkit-scrollbar,
+.notta-list::-webkit-scrollbar,
+.notta-dropdown::-webkit-scrollbar,
+.notta-dropdown-list::-webkit-scrollbar,
+.mom-editor-content::-webkit-scrollbar,
+.sidebar-body::-webkit-scrollbar,
+.members-suggestions::-webkit-scrollbar { width: 6px; height: 6px; }
 .pane-content::-webkit-scrollbar-track,
 .chat-thread::-webkit-scrollbar-track,
-.transcript-box::-webkit-scrollbar-track { background: transparent; }
+.transcript-box::-webkit-scrollbar-track,
+.notta-list::-webkit-scrollbar-track,
+.notta-dropdown::-webkit-scrollbar-track,
+.notta-dropdown-list::-webkit-scrollbar-track,
+.mom-editor-content::-webkit-scrollbar-track,
+.sidebar-body::-webkit-scrollbar-track,
+.members-suggestions::-webkit-scrollbar-track { background: transparent; }
 .pane-content::-webkit-scrollbar-thumb,
 .chat-thread::-webkit-scrollbar-thumb,
-.transcript-box::-webkit-scrollbar-thumb {
+.transcript-box::-webkit-scrollbar-thumb,
+.notta-list::-webkit-scrollbar-thumb,
+.notta-dropdown::-webkit-scrollbar-thumb,
+.notta-dropdown-list::-webkit-scrollbar-thumb,
+.mom-editor-content::-webkit-scrollbar-thumb,
+.sidebar-body::-webkit-scrollbar-thumb,
+.members-suggestions::-webkit-scrollbar-thumb {
     background: var(--border-2);
     border-radius: 999px;
+    min-height: 32px;
 }
 .pane-content::-webkit-scrollbar-thumb:hover,
 .chat-thread::-webkit-scrollbar-thumb:hover,
-.transcript-box::-webkit-scrollbar-thumb:hover {
+.transcript-box::-webkit-scrollbar-thumb:hover,
+.notta-list::-webkit-scrollbar-thumb:hover,
+.notta-dropdown::-webkit-scrollbar-thumb:hover,
+.notta-dropdown-list::-webkit-scrollbar-thumb:hover,
+.mom-editor-content::-webkit-scrollbar-thumb:hover,
+.sidebar-body::-webkit-scrollbar-thumb:hover,
+.members-suggestions::-webkit-scrollbar-thumb:hover {
     background: var(--border-3);
 }
+/* Firefox fallback (no ::-webkit pseudo). */
+.sidebar-body,
+.pane-content,
+.chat-thread,
+.notta-list,
+.transcript-box,
+.notta-dropdown-list,
+.mom-editor-content,
+.members-suggestions {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+}
+
+/* Inline editable text fields used in MoMView's edit mode. The base
+ * .editable-inline applies a subtle dashed outline + hover lift so the
+ * user sees what's editable; on focus we light it up with the accent
+ * border. Placeholder uses ::before so an empty span still has hit
+ * area + a hint. */
+.editable-inline {
+    display: inline-block;
+    min-width: 12px;
+    padding: 0 4px;
+    margin: 0 -4px;
+    border-radius: 4px;
+    outline: 1px dashed transparent;
+    transition: outline-color 100ms, background 100ms;
+    cursor: text;
+}
+.editable-inline:hover { background: var(--bg-2); outline-color: var(--border-2); }
+.editable-inline:focus {
+    background: var(--bg-2);
+    outline: 1px solid var(--accent, var(--border-3));
+    outline-offset: 0;
+}
+.editable-inline.multiline { display: inline; }
+.editable-inline:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-mute);
+    font-style: italic;
+}
+.mom-edit-mode { padding-bottom: 24px; }
+
+.mom-save-banner {
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    font-size: 12px;
+    color: var(--text-mute);
+    display: inline-block;
+}
+
+/* Edited-MoM body — rendered HTML from MomEditor split into per-section
+ * cards by MoMView. Each `<div class="mom-card">` wraps an H3 + its
+ * following blocks (paragraph / list / etc) so each section gets a
+ * visible boxed container, matching the original MoMView card vibe. */
+.mom-edited-body { padding: 8px 4px 24px; color: var(--text-1); line-height: 1.55; }
+.mom-edited-title h1,
+.mom-edited-title h2 {
+    font-family: var(--font-display, var(--font-sans));
+    font-size: 22px;
+    font-weight: 600;
+    margin: 4px 0 20px;
+    letter-spacing: -0.01em;
+    color: var(--text-1);
+}
+.mom-card {
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface, var(--bg-1));
+    padding: 14px 18px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.mom-card-body h3 {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 12px;
+}
+.mom-card-body p {
+    margin: 0.5em 0;
+    font-size: 14px;
+    color: var(--text-1);
+}
+.mom-card-body p:first-child { margin-top: 0; }
+.mom-card-body p:last-child { margin-bottom: 0; }
+.mom-card-body ul,
+.mom-card-body ol {
+    padding-left: 1.4em;
+    margin: 0.4em 0;
+    font-size: 14px;
+}
+.mom-card-body ul:first-child,
+.mom-card-body ol:first-child { margin-top: 0; }
+.mom-card-body ul:last-child,
+.mom-card-body ol:last-child { margin-bottom: 0; }
+.mom-card-body li { margin: 0.35em 0; line-height: 1.55; }
+.mom-card-body li b,
+.mom-card-body li strong { color: var(--text-1); font-weight: 600; }
+.mom-card-body li i,
+.mom-card-body li em { color: var(--text-mute); font-style: italic; }
+.mom-card-body blockquote {
+    border-left: 3px solid var(--accent, var(--border-2));
+    padding: 0.2em 0 0.2em 0.9em;
+    margin: 0.6em 0;
+    color: var(--text-2);
+}
+.mom-card-body code {
+    background: var(--bg-2);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.92em;
+    font-family: var(--font-mono);
+}
+.mom-card-body strong, .mom-card-body b { font-weight: 600; }
+
+/* Inline editable text fields used in MoMView's edit mode. The base
+ * .editable-inline applies a subtle dashed outline + hover lift so the
+ * user sees what's editable; on focus we light it up with the accent
+ * border. Placeholder uses ::before so an empty span still has hit
+ * area + a hint. */
+.editable-inline {
+    display: inline-block;
+    min-width: 12px;
+    padding: 0 4px;
+    margin: 0 -4px;
+    border-radius: 4px;
+    outline: 1px dashed transparent;
+    transition: outline-color 100ms, background 100ms;
+    cursor: text;
+}
+.editable-inline:hover { background: var(--bg-2); outline-color: var(--border-2); }
+.editable-inline:focus {
+    background: var(--bg-2);
+    outline: 1px solid var(--accent, var(--border-3));
+    outline-offset: 0;
+}
+.editable-inline.multiline { display: inline; }
+.editable-inline:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-mute);
+    font-style: italic;
+}
+.mom-edit-mode { padding-bottom: 24px; }
+
+.mom-save-banner {
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    font-size: 12px;
+    color: var(--text-mute);
+    display: inline-block;
+}
+
+/* Edited-MoM body — rendered HTML from MomEditor split into per-section
+ * cards by MoMView. Each `<div class="mom-card">` wraps an H3 + its
+ * following blocks (paragraph / list / etc) so each section gets a
+ * visible boxed container, matching the original MoMView card vibe. */
+.mom-edited-body { padding: 8px 4px 24px; color: var(--text-1); line-height: 1.55; }
+.mom-edited-title h1,
+.mom-edited-title h2 {
+    font-family: var(--font-display, var(--font-sans));
+    font-size: 22px;
+    font-weight: 600;
+    margin: 4px 0 20px;
+    letter-spacing: -0.01em;
+    color: var(--text-1);
+}
+.mom-card {
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface, var(--bg-1));
+    padding: 14px 18px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.mom-card-body h3 {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 12px;
+}
+.mom-card-body p {
+    margin: 0.5em 0;
+    font-size: 14px;
+    color: var(--text-1);
+}
+.mom-card-body p:first-child { margin-top: 0; }
+.mom-card-body p:last-child { margin-bottom: 0; }
+.mom-card-body ul,
+.mom-card-body ol {
+    padding-left: 1.4em;
+    margin: 0.4em 0;
+    font-size: 14px;
+}
+.mom-card-body ul:first-child,
+.mom-card-body ol:first-child { margin-top: 0; }
+.mom-card-body ul:last-child,
+.mom-card-body ol:last-child { margin-bottom: 0; }
+.mom-card-body li { margin: 0.35em 0; line-height: 1.55; }
+.mom-card-body li b,
+.mom-card-body li strong { color: var(--text-1); font-weight: 600; }
+.mom-card-body li i,
+.mom-card-body li em { color: var(--text-mute); font-style: italic; }
+.mom-card-body blockquote {
+    border-left: 3px solid var(--accent, var(--border-2));
+    padding: 0.2em 0 0.2em 0.9em;
+    margin: 0.6em 0;
+    color: var(--text-2);
+}
+.mom-card-body code {
+    background: var(--bg-2);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.92em;
+    font-family: var(--font-mono);
+}
+.mom-card-body strong, .mom-card-body b { font-weight: 600; }
 .transcript-box {
     scrollbar-width: thin;
     scrollbar-color: var(--border-2) transparent;
@@ -2042,25 +2558,254 @@ body.sidebar-collapsed { --sidebar-w: 0px; }
 
 /* Print mode — when user uses browser print/Save-as-PDF, hide everything
    except the MoM panel content so the PDF is clean (no sidebar/chat/toolbars). */
+/* ─── PRINT — official-document style (hành chính / office) ─────────
+ * Strategy: hide ALL screen UI via `visibility: hidden`, then re-show
+ * only #mom-result by lifting it out of the normal flow with absolute
+ * positioning at (0, 0). This avoids fighting every screen CSS rule
+ * one by one — anything not explicitly re-shown stays hidden.
+ *
+ * Visual identity: serif fonts (Cambria/Georgia/Times), black ink on
+ * white, formal section headers with bottom rule, tight bordered
+ * tables, generous page margins. Mirrors the look of standard
+ * công văn / biên bản printed reports. */
 @media print {
-    body { background: white !important; color: black !important; }
-    .sidebar, .topbar, .pane-chat, .resizer,
-    .pane-transcript, .meeting-control,
-    .pane-mom .pane-header,
-    .new-recording-banner, .mee-modal, .mee-toast {
-        display: none !important;
+    /* 1) Page setup — A4-ish margins, no browser headers/footers if
+     *    the user disables them. We can't suppress the URL strip the
+     *    browser prints by default — that requires user setting. */
+    @page {
+        size: A4;
+        margin: 22mm 18mm 22mm 22mm;
     }
-    .workspace { grid-template-columns: 1fr !important; display: block !important; }
-    .pane-mom {
+
+    /* 2) Hide everything by default. */
+    body * { visibility: hidden !important; }
+
+    /* 3) Re-show only the MoM body (#mom-result and its descendants).
+     *    The ancestor chain (.pane-mom → .pane-content → #mom-result)
+     *    must also be display: block so #mom-result actually lays out
+     *    in the page — visibility:visible alone isn't enough if a
+     *    parent is display:none. */
+    .sidebar, .topbar, .pane-transcript, .pane-chat, .resizer,
+    .floating-rail, .meeting-control { display: none !important; }
+    body, .app, .workspace, .pane-mom, .pane-content {
+        display: block !important;
+        grid-template-columns: none !important;
+        width: 100% !important;
+        max-width: none !important;
+        height: auto !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: visible !important;
+        background: white !important;
+        visibility: visible !important;
+    }
+    .pane-mom .pane-header { display: none !important; }
+    #mom-result, #mom-result * { visibility: visible !important; }
+
+    /* 4) Let #mom-result flow in normal block layout — the ancestor
+     *    chain (.app .workspace .pane-mom .pane-content) is forced
+     *    to display:block above so we don't need absolute positioning. */
+    #mom-result {
+        position: static !important;
         display: block !important;
         width: 100% !important;
         max-width: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
         background: white !important;
-        color: black !important;
+        color: #111 !important;
+        font-family: "Cambria", "Georgia", "Times New Roman", Times, serif !important;
+        font-size: 11.5pt !important;
+        line-height: 1.55 !important;
     }
-    .pane-mom * { color: black !important; background: white !important; border-color: #ddd !important; }
-    .mom-section { page-break-inside: avoid; }
-    .app, body { padding: 0 !important; margin: 0 !important; }
+
+    /* 5) Document body reset — kill the dark theme + transitions. */
+    html, body { background: white !important; color: #111 !important; }
+    .mee-toast, .mee-modal { display: none !important; }
+
+    /* 6) Section headers as small-caps rule (official-document feel). */
+    #mom-result .mom-section { margin: 0 0 14pt !important; }
+    #mom-result .mom-section-title {
+        font-family: inherit !important;
+        font-size: 10.5pt !important;
+        font-weight: 700 !important;
+        color: #111 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.08em !important;
+        border-bottom: 1px solid #333 !important;
+        padding: 0 0 3pt !important;
+        margin: 14pt 0 8pt !important;
+        background: transparent !important;
+    }
+    /* First section title sits flush with top page margin. */
+    #mom-result .mom-section:first-child .mom-section-title { margin-top: 0 !important; }
+
+    /* 7) Meta table — clean bordered cells, no background tint. */
+    #mom-result .mom-meta-table,
+    #mom-result .mom-table {
+        width: 100% !important;
+        border: 1px solid #333 !important;
+        border-collapse: collapse !important;
+        background: white !important;
+        margin-bottom: 6pt !important;
+        font-size: 11pt !important;
+    }
+    #mom-result .mom-meta-table td,
+    #mom-result .mom-table td,
+    #mom-result .mom-table th {
+        border: 1px solid #999 !important;
+        padding: 6pt 10pt !important;
+        vertical-align: top !important;
+        background: white !important;
+        color: #111 !important;
+        font-family: inherit !important;
+    }
+    /* Label column — slightly muted but still serif (not mono). */
+    #mom-result .mom-meta-table td:first-child {
+        width: 28% !important;
+        font-weight: 600 !important;
+        color: #444 !important;
+        background: #fafafa !important;
+        text-transform: none !important;
+        letter-spacing: 0 !important;
+        font-size: 11pt !important;
+        font-family: inherit !important;
+    }
+
+    /* 8) Summary paragraph — indented block quote style. */
+    #mom-result .mom-summary {
+        text-align: justify !important;
+        text-indent: 1em !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        font-family: inherit !important;
+        background: transparent !important;
+        color: #111 !important;
+    }
+
+    /* 9) Agenda items — flat numbered list, no card backgrounds. */
+    #mom-result .agenda-item {
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        padding: 4pt 0 6pt !important;
+        margin: 0 0 4pt !important;
+        page-break-inside: avoid;
+    }
+    #mom-result .agenda-item-header {
+        display: block !important;
+        margin-bottom: 2pt !important;
+    }
+    #mom-result .topic-no {
+        display: inline-block !important;
+        min-width: 1.6em !important;
+        font-family: inherit !important;
+        font-weight: 700 !important;
+        color: #111 !important;
+        font-size: 11.5pt !important;
+        background: transparent !important;
+    }
+    #mom-result .agenda-item-header .agenda-title,
+    #mom-result .agenda-item .agenda-title {
+        font-weight: 700 !important;
+        color: #111 !important;
+        font-size: 11.5pt !important;
+    }
+    #mom-result .agenda-description {
+        margin: 2pt 0 0 1.6em !important;
+        color: #222 !important;
+        text-align: justify !important;
+    }
+
+    /* 10) Bullet sections (decisions / commitments / blockers). */
+    #mom-result ul {
+        margin: 4pt 0 6pt 1.6em !important;
+        padding: 0 !important;
+        list-style: disc outside !important;
+    }
+    #mom-result li {
+        margin: 2pt 0 !important;
+        line-height: 1.55 !important;
+        page-break-inside: avoid;
+        color: #111 !important;
+    }
+    #mom-result li .muted,
+    #mom-result li .small {
+        color: #555 !important;
+        font-size: 0.9em !important;
+        font-style: italic !important;
+    }
+
+    /* 11) Action items — formal 3-column block table. */
+    #mom-result .action-item {
+        display: grid !important;
+        grid-template-columns: 22% 1fr 22% !important;
+        gap: 0 !important;
+        padding: 5pt 8pt !important;
+        border: 1px solid #999 !important;
+        border-top: none !important;
+        background: white !important;
+        color: #111 !important;
+        page-break-inside: avoid;
+    }
+    #mom-result .action-item:first-child {
+        border-top: 1px solid #333 !important;
+    }
+    #mom-result .action-pic {
+        font-weight: 700 !important;
+        font-family: inherit !important;
+        background: transparent !important;
+        color: #111 !important;
+    }
+    #mom-result .action-task {
+        font-family: inherit !important;
+        color: #111 !important;
+        text-align: justify !important;
+    }
+    #mom-result .action-deadline {
+        font-family: inherit !important;
+        color: #444 !important;
+        font-style: italic !important;
+        text-align: right !important;
+    }
+
+    /* 12) Editable-MoM card view (when user used inline editor). */
+    #mom-result .mom-card {
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 1px solid #ddd !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        padding: 6pt 0 10pt !important;
+        margin: 0 0 8pt !important;
+        page-break-inside: avoid;
+    }
+    #mom-result .mom-card-body h3 {
+        font-size: 10.5pt !important;
+        font-weight: 700 !important;
+        color: #111 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.08em !important;
+        border-bottom: 1px solid #333 !important;
+        padding: 0 0 3pt !important;
+        margin: 0 0 6pt !important;
+    }
+
+    /* 13) Strip interactive bits (toggle switches, save banners, edit
+     *     handles) that don't belong on paper. */
+    #mom-result .toggle-switch,
+    #mom-result .mom-save-banner,
+    #mom-result .editable-inline { display: inline !important; }
+    #mom-result .editable-inline {
+        background: transparent !important;
+        outline: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+
+    /* 14) Page-break policy. */
+    h1, h2, h3 { page-break-after: avoid; }
+    table, .agenda-item, .action-item { page-break-inside: avoid; }
 }
 
 /* Project overview MODE — when a project with > 1 recording is selected,
@@ -2545,6 +3290,1445 @@ select.mee-modal-input {
     flex-direction: column;
     min-height: 0;
 }
+.notta-toolbar,
+.mom-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px 12px;
+    border-bottom: 1px dashed var(--border);
+    margin-bottom: 10px;
+    gap: 12px;
+}
+.notta-toolbar-hint,
+.mom-toolbar-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    flex: 1 1 auto;
+    text-align: center;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Loading placeholder shown while the upload pipeline is mid-flight.
+ * Replaces the segment list so the user doesn't see partial text that
+ * later gets re-hidden by karaoke reveal (jarring flicker). */
+.transcript-clean-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.notta-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--text-muted);
+}
+.notta-loading-spinner {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: notta-loading-spin 0.9s linear infinite;
+}
+.notta-loading-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+.notta-loading-step {
+    font-size: 12.5px;
+    color: var(--accent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+.notta-loading-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    max-width: 360px;
+    line-height: 1.55;
+}
+@keyframes notta-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* iOS-style toggle switch — used for the "✎ Sửa text" / "✎ Sửa biên bản"
+ * controls. The native checkbox is visually hidden; the user clicks the
+ * label (track + label text). Accent green when on. */
+.toggle-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 2px 4px;
+    transition: color var(--dur) var(--ease);
+}
+.toggle-switch:hover .toggle-switch-track {
+    border-color: var(--border-2);
+}
+.toggle-switch.on {
+    color: var(--accent);
+}
+.toggle-switch input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.toggle-switch-track {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    border: 1px solid var(--border);
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-radius: 10px;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    flex-shrink: 0;
+}
+.toggle-switch.on .toggle-switch-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle-switch-thumb {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: transform var(--dur) var(--ease);
+}
+.toggle-switch.on .toggle-switch-thumb {
+    transform: translateX(14px);
+}
+.toggle-switch-label {
+    font-weight: 500;
+    white-space: nowrap;
+}
+.toggle-switch input[type="checkbox"]:focus + .toggle-switch-track {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* When a row's text is contentEditable, surface a subtle outline so the
+ * user knows they can click it. Saving in flight gets a pulsing tint. */
+.notta-row-text.editable {
+    outline: 1px dashed var(--border-2);
+    outline-offset: 4px;
+    border-radius: 4px;
+    padding: 2px 4px;
+    cursor: text;
+    transition: outline-color var(--dur) var(--ease);
+}
+.notta-row-text.editable:hover {
+    outline-color: var(--accent);
+}
+.notta-row-text.editable:focus {
+    outline-color: var(--accent);
+    outline-style: solid;
+    outline-width: 2px;
+}
+.notta-row-text.saving {
+    background: var(--accent-soft);
+    animation: notta-saving-pulse 1s ease-in-out infinite;
+}
+@keyframes notta-saving-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
+
+.notta-toolbar-karaoke {
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    cursor: pointer;
+    animation: notta-karaoke-pulse 1.6s ease-in-out infinite;
+}
+@keyframes notta-karaoke-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
+.notta-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 8px;
+    /* Firefox + modern browsers — thin, dark-tinted thumb on transparent
+     * track. The default chrome scrollbar (bright white) clashed with
+     * the GreenNode dark theme. WebKit treatment is consolidated at the
+     * bottom of this file with the other scrollable panes. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+    scrollbar-gutter: stable;
+}
+.notta-row {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 14px;
+    padding: 10px 8px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    position: relative;
+    /* Fade + slide-in when a new block becomes visible during karaoke —
+     * smooths the "block pops into existence" transition so it feels
+     * deliberate instead of jumpy. Plays once on mount. */
+    animation: notta-row-appear 280ms ease-out;
+}
+@keyframes notta-row-appear {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.notta-row:hover {
+    background: var(--surface-2, rgba(255,255,255,0.025));
+}
+.notta-row.active {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+.notta-row.active .notta-row-text {
+    color: var(--text);
+    font-weight: 500;
+}
+.notta-row-ts {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-faint);
+    padding-top: 6px;
+    text-align: right;
+}
+.notta-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.notta-row-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.notta-row-text {
+    color: var(--text-muted);
+    line-height: 1.6;
+    font-size: 14px;
+    word-break: break-word;
+}
+/* Each word is its own span so we can highlight the one currentMs lands in.
+ * Active word gets a subtle yellow background + green underline so it stands
+ * out without screaming. */
+.notta-word {
+    display: inline;
+    border-radius: 3px;
+    padding: 0 1px;
+    transition: background-color 80ms linear, color 80ms linear;
+}
+.notta-word.active {
+    background: var(--accent);
+    color: var(--surface);
+    font-weight: 600;
+}
+
+/* Speaker chip (clickable to open dropdown) */
+.notta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px 3px 3px;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    cursor: pointer;
+    color: white;
+    font-weight: 600;
+    font-size: 12.5px;
+    transition: filter var(--dur) var(--ease);
+}
+.notta-chip:hover {
+    filter: brightness(1.1);
+}
+.notta-chip-initials {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.25);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+}
+.notta-chip-name {
+    color: white;
+    letter-spacing: 0.01em;
+}
+.notta-chip-caret {
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+/* Dropdown: search + member suggestions */
+.notta-dropdown {
+    position: absolute;
+    left: 0;
+    z-index: 100;
+    width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+/* Default direction — opens below the speaker chip. */
+.notta-dropdown.notta-dropdown-down {
+    top: calc(100% + 6px);
+    bottom: auto;
+}
+/* Flipped direction — opens above the chip. Used when the chip is
+ * close to the sticky audio player so the dropdown isn't clipped. */
+.notta-dropdown.notta-dropdown-up {
+    top: auto;
+    bottom: calc(100% + 6px);
+}
+.notta-dropdown-search {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-size: 13px;
+}
+.notta-dropdown-search:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.notta-dropdown-section-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 4px 6px 2px;
+    letter-spacing: 0.05em;
+}
+/* The submenu used to be position:absolute inside this list — but it's
+ * now portaled to document.body (escapes any ancestor overflow). So
+ * we CAN safely enable scroll here: cap height and let the member
+ * list scroll independently. Without this, wheeling over the dropdown
+ * also scrolls the transcript behind it. */
+.notta-dropdown-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 280px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+/* Member row in dropdown. Hovering reveals a floating submenu on the right
+ * (matches Notta UI from user's reference screenshot). The submenu is
+ * absolutely positioned so it appears outside the dropdown card. */
+.notta-dropdown-member {
+    position: relative;
+    border-radius: var(--r-md);
+    margin-bottom: 1px;
+    transition: background var(--dur) var(--ease);
+}
+.notta-dropdown-member:hover,
+.notta-dropdown-member:focus-within {
+    background: var(--surface-2, rgba(255,255,255,0.05));
+}
+.notta-dropdown-member.current .notta-dropdown-name {
+    color: var(--accent);
+    font-weight: 600;
+}
+.notta-dropdown-member.guest .notta-dropdown-name {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.notta-dropdown-member-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: default;
+}
+.notta-dropdown-caret {
+    margin-left: auto;
+    color: var(--text-faint);
+    font-size: 14px;
+    line-height: 1;
+}
+/* Submenu is rendered via React portal at document.body (see component).
+ * Positioned with `position: fixed` so ancestor overflow on the segments
+ * list / dropdown card never hides it. Top/left set inline from the
+ * hovered member's getBoundingClientRect. */
+.notta-submenu-portal {
+    position: fixed;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 1000;
+}
+.notta-dropdown-action {
+    background: transparent;
+    border: none;
+    border-radius: var(--r-md);
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease);
+    text-align: left;
+    white-space: nowrap;
+}
+.notta-dropdown-action:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.notta-dropdown-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.notta-dropdown-name {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.notta-dropdown-badge {
+    font-size: 10px;
+    opacity: 0.8;
+}
+.notta-dropdown-check {
+    color: var(--accent);
+    font-weight: 700;
+}
+.notta-dropdown-applyall {
+    font-size: 10px;
+    color: var(--text-faint);
+    opacity: 0.7;
+}
+.notta-dropdown-item:hover .notta-dropdown-applyall {
+    opacity: 1;
+}
+.notta-dropdown-empty {
+    padding: 10px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 12px;
+}
+
+/* Audio player pinned at bottom of pane (flex-end, doesn't scroll) */
+.notta-player {
+    flex-shrink: 0;
+    margin-top: 8px;
+    padding: 10px 14px 12px;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.notta-player-error {
+    font-size: 11.5px;
+    color: var(--warning, #f59e0b);
+    padding: 4px 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border-radius: var(--r-sm);
+}
+.notta-player-slider {
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.notta-player-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+}
+.notta-player-rate {
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.notta-player-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.notta-player-btn:hover {
+    background: var(--surface);
+    border-color: var(--border-2);
+}
+.notta-player-play {
+    width: 40px;
+    height: 40px;
+    background: var(--accent);
+    color: var(--surface);
+    font-size: 14px;
+    border-color: var(--accent);
+}
+.notta-player-play:hover {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+.notta-player-time {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-left: 8px;
+}
+
+/* ─── Sidebar footer (Settings + User dropdown cluster) ───────────── */
+.sidebar { display: flex; flex-direction: column; }
+.sidebar-body { flex: 1 1 auto; min-height: 0; }
+.sidebar-footer {
+    border-top: 1px solid var(--border-2, var(--border));
+    /* Zero horizontal padding — the wrap (.user-controls) goes
+     * edge-to-edge of the sidebar. The divider line above also spans
+     * full sidebar width. */
+    padding: 0;
+    flex: 0 0 auto;
+    background: var(--surface, var(--bg-1));
+}
+.user-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    /* Inner padding — breathing room INSIDE the full-width wrap.
+     * Left ~6px so avatar reads as flush; right ~10px to keep the
+     * settings button from touching the sidebar edge. */
+    padding: 10px 10px 10px 6px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.user-controls-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: background 100ms, color 100ms, border-color 100ms;
+}
+.user-controls-btn svg { width: 16px; height: 16px; }
+.user-controls-btn:hover {
+    background: var(--bg-2);
+    color: var(--text-1);
+    border-color: var(--border);
+}
+.user-controls-avatar {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    margin-right: auto;
+    min-width: 0;
+    /* Zero left padding so the avatar circle sits flush against the
+     * button's left edge — combined with footer padding-left: 4px,
+     * the avatar reads as truly anchored to the sidebar edge. */
+    padding: 4px 8px 4px 0;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-1);
+    cursor: pointer;
+    transition: background 100ms, border-color 100ms;
+}
+.user-controls-avatar:hover {
+    background: var(--bg-2);
+    border-color: var(--border);
+}
+.user-controls-avatar .avatar-img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent, #43e588);
+    color: #0a0f0a;
+    font-weight: 600;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.user-controls-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+}
+.user-controls-avatar .caret {
+    flex: 0 0 auto;
+    color: var(--text-mute);
+}
+
+/* ─── Members panel inside Details — invite + attendance ───────────── */
+.members-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin-bottom: 18px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+.members-section { display: flex; flex-direction: column; gap: 8px; }
+.members-section-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.members-count {
+    font-size: 11px;
+    color: var(--text-mute);
+    font-weight: 400;
+}
+.members-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.members-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: var(--r-sm, 6px);
+    transition: background 120ms;
+}
+.members-row:hover { background: var(--bg-2); }
+.members-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.members-avatar.sm { width: 22px; height: 22px; font-size: 11px; }
+.members-meta { flex: 1 1 auto; min-width: 0; }
+.members-name { font-size: 13px; font-weight: 500; color: var(--text-1); display: flex; gap: 6px; align-items: center; }
+.members-sub { font-size: 11.5px; }
+.members-badge { font-size: 11px; }
+.members-role { text-transform: capitalize; }
+.members-invite { margin-top: 6px; position: relative; }
+.members-invite-row { display: flex; gap: 6px; align-items: stretch; }
+.members-invite-row > input.field { flex: 1 1 auto; min-width: 0; }
+/* Role picker — chip-button + Notta-style popover. Replaces the native
+ * <select> so we can match the speaker-chip dropdown look (rounded card,
+ * description per option, check mark on selected). */
+.members-role-wrap {
+    position: relative;
+    flex: 0 0 auto;
+}
+.members-role-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 120ms, background-color 120ms;
+}
+.members-role-btn:hover:not(:disabled) {
+    border-color: var(--border-2);
+    background-color: var(--bg-2);
+}
+.members-role-btn:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.members-role-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.members-role-btn-label { line-height: 1; }
+.members-role-btn-caret {
+    font-size: 10px;
+    color: var(--text-faint);
+    transition: transform 120ms var(--ease, ease);
+}
+.members-role-btn[aria-expanded="true"] .members-role-btn-caret {
+    transform: rotate(180deg);
+}
+
+.members-role-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 100;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg, 12px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.members-role-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    border-radius: var(--r-sm, 6px);
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    transition: background var(--dur, 220ms) var(--ease, ease);
+}
+.members-role-option:hover {
+    background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+.members-role-option.current {
+    background: var(--accent-soft);
+}
+.members-role-option-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.members-role-option-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+}
+.members-role-option.current .members-role-option-label {
+    color: var(--accent-deep, var(--accent));
+}
+.members-role-option-desc {
+    font-size: 11.5px;
+    color: var(--text-mute);
+    line-height: 1.35;
+}
+.members-role-option-check {
+    color: var(--accent);
+    font-size: 14px;
+    line-height: 1.3;
+    flex: 0 0 auto;
+}
+.members-suggestions {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    max-height: 180px;
+    overflow-y: auto;
+}
+.members-suggestion-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: none;
+    background: transparent;
+    border-radius: var(--r-sm, 6px);
+    cursor: pointer;
+    text-align: left;
+    font-size: 12.5px;
+    color: var(--text-1);
+}
+.members-suggestion-row:hover { background: var(--bg-2); }
+.members-invite-error {
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-radius: var(--r-sm, 6px);
+    background: rgba(220, 38, 38, 0.12);
+    color: #dc2626;
+    font-size: 12px;
+}
+.members-attendance-hint { padding: 0 4px 4px; }
+.members-attendance-row { padding: 4px 8px; }
+.members-attendance-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.members-extra-attendee { padding: 4px 8px; }
+
+/* ─── Sidebar brand (Mee) ──────────────────────────────────────────── */
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px 8px;
+    font-family: var(--font-display, var(--font-sans));
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    background: transparent;
+    border: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--dur, 220ms) var(--ease, ease);
+}
+.sidebar-brand:hover {
+    background: var(--surface-2);
+}
+.sidebar-brand-mark {
+    width: 40px;
+    height: 40px;
+    /* Mee logo (logo-removebg, same asset as the favicon). Transparent PNG —
+       replaces the old green box + "M" letter. */
+    background: url("/favicon.png") center / contain no-repeat;
+    flex: 0 0 auto;
+}
+.sidebar-brand-mark::before {
+    content: "";
+}
+
+/* ─── Topbar v2 (compact, meeting title inline) ────────────────────── */
+.topbar.topbar-v2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 16px;
+    min-height: 56px;
+}
+.topbar.topbar-v2 .tb-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.topbar.topbar-v2 .tb-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+.topbar.topbar-v2 .topbar-title-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.topbar.topbar-v2 .topbar-title-input {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-family: var(--font-display, var(--font-sans));
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-1);
+    min-width: 80px;
+    width: 100%;
+    max-width: 420px;
+    letter-spacing: -0.01em;
+    outline: none;
+    transition: background 120ms, border-color 120ms;
+}
+.topbar.topbar-v2 .topbar-title-input:hover {
+    background: var(--bg-2);
+}
+.topbar.topbar-v2 .topbar-title-input:focus {
+    background: var(--bg-2);
+    border-color: var(--border-2);
+}
+.topbar.topbar-v2 .topbar-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 10px;
+    font-size: 11.5px;
+    color: var(--text-mute);
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow: hidden;
+}
+.topbar.topbar-v2 .tb-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+.topbar.topbar-v2 .tb-meta-sub {
+    color: var(--text-faint);
+    margin-left: 4px;
+}
+.topbar.topbar-v2 .tb-details-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+}
+.topbar.topbar-v2 .tb-details-btn.active {
+    background: var(--bg-2);
+    color: var(--text-1);
+}
+/* Settings + User cluster — visually distinct from the meeting title
+ * area. Sits inside a pill container so it reads as a "user controls"
+ * group rather than a continuation of the meeting bar. */
+.topbar.topbar-v2 .tb-controls-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+}
+.topbar.topbar-v2 .tb-controls-group .icon-btn,
+.topbar.topbar-v2 .tb-controls-group .avatar-btn {
+    border: none;
+    background: transparent;
+}
+.topbar.topbar-v2 .tb-controls-group .icon-btn:hover,
+.topbar.topbar-v2 .tb-controls-group .avatar-btn:hover {
+    background: var(--bg-2);
+}
+.topbar.topbar-v2 .tb-controls-group .avatar-btn {
+    border-radius: 999px;
+    padding: 2px 8px 2px 4px;
+}
+
+/* MeetingControl is now panel-only (title + meta moved to Topbar).
+ * When details panel is closed, the component renders nothing visible
+ * so it shouldn't take up vertical space. */
+.meeting-control.mc-panel-only {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+.meeting-control.mc-panel-only:empty { display: none; }
+
+/* ─── Empty-state CTA when no project is selected ──────────────────── */
+.pane-transcript.pane-empty-no-project {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+}
+.empty-no-project-card {
+    max-width: 420px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+.empty-no-project-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-mute);
+}
+.empty-no-project-icon svg { width: 28px; height: 28px; }
+.empty-no-project-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-1);
+    letter-spacing: -0.01em;
+}
+.empty-no-project-text {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-mute);
+    max-width: 340px;
+}
+.empty-no-project-actions {
+    margin-top: 6px;
+}
+.empty-no-project-actions .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-weight: 500;
+}
+
+/* ─── Floating action rail (Notta-style) ───────────────────────────── */
+/* Anchored to the right edge of the .pane-transcript so the rail
+ * follows the transcript pane width (resizable). Pane is `position:
+ * relative` already so absolute coords resolve against the pane box. */
+.pane-transcript { position: relative; }
+/* Reserve a gutter on the right of the transcript content so the
+ * floating rail doesn't sit on top of the text. Only the scrollable
+ * content areas need this — the header keeps its own action buttons
+ * right-aligned and the rail sits vertically centered, well below the
+ * header. 56px = rail width (38px round button) + 8px right offset +
+ * 10px breathing room. The AI pill briefly extends inward but only
+ * around the vertical center, where there's already line wrapping. */
+.pane-transcript .notta-list,
+.pane-transcript .notta-row,
+.pane-transcript .transcript-box,
+.pane-transcript .raw-textarea {
+    padding-right: 56px !important;
+}
+.floating-rail {
+    /* Anchored to the right edge of the transcript pane via position:
+     * absolute. When the MoM pane is hidden, the transcript pane fills
+     * the whole workspace and the rail naturally sits at the far right.
+     * When MoM is open, the rail sits at the MoM/transcript boundary. */
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    z-index: 30;
+    pointer-events: none; /* container is transparent — buttons re-enable */
+}
+.floating-rail .rail-btn {
+    pointer-events: auto;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-2);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.12);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 120ms var(--ease, ease),
+                background 120ms var(--ease, ease),
+                color 120ms var(--ease, ease),
+                border-color 120ms var(--ease, ease),
+                box-shadow 120ms var(--ease, ease);
+}
+.floating-rail .rail-btn svg {
+    width: 18px;
+    height: 18px;
+}
+.floating-rail .rail-btn:hover {
+    transform: translateY(-1px);
+    background: var(--bg-2);
+    color: var(--text-1);
+    border-color: var(--border-2);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22), 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+.floating-rail .rail-btn.active {
+    background: var(--accent, #5b8def);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(91, 141, 239, 0.45);
+}
+.floating-rail .rail-btn-ai {
+    /* The AI/sparkle button leads with a brand-purple gradient so it
+     * reads as the "primary" rail action (matches Notta's purple AI
+     * pill). When active, both colour stops shift to the accent. */
+    background: linear-gradient(135deg, #a26bf0 0%, #7944d0 100%);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(122, 68, 208, 0.42);
+}
+.floating-rail .rail-btn-ai.pill {
+    /* When chat is closed, expand to a pill so the user knows what
+     * the button does — icon alone is too ambiguous for AI. */
+    width: auto;
+    border-radius: 999px;
+    padding: 0 14px 0 12px;
+    gap: 6px;
+}
+.floating-rail .rail-btn-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+.floating-rail .rail-btn-ai svg {
+    /* Slightly shrink the icon in the pill so the text reads as the
+     * primary content. */
+    flex: 0 0 auto;
+}
+.floating-rail .rail-btn-ai:hover {
+    background: linear-gradient(135deg, #b07cf3 0%, #884ee0 100%);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 6px 16px rgba(122, 68, 208, 0.55);
+}
+.floating-rail .rail-btn-ai.active {
+    background: linear-gradient(135deg, #8a4fdb 0%, #5e2bb5 100%);
+    box-shadow: 0 4px 14px rgba(94, 43, 181, 0.55), 0 0 0 3px rgba(170, 110, 240, 0.25);
+}
+
+/* Visual flash applied to the MoM pane when the "Biên bản" rail button
+ * is clicked — quick highlight to confirm where the report is. */
+.rail-focus-flash {
+    animation: rail-focus-flash 1.2s ease-out;
+}
+@keyframes rail-focus-flash {
+    0%   { box-shadow: 0 0 0 0 rgba(122, 68, 208, 0.55) inset; }
+    20%  { box-shadow: 0 0 0 3px rgba(122, 68, 208, 0.45) inset; }
+    100% { box-shadow: 0 0 0 0 rgba(122, 68, 208, 0) inset; }
+}
+
+.floating-rail .rail-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.floating-rail .rail-btn:disabled:hover {
+    transform: none;
+    background: var(--surface);
+    color: var(--text-2);
+    border-color: var(--border);
+}
+
+/* ─── Insights pane (Conversation analytics) ───────────────────────── */
+.pane-insights {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+    min-width: 0;
+    overflow: hidden;
+    animation: slideInRight 0.22s var(--ease, ease);
+}
+@keyframes slideInRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+.pane-insights .pane-content { padding: 16px 16px 24px; }
+.insights-content { display: flex; flex-direction: column; gap: 22px; }
+
+.insights-section { display: flex; flex-direction: column; gap: 10px; }
+.insights-section-title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.insights-badge {
+    font-size: 11px;
+    color: var(--text-mute);
+    background: var(--bg-2);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 500;
+}
+
+.insights-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Silence vs speaking stacked bar */
+.silence-bar {
+    position: relative;
+    height: 28px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-2);
+    display: flex;
+}
+.silence-bar-fill {
+    height: 100%;
+    transition: width 220ms var(--ease, ease);
+}
+.silence-bar-fill.speaking {
+    background: repeating-linear-gradient(
+        135deg,
+        rgba(91, 141, 239, 0.32),
+        rgba(91, 141, 239, 0.32) 4px,
+        rgba(91, 141, 239, 0.22) 4px,
+        rgba(91, 141, 239, 0.22) 8px
+    );
+}
+.silence-bar-fill.silent {
+    background: repeating-linear-gradient(
+        135deg,
+        rgba(180, 180, 200, 0.22),
+        rgba(180, 180, 200, 0.22) 4px,
+        rgba(180, 180, 200, 0.12) 4px,
+        rgba(180, 180, 200, 0.12) 8px
+    );
+}
+.silence-bar-label {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.silence-legend {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-mute);
+}
+.silence-legend .dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+    vertical-align: -1px;
+    border-radius: 2px;
+}
+.silence-legend .dot.silent { background: rgba(180, 180, 200, 0.35); }
+.silence-legend .dot.speaking { background: rgba(91, 141, 239, 0.45); }
+
+/* Speaker cards */
+.insights-cards { display: flex; flex-direction: column; gap: 10px; }
+.insights-speaker-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 12px 14px;
+    transition: border-color 120ms;
+}
+.insights-speaker-card.expanded { border-color: var(--border-2); }
+.insights-speaker-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+.insights-speaker-head .caret {
+    color: var(--text-mute);
+    transition: transform 120ms;
+}
+.insights-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.insights-speaker-name {
+    flex: 1 1 auto;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--text-1);
+}
+.insights-speaker-time { font-size: 12px; color: var(--text-mute); }
+
+.insights-timeline {
+    position: relative;
+    height: 6px;
+    background: var(--bg-2);
+    border-radius: 3px;
+    margin: 10px 0 0;
+    overflow: hidden;
+}
+.insights-timeline-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 2px;
+    opacity: 0.85;
+}
+
+.insights-speaker-body {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 14px;
+    align-items: start;
+}
+.insights-gauge {
+    position: relative;
+    width: 120px;
+    height: 70px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.insights-gauge-label {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+}
+.insights-gauge-pct {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-1);
+    line-height: 1;
+}
+
+.insights-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 14px;
+}
+.insights-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.insights-metric-label {
+    font-size: 11px;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.insights-metric-value {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-1);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.insights-metric-status {
+    font-size: 11px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.insights-metric-status.ok {
+    background: rgba(34, 197, 94, 0.18);
+    color: #16a34a;
+}
+.insights-metric-status.warn {
+    background: rgba(249, 115, 22, 0.18);
+    color: #ea580c;
+}
+
+.insights-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-mute);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+}
+.insights-empty-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.insights-empty-sub { line-height: 1.5; }/* ══ Notta-style Clean view ═══════════════════════════════════════════
+ * Layout: toolbar (top) + scrollable segments list + sticky audio player.
+ * Each segment row has timestamp gutter + main column (speaker chip + text).
+ */
+/* When NottaCleanView is rendered inside .transcript-clean, that container
+ * MUST NOT scroll — internal .notta-list is the only scroller. Without
+ * this, the audio player floats with content instead of pinning to the
+ * pane bottom. */
+.transcript-clean:has(.notta-view) {
+    overflow: hidden;
+    padding: 12px 16px 0;
+    display: flex;
+    flex-direction: column;
+}
+.notta-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
 .notta-toolbar {
     display: flex;
     align-items: center;
@@ -2557,10 +4741,166 @@ select.mee-modal-input {
     font-size: 11.5px;
     color: var(--text-faint);
 }
+/* Loading placeholder shown while the upload pipeline is mid-flight.
+ * Replaces the segment list so the user doesn't see partial text that
+ * later gets re-hidden by karaoke reveal (jarring flicker). */
+.transcript-clean-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.notta-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--text-muted);
+}
+.notta-loading-spinner {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: notta-loading-spin 0.9s linear infinite;
+}
+.notta-loading-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+.notta-loading-step {
+    font-size: 12.5px;
+    color: var(--accent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+.notta-loading-hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    max-width: 360px;
+    line-height: 1.55;
+}
+@keyframes notta-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* iOS-style toggle switch — used for the "✎ Sửa text" / "✎ Sửa biên bản"
+ * controls. The native checkbox is visually hidden; the user clicks the
+ * label (track + label text). Accent green when on. */
+.toggle-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 2px 4px;
+    transition: color var(--dur) var(--ease);
+}
+.toggle-switch:hover .toggle-switch-track {
+    border-color: var(--border-2);
+}
+.toggle-switch.on {
+    color: var(--accent);
+}
+.toggle-switch input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.toggle-switch-track {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    border: 1px solid var(--border);
+    background: var(--surface-2, rgba(255,255,255,0.04));
+    border-radius: 10px;
+    transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    flex-shrink: 0;
+}
+.toggle-switch.on .toggle-switch-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle-switch-thumb {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: transform var(--dur) var(--ease);
+}
+.toggle-switch.on .toggle-switch-thumb {
+    transform: translateX(14px);
+}
+.toggle-switch-label {
+    font-weight: 500;
+    white-space: nowrap;
+}
+.toggle-switch input[type="checkbox"]:focus + .toggle-switch-track {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* When a row's text is contentEditable, surface a subtle outline so the
+ * user knows they can click it. Saving in flight gets a pulsing tint. */
+.notta-row-text.editable {
+    outline: 1px dashed var(--border-2);
+    outline-offset: 4px;
+    border-radius: 4px;
+    padding: 2px 4px;
+    cursor: text;
+    transition: outline-color var(--dur) var(--ease);
+}
+.notta-row-text.editable:hover {
+    outline-color: var(--accent);
+}
+.notta-row-text.editable:focus {
+    outline-color: var(--accent);
+    outline-style: solid;
+    outline-width: 2px;
+}
+.notta-row-text.saving {
+    background: var(--accent-soft);
+    animation: notta-saving-pulse 1s ease-in-out infinite;
+}
+@keyframes notta-saving-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
+
+.notta-toolbar-karaoke {
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    cursor: pointer;
+    animation: notta-karaoke-pulse 1.6s ease-in-out infinite;
+}
+@keyframes notta-karaoke-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
 .notta-list {
     flex: 1;
     overflow-y: auto;
-    padding-right: 6px;
+    padding-right: 8px;
+    /* Firefox + modern browsers — thin, dark-tinted thumb on transparent
+     * track. The default chrome scrollbar (bright white) clashed with
+     * the GreenNode dark theme. WebKit treatment is consolidated at the
+     * bottom of this file with the other scrollable panes. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2) transparent;
+    scrollbar-gutter: stable;
 }
 .notta-row {
     display: grid;
@@ -2571,6 +4911,14 @@ select.mee-modal-input {
     cursor: pointer;
     transition: background var(--dur) var(--ease);
     position: relative;
+    /* Fade + slide-in when a new block becomes visible during karaoke —
+     * smooths the "block pops into existence" transition so it feels
+     * deliberate instead of jumpy. Plays once on mount. */
+    animation: notta-row-appear 280ms ease-out;
+}
+@keyframes notta-row-appear {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 .notta-row:hover {
     background: var(--surface-2, rgba(255,255,255,0.025));
@@ -2890,4 +5238,714 @@ select.mee-modal-input {
     margin-left: 8px;
 }
 
+/* User-scoped chat session picker (dropdown) */
+.chat-session-dropdown {
+    position: relative;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.chat-session-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    border: 1px solid var(--border-2);
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.chat-session-trigger:hover {
+    background: var(--hover);
+    border-color: var(--border-3);
+}
+.chat-session-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-session-caret {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    transition: transform 0.15s ease;
+}
+.chat-session-caret.is-open {
+    transform: rotate(180deg);
+}
+.chat-session-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% - 2px);
+    left: 10px;
+    right: 10px;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.chat-session-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    /* Non-selected: muted, quieter than the active row. */
+    color: var(--text-mute);
+    font-size: 12px;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.chat-session-item:hover {
+    background: var(--hover);
+    color: var(--text-2);
+}
+.chat-session-item.is-active {
+    /* Selected: prominent — accent tint + accent text. */
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.chat-session-open {
+    flex: 1;
+    text-align: left;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: inherit;
+}
+.chat-session-rename,
+.chat-session-remove {
+    flex: none;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    opacity: 0.6;
+    color: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px 4px;
+}
+.chat-session-rename:hover,
+.chat-session-remove:hover {
+    opacity: 1;
+}
+.chat-session-edit {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 12px;
+}
 
+
+/* === Recovered missing CSS blocks (final iteration per selector) === */
+
+/* --- comments-row --- */
+.comments-row {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.comments-row:hover { border-color: var(--border-2); }
+
+/* --- sidebar-meeting-initial --- */
+/* SVG-rendered initial letter — hidden in expanded sidebar mode, shown
+ * as 36×36 overlay in collapsed mode. SVG's dominantBaseline="central"
+ * does the optical centering; we just need to size + color it here. */
+.sidebar-meeting-initial {
+    display: none;
+}
+body.sidebar-collapsed .sidebar-meeting-initial {
+    display: block !important;
+    width: 36px !important;
+    height: 36px !important;
+    color: var(--text-2);
+    pointer-events: none;
+    grid-column: 1;
+    grid-row: 1;
+}
+body.sidebar-collapsed .sidebar-meeting.active .sidebar-meeting-initial {
+    color: #0a0f0a;
+}
+
+/* --- dd-device-select --- */
+body.sidebar-collapsed .user-controls-btn {
+    display: none;
+}
+
+/* ─── Settings dropdown — audio device rows ────────────────────────
+ * Stacks an icon + label on the left and a <select> filling the rest
+ * of the row. Wider than the theme/lang toggle rows since device names
+ * can be long ("MacBook Pro Microphone (Built-in)"). */
+.dd-row-stack {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.dd-row-stack .dd-row-label {
+    min-width: 60px;
+    flex: 0 0 auto;
+    color: var(--text-2);
+    font-size: 12.5px;
+}
+.dd-device-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 180px;
+    height: 28px;
+    padding: 0 24px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round'><path d='M1 1l5 5 5-5'/></svg>") no-repeat right 8px center / 9px 6px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.dd-device-select:hover {
+    border-color: var(--border-2);
+}
+.dd-device-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.dd-hint {
+    padding: 4px 11px 8px;
+    line-height: 1.4;
+    color: var(--text-mute);
+}
+
+/* --- comments-section --- */
+.insights-empty-sub { line-height: 1.5; }
+
+/* ─── Comments pane ─────────────────────────────────────────────────
+ * Lives in the same right-slot as ChatPane / InsightsPane. Shape: list
+ * of comment cards on top, a composer textarea pinned to the bottom.
+ * Visual language matches the rest of the right-side panes (white card
+ * on neutral bg, emerald accent for the primary action).
+ */
+.pane-comments {
+    display: flex;
+    flex-direction: column;
+}
+.pane-comments .pane-content.comments-content {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.comments-loading { padding: 12px 4px; }
+.comments-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.comments-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-mute);
+    padding: 0 2px;
+}
+.comments-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.comments-row {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface-1);
+    border: 1px solid var(--border-1);
+    border-radius: 10px;
+}
+.comments-row:hover { border-color: var(--border-2); }
+.comments-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.comments-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.comments-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+}
+.comments-author {
+    font-weight: 600;
+    color: var(--text-1);
+}
+.comments-anchor-btn {
+    background: rgba(16, 185, 129, 0.10);
+    color: #047857;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+}
+.comments-anchor-btn:hover {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: rgba(16, 185, 129, 0.40);
+}
+.comments-time { margin-left: auto; }
+.comments-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-1);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.comments-row-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+.comments-row .btn.btn-xs {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    line-height: 1.4;
+}
+.comments-row .btn-ghost.danger {
+    color: #b91c1c;
+}
+.comments-row .btn-ghost.danger:hover {
+    background: rgba(220, 38, 38, 0.08);
+}
+
+/* Composer at the bottom of the pane — sticky-ish via flex layout. */
+.comments-composer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border-1);
+    padding: 10px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--surface-0, #fff);
+}
+.comments-anchor-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-mute);
+    cursor: pointer;
+    user-select: none;
+}
+.comments-anchor-toggle input[type="checkbox"] {
+    accent-color: #10b981;
+}
+.comments-textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 60px;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    background: var(--surface-1);
+    color: var(--text-1);
+}
+.comments-textarea:focus {
+    outline: none;
+    border-color: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+.comments-composer-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* --- comments-composer --- */
+.comments-composer-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* ─── Sidebar collapsed (icon rail) ───────────────────────────────
+ * ChatGPT-style narrow rail: 56px wide, Mee mark at top, "+" button,
+ * project initials in middle, user avatar at bottom. Triggered by
+ * body.sidebar-collapsed (toggled from Topbar's hamburger). */
+body.sidebar-collapsed .sidebar {
+    overflow: hidden;
+}
+/* Brand row — drop the "Mee" word, keep just the green M mark. */
+body.sidebar-collapsed .sidebar-brand {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+}
+body.sidebar-collapsed .sidebar-brand-name {
+    display: none;
+}
+/* New-project button — pill shrinks to a square, only the + icon shows. */
+body.sidebar-collapsed .sidebar-header {
+    padding: 10px 6px 8px;
+}
+body.sidebar-collapsed .sidebar-new-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 10px;
+    margin: 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+body.sidebar-collapsed .sidebar-new-btn-label {
+    display: none;
+}
+/* Hide "Project gần đây" label + the body padding tightens. */
+body.sidebar-collapsed .sidebar-section-label {
+    display: none;
+}
+body.sidebar-collapsed .sidebar-body {
+    padding-left: 0;
+    padding-right: 0;
+}
+body.sidebar-collapsed .sidebar-meetings {
+    padding: 4px 6px;
+    gap: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+body.sidebar-collapsed .sidebar-empty {
+    display: none;
+}
+/* Each meeting in the list becomes a circular initial chip. We hide
+ * the caret + content + recordings sub-list; the data-initial value
+ * from the JSX renders via ::before content. */
+body.sidebar-collapsed .sidebar-meeting-group {
+    width: 100%;
+}
+body.sidebar-collapsed .sidebar-caret,
+body.sidebar-collapsed .sidebar-meeting-content,
+body.sidebar-collapsed .sidebar-recordings,
+body.sidebar-collapsed .sidebar-add-rec {
+    display: none !important;
+}
+body.sidebar-collapsed .sidebar-meeting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin: 0 auto;
+    padding: 0;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: background var(--dur, 220ms) var(--ease, ease),
+                border-color var(--dur, 220ms) var(--ease, ease);
+    position: relative;
+}
+body.sidebar-collapsed .sidebar-meeting:hover {
+    background: var(--surface-2);
+    border-color: var(--border-2);
+}
+body.sidebar-collapsed .sidebar-meeting.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-deep, var(--accent));
+}
+body.sidebar-collapsed .sidebar-meeting::before {
+    content: attr(data-initial);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0;
+}
+body.sidebar-collapsed .sidebar-meeting.active::before {
+    color: var(--accent-deep, var(--accent));
+}
+/* Footer — show only the avatar circle, hide name + settings cog. */
+body.sidebar-collapsed .sidebar-footer {
+    padding: 8px 6px 10px;
+}
+body.sidebar-collapsed .user-controls {
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    padding: 0;
+}
+body.sidebar-collapsed .user-controls-avatar {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
+}
+body.sidebar-collapsed .user-controls-name {
+    display: none;
+}
+body.sidebar-collapsed .user-controls-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* --- comments-text --- */
+.comments-textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 60px;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+}
+
+/* --- comments-author --- */
+.comments-author {
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* --- members-role-wrap --- */
+/* Role picker — chip-button + Notta-style popover. Replaces the native
+ * <select> so we can match the speaker-chip dropdown look (rounded card,
+ * description per option, check mark on selected). */
+.members-role-wrap {
+    position: relative;
+    flex: 0 0 auto;
+}
+.members-role-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm, 6px);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 120ms, background-color 120ms;
+}
+.members-role-btn:hover:not(:disabled) {
+    border-color: var(--border-2);
+    background-color: var(--bg-2);
+}
+.members-role-btn:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.members-role-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.members-role-btn-label { line-height: 1; }
+.members-role-btn-caret {
+    font-size: 10px;
+    color: var(--text-faint);
+    transition: transform 120ms var(--ease, ease);
+}
+.members-role-btn[aria-expanded="true"] .members-role-btn-caret {
+    transform: rotate(180deg);
+}
+
+.members-role-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 100;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg, 12px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.members-role-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    border-radius: var(--r-sm, 6px);
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    transition: background var(--dur, 220ms) var(--ease, ease);
+}
+.members-role-option:hover {
+    background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+.members-role-option.current {
+    background: var(--accent-soft);
+}
+.members-role-option-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.members-role-option-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+}
+.members-role-option.current .members-role-option-label {
+    color: var(--accent-deep, var(--accent));
+}
+.members-role-option-desc {
+    font-size: 11.5px;
+    color: var(--text-mute);
+    line-height: 1.35;
+}
+.members-role-option-check {
+    color: var(--accent);
+    font-size: 14px;
+    line-height: 1.3;
+    flex: 0 0 auto;
+}
+
+/* --- final sidebar-collapsed .sidebar-meeting grid centering --- */
+body.sidebar-collapsed .sidebar-meeting {
+    display: grid !important;
+    place-items: center !important;
+    place-content: center !important;
+    width: 36px !important;
+    height: 36px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+    border-radius: 50% !important;
+    /* No bg by default — keeps the rail looking clean across themes
+     * (light surface-2 was nearly invisible vs the page bg, dark
+     * surface-2 was visible → inconsistent). Circle appears on hover. */
+    background: transparent;
+    border: 1px solid transparent !important;
+    cursor: pointer;
+    transition: background var(--dur, 220ms) var(--ease, ease),
+                border-color var(--dur, 220ms) var(--ease, ease),
+                transform var(--dur, 220ms) var(--ease, ease);
+    position: relative;
+    box-sizing: border-box;
+    text-align: center;
+    line-height: 1;
+}
+body.sidebar-collapsed .sidebar-meeting:hover {
+    background: var(--surface-2);
+    border-color: var(--border-2) !important;
+    transform: scale(1.05);
+}
+body.sidebar-collapsed .sidebar-meeting.active {
+    background: var(--accent);
+    border: 1px solid var(--accent) !important;
+}
+
+/* ─── FINAL collapsed-rail overrides (post-recovery, must come last) ──
+ * Earlier iterations of these rules are still in the file from the
+ * Edit-replay; this block is the source-of-truth final state. */
+
+/* 1. Center letter inside chip + hide all non-letter children */
+body.sidebar-collapsed .sidebar-meeting {
+    display: grid !important;
+    place-items: center !important;
+    place-content: center !important;
+    width: 36px !important;
+    height: 36px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+    border-radius: 50% !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+}
+body.sidebar-collapsed .sidebar-meeting:hover {
+    background: var(--surface-2) !important;
+}
+body.sidebar-collapsed .sidebar-meeting.active {
+    background: var(--accent) !important;
+    border: 1px solid var(--accent) !important;
+}
+body.sidebar-collapsed .sidebar-caret,
+body.sidebar-collapsed .sidebar-meeting-content,
+body.sidebar-collapsed .sidebar-recordings,
+body.sidebar-collapsed .sidebar-add-rec,
+body.sidebar-collapsed .row-menu-btn,
+body.sidebar-collapsed .sidebar-meeting-menu-btn {
+    display: none !important;
+}
+
+/* 2. Hide settings cog when sidebar collapsed */
+body.sidebar-collapsed .user-controls-btn {
+    display: none !important;
+}
+
+/* 3. Hide "+ New project" button entirely when collapsed */
+body.sidebar-collapsed .sidebar-header {
+    display: none !important;
+}

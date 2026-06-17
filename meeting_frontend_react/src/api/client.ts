@@ -10,8 +10,10 @@ import type {
   CleanResponse,
   MoMJson,
   ProjectSummary,
+  ChatSessionSummary,
   ChatStreamStep,
   ChatTurnResult,
+  StreamEvent,
   Voiceprint,
 } from "../types/api";
 
@@ -117,6 +119,35 @@ export const api = {
     listMembers: (id: string) =>
       http<{ meeting_id: string; members: MeetingMember[] }>(
         "GET", `/api/meetings/${id}/members`,
+      ),
+    /** Invite a user (by email) into the project. User must have logged
+     * in O365 once so they exist in the users table. */
+    addMember: (id: string, email: string, role = "editor") =>
+      http<{
+        meeting_id: string;
+        user_id: string;
+        email: string;
+        display_name: string | null;
+        role: string;
+      }>("POST", `/api/meetings/${id}/members`, { email, role }),
+    /** Revoke a member from the project (soft-delete via revoked_at). */
+    removeMember: (meetingId: string, userId: string) =>
+      http<{ meeting_id: string; user_id: string; revoked: boolean }>(
+        "DELETE", `/api/meetings/${meetingId}/members/${userId}`,
+      ),
+    /** Autocomplete user search by email or display_name — drives the
+     * invite picker. Empty query returns []. */
+    searchUsers: (q: string, limit = 8) =>
+      http<{
+        users: Array<{
+          id: string;
+          email: string;
+          display_name: string;
+          avatar_url: string | null;
+        }>;
+      }>(
+        "GET",
+        `/api/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
       ),
     importTranscript: (
       meetingId: string,
@@ -235,11 +266,108 @@ export const api = {
       index: number,
       speaker: string,
       scope: "current" | "all",
+      cluster_id?: string | null,
     ) =>
       http<{ renamed: number; scope: string; speaker: string }>(
         "PATCH",
         `/api/recordings/${id}/segment-speaker`,
-        { index, speaker, scope },
+        { index, speaker, scope, cluster_id: cluster_id || null },
+      ),
+    /** Save inline edit of one transcript segment's text (Notta edit mode).
+     * Persists to `transcript_segments.edited_text`; original_text retained. */
+    patchSegmentText: (id: string, seq: number, text: string) =>
+      http<{ recording_id: string; seq: number; saved_chars: number }>(
+        "PATCH",
+        `/api/recordings/${id}/segments/${seq}/text`,
+        { text },
+      ),
+    /** Rewrite a run of transcript segments into a new list of pieces — the
+     * single primitive behind the Notta clean editor:
+     *   • 1 piece  → collapse a merged turn the user edited into one segment
+     *   • 2 pieces → split a turn (Enter); 2nd piece often gets speaker:"" so
+     *     it renders separately and prompts a speaker assignment.
+     * `speaker: null` keeps the run's first speaker. Operates on
+     * transcript_segments (the store the view renders). */
+    rewriteSegments: (
+      id: string,
+      seqs: number[],
+      pieces: { text: string; speaker?: string | null }[],
+    ) =>
+      http<{ recording_id: string; first_seq: number; pieces: number; speakers: (string | null)[] }>(
+        "POST",
+        `/api/recordings/${id}/segments/rewrite`,
+        { seqs, pieces: pieces.map((p) => ({ text: p.text, speaker: p.speaker ?? null })) },
+      ),
+    /** Assign a speaker to ONE clean block ('apply to current') — writes
+     * transcript_segments.speaker for the block's seqs, so it shows
+     * immediately and doesn't leak cluster-wide. */
+    setSegmentSpeakerBySeqs: (id: string, seqs: number[], speaker: string) =>
+      http<{ recording_id: string; seqs: number[]; renamed: number }>(
+        "POST",
+        `/api/recordings/${id}/segments/set-speaker`,
+        { seqs, speaker },
+      ),
+    /** Save the user-edited MoM HTML body (rich text editor in MoM tab). */
+    patchMomBody: (id: string, html: string, text?: string) =>
+      http<{ recording_id: string; saved_chars: number }>(
+        "PATCH",
+        `/api/recordings/${id}/mom/body`,
+        text != null ? { html, text } : { html },
+      ),
+    /** Save the full structured mom_json after inline field edits. */
+    patchMomJson: (id: string, mom_json: unknown) =>
+      http<{ recording_id: string; saved: boolean }>(
+        "PATCH",
+        `/api/recordings/${id}/mom`,
+        { mom_json },
+      ),
+    /** List all comments on a recording, sorted by anchor_ms asc. */
+    listComments: (id: string) =>
+      http<{
+        recording_id: string;
+        comments: Array<{
+          id: string;
+          recording_id: string;
+          anchor_ms: number | null;
+          segment_seq: number | null;
+          text: string;
+          created_at: string | null;
+          edited_at: string | null;
+          user: { id: string; display_name: string; email: string; avatar_url: string | null };
+        }>;
+      }>("GET", `/api/recordings/${id}/comments`),
+    /** Create a comment, optionally anchored to an audio position. */
+    createComment: (
+      id: string,
+      text: string,
+      opts: { anchor_ms?: number | null; segment_seq?: number | null } = {},
+    ) =>
+      http<{
+        id: string;
+        recording_id: string;
+        anchor_ms: number | null;
+        segment_seq: number | null;
+        text: string;
+        created_at: string | null;
+        edited_at: string | null;
+        user: { id: string; display_name: string; email: string; avatar_url: string | null };
+      }>("POST", `/api/recordings/${id}/comments`, {
+        text,
+        anchor_ms: opts.anchor_ms ?? null,
+        segment_seq: opts.segment_seq ?? null,
+      }),
+    /** Edit comment body. */
+    editComment: (commentId: string, text: string) =>
+      http<{ id: string; text: string }>(
+        "PATCH",
+        `/api/comments/${commentId}`,
+        { text },
+      ),
+    /** Soft-delete a comment. */
+    removeComment: (commentId: string) =>
+      http<{ id: string; deleted: boolean }>(
+        "DELETE",
+        `/api/comments/${commentId}`,
       ),
     clean: (id: string, regenerate = false) =>
       http<CleanResponse>(
@@ -288,12 +416,71 @@ export const api = {
   },
 
   // ─── Transcribe upload (one-shot, no DB persistence) ────────────────
+  /** Streaming counterpart of `transcribe()` — yields SSE events as the
+   * STT decodes the audio. Only works when sttModel='faster_whisper'
+   * (other backends return one JSON, no streaming). Caller drives a
+   * for-await loop over the returned generator.
+   *
+   * Why fetch + manual SSE parse instead of EventSource: EventSource is
+   * GET-only — we need to POST the audio file as multipart.
+   */
+  async *transcribeStream(
+    file: File,
+    language = "vi",
+    vocabHints = "",
+    attendees = "",
+    recordingId = "",
+    sttModel = "faster_whisper",
+  ): AsyncGenerator<StreamEvent, void, unknown> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("language", language);
+    if (vocabHints) fd.append("vocab_hints", vocabHints);
+    if (attendees) fd.append("attendees", attendees);
+    if (recordingId) fd.append("recording_id", recordingId);
+    if (sttModel) fd.append("stt_model", sttModel);
+
+    const r = await fetch("/api/transcribe/stream", { method: "POST", body: fd });
+    if (!r.ok || !r.body) {
+      const j = await r.json().catch(() => ({}));
+      throw new ApiError(r.status, j.detail || r.statusText);
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines (\n\n). Split on that
+      // and process each complete frame; keep partial tail in `buf`.
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        // Each frame may have multiple "data:" lines; join their values.
+        const dataLines = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart());
+        if (dataLines.length === 0) continue;
+        try {
+          const obj = JSON.parse(dataLines.join("\n"));
+          yield obj as StreamEvent;
+        } catch {
+          // Ignore malformed frames — keep reading.
+        }
+      }
+    }
+  },
+
   transcribe: async (
     file: File,
     language = "vi",
     vocabHints = "",
     attendees = "",
     recordingId = "",
+    sttModel = "",
   ) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -306,6 +493,10 @@ export const api = {
     // file under output/audio/<recording_id>.<ext> and patch recording.audio_path.
     // Enables Notta-style in-browser playback via /api/recordings/{id}/audio.
     if (recordingId) fd.append("recording_id", recordingId);
+    // Route to the chosen STT backend (e.g. "faster_whisper" for word-accurate
+    // sync, "phowhisper" for VI-only, default "whisper" = VNG MaaS).
+    // Without this, backend always resolves to DEFAULT_STT.
+    if (sttModel) fd.append("stt_model", sttModel);
     const r = await fetch("/api/transcribe", { method: "POST", body: fd });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -369,16 +560,67 @@ export const api = {
       `/auth/login?next=${encodeURIComponent(next)}`,
   },
 
+  // ─── Redmine per-user key status ───────────────────────────────────
+  redmine: {
+    /** Post-login probe: key present? tools ok? pm-agent ok? + consent gate_url. */
+    status: () =>
+      http<{
+        redmine_key_present: boolean;
+        redmine_tools_ok: boolean;
+        registered_tool_count: number;
+        expected_tool_count: number;
+        pm_agent_ok: boolean;
+        gate_url: string | null;
+        all_ok: boolean;
+      }>("GET", "/api/redmine/status"),
+  },
+
   // ─── Chat ──────────────────────────────────────────────────────────
   chat: {
-    createSession: (meetingId: string) =>
+    // Create a user-scoped session. No meeting binding — grounding is per-turn.
+    createSession: (title?: string) =>
       http<{ id: string; meeting_id: string | null; title: string; created_at: string }>(
-        "POST", "/api/chat/sessions", { meeting_id: meetingId },
+        "POST", "/api/chat/sessions", title ? { title } : {},
+      ),
+    // List the user's sessions (sidebar), most-recently-active first.
+    listSessions: () =>
+      http<ChatSessionSummary[]>("GET", "/api/chat/sessions"),
+    // Session detail + messages (used when switching sessions in the sidebar).
+    sessionDetail: (sessionId: string) =>
+      http<{
+        id: string;
+        meeting_id: string | null;
+        title: string | null;
+        messages: Array<{
+          id: string;
+          role: string;
+          content: { text?: string };
+          created_at: string;
+        }>;
+      }>("GET", `/api/chat/sessions/${sessionId}`),
+    // Remove a session permanently (hard delete + checkpoint purge).
+    remove: (sessionId: string) =>
+      http<{ status: string; session_id: string }>(
+        "DELETE", `/api/chat/sessions/${sessionId}`,
+      ),
+    // Rename a session (set its title).
+    rename: (sessionId: string, title: string) =>
+      http<{ id: string; title: string | null }>(
+        "PATCH", `/api/chat/sessions/${sessionId}`, { title },
+      ),
+    // Proactive kickoff: Mee speaks first on an empty thread. Returns the
+    // greeting (already persisted as an agent message), or {reply:null,
+    // skipped:true} if the thread already had messages. Never throws server-side.
+    kickoff: (sessionId: string, role?: string) =>
+      http<{ reply: string | null; role?: string | null; skipped?: boolean }>(
+        "POST", `/api/chat/sessions/${sessionId}/kickoff`,
+        role ? { role } : undefined,
       ),
     // Backend MessageSend expects `text` (NOT `message`); returns a status envelope.
-    send: (sessionId: string, text: string) =>
+    send: (sessionId: string, text: string, meetingId: string | null) =>
       http<ChatTurnResult>(
-        "POST", `/api/chat/sessions/${sessionId}/messages`, { text },
+        "POST", `/api/chat/sessions/${sessionId}/messages`,
+        { text, meeting_id: meetingId },
       ),
     // Streaming variant: SSE frames over a POST body. `onStep` fires per
     // progress event; resolves with the terminal frame mapped to the same
@@ -386,13 +628,14 @@ export const api = {
     sendStream: async (
       sessionId: string,
       text: string,
+      meetingId: string | null,
       onStep: (ev: ChatStreamStep) => void,
       signal?: AbortSignal,
     ): Promise<ChatTurnResult> => {
       const r = await fetch(`/api/chat/sessions/${sessionId}/messages/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, meeting_id: meetingId }),
         signal,
       });
       if (!r.ok || !r.body) {

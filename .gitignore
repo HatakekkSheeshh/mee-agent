@@ -1,4 +1,8 @@
 .env
+.env.agentbase
+.env.local
+.agentbase/
+.agentbase_*
 output/
 __pycache__/
 *.pyc
@@ -11,4 +15,17 @@ slides
 .claude/
 .pytest_cache/
 cache/
+.mcp_redmine_tools_cache.json
+logs/
+.greennode_runtime.json
 benchmarks
+.greennode_runtime.json
+agentbase
+voiceprints_*.webm
+*.ipynb
+AGENT.md
+AGENTS.md
+.agents/benchmarks
+AGENT.md
+AGENTS.md
+.agents/

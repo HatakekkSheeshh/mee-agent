@@ -19,14 +19,32 @@ pm-agent validates via Graph /me).
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import urllib.request
 from typing import Optional
 
 from meeting.auth.base import UserInfo
 
+logger = logging.getLogger(__name__)
+
 # MSAL implicitly requests openid/profile/offline_access; User.Read gets us a
 # Graph token (validated by pm-agent's /me call) + a refresh token in the cache.
 SCOPES = ["User.Read"]
+
+_GRAPH_ME_URL = "https://graph.microsoft.com/v1.0/me?$select=jobTitle,department"
+
+
+def _graph_get_me(access_token: str) -> dict:
+    """GET Graph /me with the access token. Network seam — monkeypatched in tests."""
+    req = urllib.request.Request(
+        _GRAPH_ME_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 — fixed Graph URL
+        return json.loads(resp.read().decode() or "{}")
 
 
 def _authority(tenant_id: Optional[str] = None) -> str:
@@ -75,6 +93,17 @@ class MicrosoftProvider:
             SCOPES, state=state, redirect_uri=redirect_uri
         )
 
+    def fetch_profile(self, access_token: str) -> dict:
+        """Fetch {job_title, department} from Graph /me. Best-effort: any error
+        returns {} so login never breaks (the user just gets a generic kickoff).
+        """
+        try:
+            me = _graph_get_me(access_token)
+            return {"job_title": me.get("jobTitle"), "department": me.get("department")}
+        except Exception as e:  # noqa: BLE001 — best-effort, login must not break
+            logger.warning("Graph /me fetch failed (%s): %s", type(e).__name__, str(e)[:120])
+            return {}
+
     def exchange_code(self, code: str, redirect_uri: str) -> UserInfo:
         import msal
 
@@ -105,10 +134,14 @@ class MicrosoftProvider:
         # can persist it encrypted. Empty string when nothing was cached
         # (e.g. injected test app that doesn't populate the cache).
         token_cache = cache.serialize() if cache.serialize() != "{}" else None
+
+        prof = self.fetch_profile(result.get("access_token") or "")
         return UserInfo(
             email=email,
             display_name=name,
             ms_oid=oid,
             ms_tenant_id=tid,
             ms_token_cache=token_cache,
+            position=prof.get("job_title"),
+            department=prof.get("department"),
         )

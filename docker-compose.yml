@@ -9,38 +9,187 @@
 #     DATABASE_URL=postgresql://mee:mee_dev_password@localhost:5435/mee
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: mee-postgres
-    profiles: ["local"]
-    restart: unless-stopped
-    environment:
-      # Defaults are placeholder-grade — set real values in .env for the local
-      # profile, or these get used as-is (fine for throwaway dev DBs).
-      POSTGRES_USER: ${POSTGRES_USER:-mee}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mee_dev_password}
-      POSTGRES_DB: ${POSTGRES_DB:-mee}
-    ports:
-      - "5435:5432"   # host 5435 → container 5432 (5432/5433 thường bị chiếm)
-    volumes:
-      - mee_pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: mee-postgres
+  #   profiles: ["local"]
+  #   restart: unless-stopped
+  #   environment:
+  #     # Defaults are placeholder-grade — set real values in .env for the local
+  #     # profile, or these get used as-is (fine for throwaway dev DBs).
+  #     POSTGRES_USER: ${POSTGRES_USER:-mee}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mee_dev_password}
+  #     POSTGRES_DB: ${POSTGRES_DB:-mee}
+  #   ports:
+  #     - "5435:5432"   # host 5435 → container 5432 (5432/5433 thường bị chiếm)
+  #   volumes:
+  #     - mee_pg_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
 
-  adminer:
-    image: adminer:latest
-    container_name: mee-adminer
-    profiles: ["local"]
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      ADMINER_DESIGN: dracula     # dark theme (đổi 'flat' nếu muốn light)
+  # adminer:
+  #   image: adminer:latest
+  #   container_name: mee-adminer
+  #   profiles: ["local"]
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     ADMINER_DESIGN: dracula     # dark theme (đổi 'flat' nếu muốn light)
       # ADMINER_DEFAULT_SERVER intentionally unset — for local DB enter
       # "postgres" (container name), for remote VDB enter "host:5432" at login.
+
+  # ===================== Observability (opt-in) =====================
+  # OTel traces → Jaeger (infra/latency) + Langfuse (LLM generations). Separate
+  # profile so it never starts with `local`:
+  #
+  #     docker compose --profile observability up -d
+  #
+  # Then in .env:
+  #     OTEL_ENABLED=true
+  #     OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+  #     LANGFUSE_ENABLED=true
+  #     LANGFUSE_HOST=http://localhost:3000
+  #     LANGFUSE_PUBLIC_KEY=pk-...   # create a project at http://localhost:3000
+  #     LANGFUSE_SECRET_KEY=sk-...
+  # Jaeger UI → http://localhost:16686 ; Langfuse UI → http://localhost:3000
+  #
+  # NOTE: the SALT / ENCRYPTION_KEY / NEXTAUTH_SECRET defaults below are
+  # DEV-ONLY placeholders — set real values in .env before any shared use.
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: mee-jaeger
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP (matches OTEL_EXPORTER_OTLP_ENDPOINT)
+      - "4317:4317"     # OTLP gRPC
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: mee-langfuse-clickhouse
+    profiles: ["observability"]
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: mee-langfuse-minio
+    profiles: ["observability"]
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_S3_ACCESS_KEY:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_S3_SECRET_KEY:-miniosecret}
+    ports:
+      # Host ports only — Langfuse talks to minio internally over http://minio:9000.
+      # Moved off 9090 (other stacks) and 9091 (Mee's WebSocket server on :9091).
+      - "9190:9000"   # minio S3 API
+      - "9191:9001"   # minio console UI
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: mee-langfuse-redis
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: --requirepass ${LANGFUSE_REDIS_AUTH:-myredissecret}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres-langfuse:
+    image: postgres:16-alpine
+    container_name: mee-langfuse-postgres
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: mee-langfuse-worker
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      postgres-langfuse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://postgres:${LANGFUSE_DB_PASSWORD:-postgres}@postgres-langfuse:5432/postgres
+      SALT: ${LANGFUSE_SALT:-changeme-dev-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      TELEMETRY_ENABLED: ${LANGFUSE_TELEMETRY_ENABLED:-true}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-myredissecret}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_ACCESS_KEY:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_SECRET_KEY:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: mee-langfuse-web
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: ${LANGFUSE_HOST:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme-dev-nextauth}
 
   # ─── RabbitMQ broker for Celery (background MoM gen) ─────────────────
   # Always-on (no profile) so `docker compose up -d rabbitmq` starts it.
@@ -64,6 +213,37 @@ services:
       timeout: 5s
       retries: 5
 
+  # ───────────── App: backend (REST :8001 + WS :9091) ─────────────────
+  # Opt-in `app` profile so dev keeps host-mode (uvicorn --reload / live edit):
+  #     docker compose --profile app up -d --build
+  # `up --build` guarantees running code == committed code (no stale process).
+  # run_meeting.py spawns the Celery worker itself when RabbitMQ is reachable.
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: mee-backend
+    profiles: ["app"]
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # In-container, `localhost` is the container itself — point Celery's broker
+      # at the rabbitmq service. (If you also enable the local `postgres` profile,
+      # set DATABASE_URL host=postgres in .env too.)
+      RABBITMQ_HOST: rabbitmq
+    ports:
+      - "8002:8002"   # REST / HTTP (FastAPI; Vite owns :8001 and proxies here)
+      - "9091:9091"   # WebSocket (live transcription)
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./output:/app/output   # generated MoM markdown + audio chunks persist
+
 volumes:
   mee_pg_data:
+  langfuse_pg_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
   mee_rabbitmq_data:

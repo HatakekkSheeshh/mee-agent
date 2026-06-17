@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import uuid
 from typing import Optional
 
@@ -35,9 +37,18 @@ from meeting.graphs import (
     run_chat_turn,
     stream_chat_turn,
 )
+from meeting.graphs._chat_llm import _llm_client, _llm_model
+# (role now comes from the authenticated user's users.role_id, not AgentBase)
+from meeting.services.kickoff import run_kickoff
+from meeting.services.redmine_mcp_client import get_redmine_mcp_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# Azure AD object-id (GUID) shape — what pm-agent's direct-oid path accepts.
+_OID_GUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 
 
 # ─── Schemas ──────────────────────────────────────────────────────
@@ -49,6 +60,27 @@ class SessionCreate(BaseModel):
 
 class MessageSend(BaseModel):
     text: str
+    # The UI-selected project for THIS turn (user-scoped sessions: grounding is
+    # per-turn, not bound to the session). None → answer without project grounding.
+    meeting_id: Optional[str] = None
+
+
+class SessionRename(BaseModel):
+    title: str
+
+
+class KickoffRequest(BaseModel):
+    # Optional dev override (VITE_KICKOFF_ROLE). Default path uses the logged-in
+    # user's resolved role (users.role_id). Falls back to a generic greeting.
+    role: Optional[str] = None
+
+
+def _pick_role_name(
+    request_role: Optional[str], user_role: Optional[str]
+) -> Optional[str]:
+    """The role for a kickoff: the dev override wins, else the user's resolved
+    role, else None (→ generic greeting)."""
+    return (request_role or "").strip() or user_role
 
 
 class ApprovalRequest(BaseModel):
@@ -230,6 +262,56 @@ async def get_session_detail(
     }
 
 
+@router.post("/sessions/{session_id}/kickoff")
+async def kickoff_session(
+    session_id: str,
+    req: KickoffRequest = KickoffRequest(),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Mee speaks first: a role-tailored, data-grounded greeting on an empty
+    thread. Idempotent — if the thread already has messages, do nothing. Never
+    raises on a kickoff failure; `run_kickoff` degrades to a generic greeting.
+    """
+    sid = _parse_uuid(session_id)
+    chat = await repo.get_chat_session(session, sid)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Only kick off an empty thread (the FE also guards; this is the backstop).
+    existing = await repo.list_chat_messages(session, sid, limit=1)
+    if existing:
+        return {"reply": None, "skipped": True}
+
+    user_role_name = user.role.name if user.role else None
+    role_name = _pick_role_name(req.role, user_role_name)
+    role = await repo.get_role(session, role_name) if role_name else None
+    user_name = (user.display_name or "").strip() or "bạn"
+
+    async def _call_tool(name: str) -> dict:
+        return await get_redmine_mcp_client().call_tool(name, {})
+
+    def _generate(messages: list[dict]) -> str:
+        client = _llm_client()
+        resp = client.chat.completions.create(
+            model=_llm_model(), messages=messages, temperature=0.7, max_tokens=400,
+        )
+        return resp.choices[0].message.content or ""
+
+    greeting = await run_kickoff(
+        role=role, user_name=user_name, call_tool=_call_tool, generate=_generate,
+    )
+
+    await repo.add_chat_message(
+        session,
+        session_id=sid,
+        role="agent",
+        content={"text": greeting},
+        metadata={"intent": "kickoff", "role": role_name},
+    )
+    return {"reply": greeting, "role": role_name}
+
+
 @router.post("/sessions/{session_id}/clear")
 async def clear_session(
     session_id: str, session: AsyncSession = Depends(get_session)
@@ -254,14 +336,64 @@ async def clear_session(
     return {"status": "cleared", "session_id": str(sid)}
 
 
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str, session: AsyncSession = Depends(get_session)
+):
+    """Remove a chat session permanently (user-scoped sidebar remove): hard-delete
+    its messages + pending actions + the session row, and purge the LangGraph
+    checkpoint thread. Distinct from clear (which keeps the row). 404 if missing;
+    the checkpoint purge is best-effort and never 500s the delete."""
+    sid = _parse_uuid(session_id)
+    chat = await repo.get_chat_session(session, sid)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await repo.delete_chat_session(session, sid)
+
+    try:
+        await get_checkpointer().adelete_thread(str(sid))
+    except Exception:
+        logger.warning("delete: checkpoint purge failed for %s", sid, exc_info=True)
+
+    return {"status": "deleted", "session_id": str(sid)}
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: str,
+    req: SessionRename,
+    session: AsyncSession = Depends(get_session),
+):
+    """Rename a chat session (set its title). 404 if the session is missing."""
+    sid = _parse_uuid(session_id)
+    chat = await repo.rename_chat_session(session, sid, req.title.strip())
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"id": str(chat.id), "title": chat.title}
+
+
 # ─── Messages ─────────────────────────────────────────────────────
 
 async def _graph_token_or_401(user: User, session: AsyncSession):
-    """Acquire the signed-in user's Microsoft Graph access token for pm-agent's
-    JWT auth path. Returns None for non-Microsoft (mock) users — they have no
-    Graph token and never drive pm-agent in real deployments. For real MS users
-    whose stored refresh token is gone/expired, raise 401 so the FE re-logins.
+    """Resolve the bearer chat sends to pm-agent, per PM_AGENT_AUTH_MODE:
+
+    - "jwt" (default): the user's Microsoft Graph access token → pm-agent's JWT
+      path. None for mock users (no Graph token); 401 for real MS users whose
+      stored refresh token is gone/expired (FE re-logins).
+    - "oid" (temporary): the user's raw Azure OID → pm-agent's direct-oid test
+      port. For deploys where real O365 login isn't active yet AND that port is
+      still open. Mock users (no ms_oid) return None, so the client falls back
+      to the static TOKEN_AUTHEN_PM_AGENT OID. No Graph call, never 401.
     """
+    if os.environ.get("PM_AGENT_AUTH_MODE", "jwt").strip().lower() == "oid":
+        # Only forward a real Azure OID (GUID). Legacy/dev rows like
+        # ms_oid="dev-local-user" aren't GUIDs → pm-agent's direct-oid regex
+        # rejects them and they fall to the static-key path → 401. Return None
+        # for those so the client uses the static TOKEN_AUTHEN_PM_AGENT OID.
+        oid = (user.ms_oid or "").strip()
+        return oid if _OID_GUID_RE.match(oid) else None
+
     if not user.ms_oid:
         return None
     try:
@@ -300,7 +432,7 @@ async def send_message(
         session_id=session_id,
         user_id=str(user.id),
         user_message=req.text,
-        meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
+        meeting_id=req.meeting_id,
         session=session,
         checkpointer=checkpointer,
         pm_user_token=pm_token,
@@ -370,7 +502,7 @@ async def send_message_stream(
                     session_id=session_id,
                     user_id=str(user.id),
                     user_message=req.text,
-                    meeting_id=str(chat.meeting_id) if chat.meeting_id else None,
+                    meeting_id=req.meeting_id,
                     session=session,
                     checkpointer=checkpointer,
                     pm_user_token=pm_token,

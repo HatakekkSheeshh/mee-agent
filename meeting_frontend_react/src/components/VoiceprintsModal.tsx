@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function VoiceprintsModal({ open, onClose }: Props) {
-  const { confirm } = useApp();
+  const { confirm, t } = useApp();
   const [rows, setRows] = useState<Voiceprint[]>([]);
   const [loading, setLoading] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export function VoiceprintsModal({ open, onClose }: Props) {
       .then(setRows)
       .catch((e) => {
         const msg = e instanceof ApiError ? e.detail : (e as Error).message;
-        alert(`Load voiceprints lỗi: ${msg}`);
+        alert(t("voiceprints.error.load", { msg }));
       })
       .finally(() => setLoading(false));
   }, [open]);
@@ -49,7 +49,7 @@ export function VoiceprintsModal({ open, onClose }: Props) {
       await api.voiceprints.rename(id, val);
       setRows((prev) => prev.map((r) => (r.id === id ? { ...r, name: val } : r)));
     } catch (e) {
-      alert(`Đổi tên lỗi: ${(e as Error).message}`);
+      alert(t("voiceprints.error.rename", { msg: (e as Error).message }));
     } finally {
       setRenamingId(null);
     }
@@ -57,9 +57,9 @@ export function VoiceprintsModal({ open, onClose }: Props) {
 
   async function handleDelete(vp: Voiceprint) {
     const ok = await confirm({
-      title: "Xóa voiceprint?",
-      message: `Xóa giọng "${vp.name}"? Meeting sau sẽ không tự nhận diện người này nữa.`,
-      confirmLabel: "Xóa",
+      title: t("voiceprints.confirm.delete.title"),
+      message: t("voiceprints.confirm.delete.msg", { name: vp.name }),
+      confirmLabel: t("voiceprints.confirm.delete.confirm"),
       danger: true,
     });
     if (!ok) return;
@@ -67,7 +67,7 @@ export function VoiceprintsModal({ open, onClose }: Props) {
       await api.voiceprints.remove(vp.id);
       setRows((prev) => prev.filter((r) => r.id !== vp.id));
     } catch (e) {
-      alert(`Xóa lỗi: ${(e as Error).message}`);
+      alert(t("voiceprints.error.delete", { msg: (e as Error).message }));
     }
   }
 
@@ -86,11 +86,11 @@ export function VoiceprintsModal({ open, onClose }: Props) {
             Giọng nói đã được học từ các lần bạn label SPEAKER_NN. Meeting sau
             sẽ tự nhận diện những người này.
           </div>
-          {loading && <div className="muted">Đang tải…</div>}
+          {loading && <div className="muted">{t("voiceprints.loading")}</div>}
           {!loading && rows.length === 0 && (
             <div className="muted" style={{ padding: 16, textAlign: "center" }}>
-              Chưa có voiceprint nào. Vào Clean view → label SPEAKER_NN với tên
-              thật để dạy hệ thống.
+              <div>{t("voiceprints.empty.title")}</div>
+              <div>{t("voiceprints.empty.body")}</div>
             </div>
           )}
           {rows.map((vp) => (
@@ -123,8 +123,7 @@ export function VoiceprintsModal({ open, onClose }: Props) {
                   <>
                     <div style={{ fontWeight: 500 }}>{vp.name}</div>
                     <div className="muted small">
-                      {vp.sample_count} sample · cập nhật{" "}
-                      {(vp.last_seen_at || "").slice(0, 10)}
+                      {t("voiceprints.samples", { n: vp.sample_count, date: (vp.last_seen_at || "").slice(0, 10) })}
                     </div>
                   </>
                 )}
@@ -138,7 +137,7 @@ export function VoiceprintsModal({ open, onClose }: Props) {
                 }}
                 disabled={renamingId === vp.id}
               >
-                Đổi tên
+                {t("voiceprints.rename")}
               </button>
               <button
                 className="btn btn-ghost btn-xs"
@@ -146,14 +145,14 @@ export function VoiceprintsModal({ open, onClose }: Props) {
                 onClick={() => handleDelete(vp)}
                 style={{ color: "var(--danger)" }}
               >
-                Xóa
+                {t("voiceprints.delete")}
               </button>
             </div>
           ))}
         </div>
         <div className="mee-modal-actions">
           <button className="btn btn-primary btn-sm" type="button" onClick={onClose}>
-            Đóng
+            {t("voiceprints.close")}
           </button>
         </div>
       </div>

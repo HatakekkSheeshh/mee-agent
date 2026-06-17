@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,10 +23,12 @@ from meeting.db.models import (
     MemoryEventRow,
     PendingAction,
     Recording,
+    Role,
     SpeakerVoiceprint,
     TranscriptSegment,
     User,
 )
+from meeting.services.role_mapping import resolve_role
 
 
 # ─── User ─────────────────────────────────────────────────────────
@@ -46,6 +48,45 @@ async def get_or_create_dev_user(session: AsyncSession) -> User:
     session.add(user)
     await session.flush()
     return user
+
+
+# ─── Roles (persona pool) ─────────────────────────────────────────
+
+async def get_role(session: AsyncSession, name: str) -> Optional[Role]:
+    """Fetch one role from the pool by its unique name, or None on miss."""
+    stmt = select(Role).where(Role.name == name)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def list_roles(session: AsyncSession) -> Sequence[Role]:
+    """All roles in the pool, oldest first (stable enumeration order)."""
+    stmt = select(Role).order_by(Role.created_at)
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def resolve_role_by_title(session: AsyncSession, title: str | None) -> Optional[str]:
+    """Resolve a free-text jobTitle to a canonical roles.name, or None.
+
+    Loads the pool and delegates to the pure `resolve_role`. None on no match
+    (the caller leaves role_id NULL → generic kickoff).
+    """
+    roles = await list_roles(session)
+    return resolve_role(title, roles)
+
+
+async def add_role_alias(session: AsyncSession, role_id: uuid.UUID, alias: str) -> None:
+    """Append `alias` to a role's aliases array, skipping if already present.
+
+    Dedup via `NOT (:alias = ANY(aliases))` (exact match). Stores the alias
+    verbatim — the raw jobTitle is intended, since `resolve_role` normalizes at
+    lookup time. The caller owns the transaction (no commit here).
+    Single-instance cron → no locking.
+    """
+    stmt = text(
+        "UPDATE roles SET aliases = array_append(aliases, :alias) "
+        "WHERE id = :role_id AND NOT (:alias = ANY(aliases))"
+    )
+    await session.execute(stmt, {"alias": alias, "role_id": role_id})
 
 
 # ─── Meeting ──────────────────────────────────────────────────────
@@ -86,6 +127,13 @@ async def get_meeting(session: AsyncSession, meeting_id: uuid.UUID) -> Optional[
         .options(selectinload(Meeting.recordings).selectinload(Recording.segments))
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_user_ms_oid(session: AsyncSession, user_id: uuid.UUID) -> Optional[str]:
+    """The user's Entra OID (`User.ms_oid`), or None. Used as the per-user actor
+    key for remembered facts (`user_prefs/<ms_oid>`)."""
+    user = await session.get(User, user_id)
+    return (user.ms_oid or None) if user else None
 
 
 async def list_meetings_for_user(
@@ -499,6 +547,19 @@ async def get_mom_action_items(
     return items
 
 
+def recording_sort_key(rec):
+    """Deterministic chronological order for a meeting's recordings.
+
+    `started_at` is the recency signal; `id` is only a STABLE TIEBREAKER so equal
+    or duplicate timestamps don't reorder between runs. recording_id is a random
+    UUID that does NOT encode order — it must never be the primary sort key, and
+    callers must never infer sequence/position from it or from label numbers.
+    Shared by list_recordings (live tool) and the memory-sync roster so both
+    present sessions in the SAME order.
+    """
+    return (rec.started_at or datetime.min, str(rec.id))
+
+
 async def list_recordings(
     session: AsyncSession, meeting_id: uuid.UUID
 ) -> list[dict]:
@@ -513,10 +574,7 @@ async def list_recordings(
     meeting = await get_meeting(session, meeting_id)
     if not meeting:
         return []
-    recordings = sorted(
-        (meeting.recordings or []),
-        key=lambda r: r.started_at or datetime.min,
-    )
+    recordings = sorted((meeting.recordings or []), key=recording_sort_key)
     out: list[dict] = []
     for rec in recordings:
         if rec.date:
@@ -645,6 +703,37 @@ async def clear_chat_session(
         delete(PendingAction).where(PendingAction.session_id == session_id)
     )
     await session.flush()
+
+
+async def delete_chat_session(
+    session: AsyncSession, session_id: uuid.UUID
+) -> None:
+    """Hard-delete a chat session: its messages, pending actions, AND the
+    session row itself. Distinct from clear_chat_session, which keeps the row.
+    The LangGraph checkpoint thread is purged by the API layer (it owns the
+    checkpointer handle), mirroring clear_session."""
+    await session.execute(
+        delete(ChatMessage).where(ChatMessage.session_id == session_id)
+    )
+    await session.execute(
+        delete(PendingAction).where(PendingAction.session_id == session_id)
+    )
+    await session.execute(
+        delete(ChatSession).where(ChatSession.id == session_id)
+    )
+    await session.flush()
+
+
+async def rename_chat_session(
+    session: AsyncSession, session_id: uuid.UUID, title: str
+) -> Optional[ChatSession]:
+    """Set a chat session's title. Returns the session, or None if missing."""
+    chat = await session.get(ChatSession, session_id)
+    if not chat:
+        return None
+    chat.title = title
+    await session.flush()
+    return chat
 
 
 # ─── Pending Actions (HITL) ───────────────────────────────────────

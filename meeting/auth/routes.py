@@ -37,6 +37,7 @@ from meeting.auth.session import (
 )
 from meeting.db.base import get_session
 from meeting.db.models import User
+from meeting.db import repositories as repo
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,21 @@ def _consume_state(state: str) -> bool:
     import time
     expiry = _state_store.pop(state, None)
     return expiry is not None and expiry > time.time()
+
+
+def _enroll_optional() -> bool:
+    """VOICE_ENROLL_OPTIONAL=true skips the voice-enrollment gate. Set it on
+    deploys that don't ship the local pyannote/torch embedding stack (e.g. the
+    single-port AgentBase image), so login lands on /app instead of the
+    enrollment flow that would 500 on the missing dependency."""
+    return os.environ.get("VOICE_ENROLL_OPTIONAL", "").strip().lower() == "true"
+
+
+def _enrollment_satisfied(user) -> bool:
+    """Whether the enrollment gate is cleared — really enrolled, or bypassed
+    via VOICE_ENROLL_OPTIONAL. Used by both the callback redirect and /auth/me
+    (which the FE reads to route /onboard/voice vs /app)."""
+    return bool(user.voice_enrolled) or _enroll_optional()
 
 
 def _redirect_uri(request: Request) -> str:
@@ -276,7 +292,7 @@ async def callback(
     #   - first-time login → /onboard/voice (gate to enroll voice)
     #   - returning user   → /app (main workspace)
     cookie_value = issue_session_cookie(user.id, user.email)
-    if not user.voice_enrolled:
+    if not _enrollment_satisfied(user):
         target = "/onboard/voice"
     elif next_path and next_path != "/":
         target = next_path
@@ -294,6 +310,21 @@ async def callback(
         path="/",
     )
     return resp
+
+
+async def _resolve_role_id(session: AsyncSession, position: Optional[str]):
+    """jobTitle → role name → role_id, or None. Best-effort: never raises."""
+    if not position:
+        return None
+    try:
+        name = await repo.resolve_role_by_title(session, position)
+        if not name:
+            return None
+        role = await repo.get_role(session, name)
+        return role.id if role else None
+    except Exception:
+        logger.warning("role resolution failed for position=%r", position)
+        return None
 
 
 async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
@@ -317,6 +348,8 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         # refresh token stays current for minting Graph access tokens later.
         if info.ms_token_cache:
             user.refresh_token = encrypt_token(info.ms_token_cache)
+        user.role_id = await _resolve_role_id(session, info.position)
+        user.position = info.position
         user.last_login_at = datetime.now(timezone.utc)
         return user
 
@@ -327,6 +360,8 @@ async def _upsert_user(session: AsyncSession, info: UserInfo) -> User:
         ms_oid=info.ms_oid,
         ms_tenant_id=info.ms_tenant_id,
         refresh_token=encrypt_token(info.ms_token_cache) if info.ms_token_cache else None,
+        role_id=await _resolve_role_id(session, info.position),
+        position=info.position,
         voice_enrolled=False,
         last_login_at=datetime.now(timezone.utc),
     )
@@ -361,6 +396,6 @@ async def me(user: Optional[User] = Depends(get_current_user_optional)):
         "email": user.email,
         "display_name": user.display_name,
         "avatar_url": user.avatar_url,
-        "voice_enrolled": user.voice_enrolled,
+        "voice_enrolled": _enrollment_satisfied(user),
         "provider": _provider.name,
     }

@@ -121,6 +121,26 @@ export interface WordTimestamp {
   end: number;    // absolute seconds
 }
 
+/** Server-Sent Events from /api/transcribe/stream — drives Notta-style
+ * progressive transcript rendering. Each event is one SSE frame. */
+export type StreamEvent =
+  | { type: "meta"; duration: number; language: string }
+  | {
+      type: "diarize";
+      turns: Array<{ speaker: string; start: number; end: number }>;
+      embeddings: Record<string, number[]>;
+    }
+  | {
+      type: "segment";
+      speaker: string;
+      text: string;
+      start: number;
+      end: number;
+      words: WordTimestamp[];
+    }
+  | { type: "done"; segments_count: number }
+  | { type: "error"; detail: string };
+
 export interface RawSegment {
   seq: number;
   text: string;
@@ -132,6 +152,10 @@ export interface RawSegment {
    * FE Notta view uses these for word-accurate highlight; falls back to
    * even-distribute approximation when NULL. */
   words?: WordTimestamp[] | null;
+  /** True once the user edited this segment's text. The stored `words` are
+   * raw STT tokens that no longer match the edited text, so the Notta view
+   * renders `text` instead of word spans for edited segments. */
+  edited?: boolean;
 }
 
 export interface RecordingTranscript {
@@ -154,7 +178,7 @@ export interface CleanResponse {
   /** Populated only on cache hit (cached=true) OR inline fallback path
    * (when RabbitMQ unreachable). When the cleaner is dispatched to Celery
    * this is empty — FE polls `task_id` and re-fetches /clean on SUCCESS. */
-  clean_segments?: { speaker?: string; text: string; tags?: string[] }[];
+  clean_segments?: { speaker?: string; text: string; tags?: string[]; cluster_id?: string }[];
   /** LLM-inferred cluster → name mapping. Verified entries (voice-matched)
    * are listed in `pre_mapped_clusters`. */
   cluster_mapping?: Record<string, string>;
@@ -210,6 +234,15 @@ export interface PendingAction {
   issues?: Record<string, unknown>[] | null;
   /** pm-agent thread (task) id this pause belongs to — shown on the card. */
   task_id?: string | null;
+}
+
+/** A user-scoped chat session, as listed in the sidebar (decoupled from any project). */
+export interface ChatSessionSummary {
+  id: string;
+  meeting_id: string | null;
+  title: string | null;
+  created_at: string;
+  last_activity_at: string;
 }
 
 /** Envelope returned by POST /messages and /pending-actions/{id}/approve|reject. */

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { useApp } from "../store/AppContext";
 
 type EnrollUser = {
   email: string;
@@ -25,6 +26,7 @@ export function VoiceEnrollment({ user, onEnrolled }: {
   user: EnrollUser;
   onEnrolled: () => void;
 }) {
+  const { t } = useApp();
   const [state, setState] = useState<State>("idle");
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -128,7 +130,7 @@ export function VoiceEnrollment({ user, onEnrolled }: {
       }, 200);
       setState("recording");
     } catch {
-      setError("Không truy cập được microphone. Vui lòng cho phép quyền mic trong trình duyệt.");
+      setError(t("voiceEnroll.error.mic"));
       setState("error");
     }
   }
@@ -208,7 +210,7 @@ export function VoiceEnrollment({ user, onEnrolled }: {
           <div className="enroll__slogan-line">
             <span className="enroll__slogan-lang">VI</span>
             <span className="enroll__slogan-text">
-              AI Cloud hiệu năng cao dành riêng cho doanh nghiệp số.
+              {t("voiceEnroll.tagline")}
             </span>
           </div>
           <div className="enroll__slogan-line">

@@ -33,3 +33,30 @@ celery[librabbitmq]>=5.3
 # Celery doesn't pick up new @task definitions until the process restarts.
 watchdog>=4.0
 psycopg[binary]
+greennode-agentbase==1.0.2
+# === Redmine MCP client (P2) ===
+mcp>=1.25.0
+
+# === Observability — OTel → Jaeger + Langfuse (only used when OTEL_ENABLED / LANGFUSE_ENABLED) ===
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+openinference-instrumentation-openai>=0.1.18
+openinference-instrumentation-langchain>=0.1.29
+
+# deeplearning
+torch>=2.8.0
+# pyannote.audio — local speaker embedding for voiceprint enroll/match
+# (meeting/api/voiceprints.py + services/local_diarize.py). Pulls in torchaudio.
+# NOTE: the wespeaker-voxceleb-resnet34-LM model is gated on Hugging Face —
+# first load needs a HF token + accepting the model terms.
+pyannote.audio>=3.1
+
+# === Object storage (Cloudflare R2 — audio persistence) ===
+boto3>=1.34
+
+# === Object storage (Cloudflare R2 — audio persistence) ===
+boto3>=1.34
+
+# load test
+locust

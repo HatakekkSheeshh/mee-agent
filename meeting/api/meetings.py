@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date as date_type
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -27,6 +27,8 @@ import os
 
 from meeting.db import get_session
 from meeting.db import repositories as repo
+from meeting.db.models import User
+from meeting.auth import get_current_user
 from meeting.graphs import get_checkpointer, run_mom_graph
 from meeting.note_generator import generate_meeting_notes
 from meeting.services import clean_transcript
@@ -176,9 +178,10 @@ async def list_available_models():
 
 @router.post("/meetings", response_model=MeetingOut)
 async def create_meeting_endpoint(
-    req: MeetingCreate, session: AsyncSession = Depends(get_session)
+    req: MeetingCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    user = await repo.get_or_create_dev_user(session)
     meeting = await repo.create_meeting(
         session,
         user_id=user.id,
@@ -189,8 +192,10 @@ async def create_meeting_endpoint(
 
 
 @router.get("/meetings", response_model=list[MeetingOut])
-async def list_meetings_endpoint(session: AsyncSession = Depends(get_session)):
-    user = await repo.get_or_create_dev_user(session)
+async def list_meetings_endpoint(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     meetings = await repo.list_meetings_for_user(session, user.id)
     return [_meeting_to_out(m) for m in meetings]
 
@@ -411,6 +416,187 @@ async def list_meeting_members(
     return {"meeting_id": meeting_id, "members": members}
 
 
+# ─── Invite / manage members ──────────────────────────────────────────
+
+class AddMemberRequest(BaseModel):
+    """Body for `POST /api/meetings/{id}/members`.
+    Lookup user by email; user must have logged in O365 at least once
+    (i.e. exist in `users` table). Role defaults to editor."""
+    email: str
+    role: str = "editor"  # 'owner' | 'editor' | 'viewer'
+
+
+async def _require_owner_or_editor(session: AsyncSession, meeting, user: User) -> str:
+    """Authorize a member-management action. Returns the caller's role
+    ('owner' | 'editor'). Raises 403 for viewers / non-members.
+
+    Owner = the project creator (meeting.user_id). Otherwise the caller must
+    hold an active (non-revoked) editor/owner membership.
+    """
+    from sqlalchemy import select
+    from meeting.db.models import MeetingMember
+
+    if meeting.user_id == user.id:
+        return "owner"
+    row = (
+        await session.execute(
+            select(MeetingMember).where(
+                MeetingMember.meeting_id == meeting.id,
+                MeetingMember.user_id == user.id,
+                MeetingMember.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row and row.role in ("owner", "editor"):
+        return row.role
+    raise HTTPException(
+        status_code=403,
+        detail="Chỉ owner hoặc editor mới được mời/xoá thành viên.",
+    )
+
+
+@router.post("/meetings/{meeting_id}/members")
+async def add_meeting_member(
+    meeting_id: str,
+    req: AddMemberRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Invite a user (by email) to this meeting/project. The invited user
+    must exist in `users` (logged in O365 once). Re-invite of a previously
+    revoked member un-revokes them. Cannot demote the meeting creator."""
+    from sqlalchemy import select
+    from meeting.db.models import MeetingMember, User as UserM
+
+    mid = _parse_uuid(meeting_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    caller_role = await _require_owner_or_editor(session, meeting, user)
+
+    email = (req.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+    role = (req.role or "editor").strip().lower()
+    if role not in ("owner", "editor", "viewer"):
+        raise HTTPException(status_code=400, detail="invalid role")
+    # Only the owner may grant the 'owner' role — stops an editor from
+    # escalating someone (or themselves via re-invite) to owner.
+    if role == "owner" and caller_role != "owner":
+        raise HTTPException(
+            status_code=403, detail="Chỉ chủ project mới được gán quyền owner."
+        )
+
+    target = (
+        await session.execute(select(UserM).where(UserM.email == email))
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy user với email {email}. User phải login O365 ít nhất 1 lần để có account.",
+        )
+    if target.id == meeting.user_id:
+        raise HTTPException(status_code=400, detail="User đã là chủ project")
+
+    existing = (
+        await session.execute(
+            select(MeetingMember)
+            .where(MeetingMember.meeting_id == mid)
+            .where(MeetingMember.user_id == target.id)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        # Re-invite: clear revoked + update role
+        existing.revoked_at = None
+        existing.role = role
+    else:
+        session.add(MeetingMember(meeting_id=mid, user_id=target.id, role=role))
+    await session.commit()
+    return {
+        "meeting_id": meeting_id,
+        "user_id": str(target.id),
+        "email": target.email,
+        "display_name": target.display_name,
+        "role": role,
+    }
+
+
+@router.delete("/meetings/{meeting_id}/members/{user_id}")
+async def remove_meeting_member(
+    meeting_id: str,
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Revoke a member's access. Soft-delete via revoked_at — keeps
+    historical attribution intact. Cannot remove the meeting creator."""
+    from sqlalchemy import select
+    from datetime import datetime, timezone
+    from meeting.db.models import MeetingMember
+
+    mid = _parse_uuid(meeting_id)
+    uid = _parse_uuid(user_id)
+    meeting = await repo.get_meeting(session, mid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    await _require_owner_or_editor(session, meeting, user)
+    if meeting.user_id == uid:
+        raise HTTPException(status_code=400, detail="Cannot remove project creator")
+
+    row = (
+        await session.execute(
+            select(MeetingMember)
+            .where(MeetingMember.meeting_id == mid)
+            .where(MeetingMember.user_id == uid)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Member not found")
+    row.revoked_at = datetime.now(timezone.utc)
+    await session.commit()
+    return {"meeting_id": meeting_id, "user_id": user_id, "revoked": True}
+
+
+@router.get("/users/search")
+async def search_users(
+    q: str = "",
+    limit: int = 8,
+    session: AsyncSession = Depends(get_session),
+):
+    """Autocomplete user search by email or display_name. Used by the
+    invite UI to suggest who to add. Empty/short query returns []."""
+    from sqlalchemy import select, or_, func
+    from meeting.db.models import User as UserM
+
+    q = (q or "").strip().lower()
+    if len(q) < 1:
+        return {"users": []}
+    pat = f"%{q}%"
+    rows = (
+        await session.execute(
+            select(UserM)
+            .where(
+                or_(
+                    func.lower(UserM.email).like(pat),
+                    func.lower(UserM.display_name).like(pat),
+                )
+            )
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {
+        "users": [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "display_name": u.display_name or u.email.split("@")[0],
+                "avatar_url": u.avatar_url,
+            }
+            for u in rows
+        ],
+    }
+
+
 @router.get("/meetings/{meeting_id}/transcript")
 async def get_meeting_transcript_endpoint(
     meeting_id: str, session: AsyncSession = Depends(get_session)
@@ -422,6 +608,159 @@ async def get_meeting_transcript_endpoint(
         raise HTTPException(status_code=404, detail="Meeting not found")
     text = await repo.join_meeting_transcript(session, mid)
     return {"meeting_id": meeting_id, "transcript": text}
+
+
+# ─── Recording comments (Notta-style threaded notes) ─────────────────
+
+class CommentCreate(BaseModel):
+    """Body for POST /api/recordings/{id}/comments."""
+    text: str
+    anchor_ms: Optional[int] = None
+    segment_seq: Optional[int] = None
+
+
+class CommentPatch(BaseModel):
+    """Body for PATCH /api/comments/{id}. Only text is editable; anchor
+    is set at creation and stays put so historical references survive."""
+    text: str
+
+
+def _comment_dto(c, user) -> Dict[str, Any]:
+    return {
+        "id": str(c.id),
+        "recording_id": str(c.recording_id),
+        "anchor_ms": c.anchor_ms,
+        "segment_seq": c.segment_seq,
+        "text": c.text,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "edited_at": c.edited_at.isoformat() if c.edited_at else None,
+        "user": {
+            "id": str(user.id),
+            "display_name": user.display_name or user.email.split("@")[0],
+            "email": user.email,
+            "avatar_url": user.avatar_url,
+        },
+    }
+
+
+@router.get("/recordings/{recording_id}/comments")
+async def list_recording_comments(
+    recording_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return all non-deleted comments for this recording, sorted by
+    anchor_ms ascending (general comments with anchor=NULL go first)."""
+    from sqlalchemy import select
+    from meeting.db.models import RecordingComment, User as UserM
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    rows = (
+        await session.execute(
+            select(RecordingComment, UserM)
+            .join(UserM, UserM.id == RecordingComment.user_id)
+            .where(RecordingComment.recording_id == rid)
+            .where(RecordingComment.deleted_at.is_(None))
+            .order_by(
+                RecordingComment.anchor_ms.asc().nulls_first(),
+                RecordingComment.created_at.asc(),
+            )
+        )
+    ).all()
+    return {
+        "recording_id": recording_id,
+        "comments": [_comment_dto(c, u) for c, u in rows],
+    }
+
+
+@router.post("/recordings/{recording_id}/comments")
+async def create_recording_comment(
+    recording_id: str,
+    req: CommentCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Create a new comment on the recording. Author = current user
+    (resolved via the dev-user shortcut until auth migration lands)."""
+    from meeting.db.models import RecordingComment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    c = RecordingComment(
+        recording_id=rid,
+        user_id=user.id,
+        anchor_ms=req.anchor_ms,
+        segment_seq=req.segment_seq,
+        text=text,
+    )
+    session.add(c)
+    await session.flush()
+    await session.commit()
+    await session.refresh(c)
+    return _comment_dto(c, user)
+
+
+@router.patch("/comments/{comment_id}")
+async def edit_comment(
+    comment_id: str,
+    req: CommentPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Edit the text body of a comment. Only the author can edit (we
+    don't enforce that yet — the dev-user shortcut means all comments
+    are owned by the same user). Sets edited_at."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from meeting.db.models import RecordingComment, User as UserM
+
+    cid = _parse_uuid(comment_id)
+    c = (
+        await session.execute(
+            select(RecordingComment).where(RecordingComment.id == cid)
+        )
+    ).scalar_one_or_none()
+    if not c or c.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    c.text = text
+    c.edited_at = datetime.now(timezone.utc)
+    await session.commit()
+    user = (
+        await session.execute(select(UserM).where(UserM.id == c.user_id))
+    ).scalar_one()
+    return _comment_dto(c, user)
+
+
+@router.delete("/comments/{comment_id}")
+async def delete_comment(
+    comment_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Soft-delete: sets deleted_at — keeps the row for audit."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from meeting.db.models import RecordingComment
+
+    cid = _parse_uuid(comment_id)
+    c = (
+        await session.execute(
+            select(RecordingComment).where(RecordingComment.id == cid)
+        )
+    ).scalar_one_or_none()
+    if not c or c.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    c.deleted_at = datetime.now(timezone.utc)
+    await session.commit()
+    return {"id": str(cid), "deleted": True}
 
 
 @router.post("/meetings/{meeting_id}/recordings")
@@ -477,6 +816,11 @@ async def get_recording_transcript_endpoint(
             "end_ms": s.end_time_ms,
             # Optional per-word timestamps (faster-whisper). NULL for VNG MaaS.
             "words": s.words,
+            # True once the user edited the text — the stored `words` are the
+            # RAW STT tokens and no longer match `text`, so the Notta view must
+            # render `text` (not word spans) for this segment or it would show
+            # the pre-edit words. See NottaCleanView displayBlocks.
+            "edited": s.edited_text is not None,
         }
         for s in db_segs
     ]
@@ -669,15 +1013,361 @@ async def diarize_result_endpoint(
 class SegmentSpeakerPatch(BaseModel):
     """Body for `PATCH /api/recordings/{id}/segment-speaker`.
 
-    `index` is the position in `recording.clean_segments`. `speaker` is the
-    new display name (or empty string to clear). `scope='current'` overrides
-    just this one segment; `scope='all'` would normally reuse the
-    voiceprints.bind endpoint instead — we keep it as a server-side fallback
-    so the FE can call one endpoint regardless of scope.
+    `index` is the position in `recording.clean_segments` (best-effort
+    positional pointer). `cluster_id` (when present) is the precise
+    cluster ID stamped on the segment — used as fallback if the index
+    is stale (FE held an old indices array after backend re-clean).
+    For scope='all' cluster_id is the PRIMARY key (rename all segs with
+    same cluster_id), index is just the anchor.
     """
     index: int
     speaker: str
     scope: str = "current"  # 'current' | 'all'
+    cluster_id: Optional[str] = None
+
+
+class SegmentTextPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/segments/{seq}/text` — user
+    edited the text of one transcript block in the Notta inline editor.
+    Stored on `transcript_segments.edited_text` (NULLable column) so the
+    original STT output is preserved alongside the user's revision. The
+    `TranscriptSegment.text` property returns `edited_text` when set."""
+    text: str
+
+
+@router.patch("/recordings/{recording_id}/segments/{seq}/text")
+async def patch_segment_text(
+    recording_id: str,
+    seq: int,
+    req: SegmentTextPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save inline edit of one segment's text (Notta edit-mode toggle).
+
+    Idempotent — FE debounces on blur, send-on-final-text wins. Empty
+    string is allowed (effectively deletes the user's override; the
+    original_text resurfaces via the `text` property).
+    """
+    from sqlalchemy import select, update
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    new_text = (req.text or "").rstrip()
+    result = await session.execute(
+        update(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == rid,
+            TranscriptSegment.seq == seq,
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .values(edited_text=new_text or None)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Segment seq={seq} not found in recording {recording_id}",
+        )
+    await session.commit()
+    return {"recording_id": recording_id, "seq": seq, "saved_chars": len(new_text)}
+
+
+def _distribute_words(all_words: list, piece_texts: list) -> list:
+    """Split a flat word list across N pieces proportional to each piece's
+    char length (best-effort — words[].text joined ≈ the piece text). Used by
+    the rewrite endpoint to keep per-word timestamps after a collapse/split."""
+    groups: list = [[] for _ in piece_texts]
+    if not all_words or not piece_texts:
+        return groups
+    if len(piece_texts) == 1:
+        groups[0] = list(all_words)
+        return groups
+    total_chars = sum(len(t) for t in piece_texts) or 1
+    # Cumulative char-fraction at the END of each piece (last ≈ 1.0).
+    cum, bounds = 0, []
+    for t in piece_texts:
+        cum += len(t)
+        bounds.append(cum / total_chars)
+    total_wchars = sum(len((w.get("text") or "")) + 1 for w in all_words) or 1
+    wacc, pi = 0, 0
+    for w in all_words:
+        wacc += len((w.get("text") or "")) + 1
+        frac = wacc / total_wchars
+        while pi < len(piece_texts) - 1 and frac > bounds[pi]:
+            pi += 1
+        groups[pi].append(w)
+    return groups
+
+
+class RewritePiece(BaseModel):
+    """One output segment of a rewrite. `speaker=None` keeps the run's first
+    speaker; "" blanks it (so the Notta clean view shows '?' and prompts the
+    user to assign — used for the 2nd half of an Enter-split)."""
+    text: str
+    speaker: Optional[str] = None
+
+
+class SegmentRewriteBody(BaseModel):
+    """Body for `POST /recordings/{id}/segments/rewrite`.
+
+    Replaces a contiguous run of transcript segments (`seqs`) with `pieces`.
+    This is the single structural primitive behind the Notta clean editor:
+      • 1 piece  → COLLAPSE: a merged turn the user edited (or renamed) becomes
+                   one segment (edited_text = the piece text, words merged).
+      • 2 pieces → SPLIT: an Enter mid-turn breaks it into two.
+    transcript_segments is the store the clean view actually renders (raw
+    segments with word timestamps), so all clean edits route here — keeping
+    text, split and speaker on ONE source of truth instead of the legacy
+    clean_segments/cluster_mapping split-brain. Per-word timestamps are
+    partitioned across pieces by char proportion so audio sync survives."""
+    seqs: list[int]
+    pieces: list[RewritePiece]
+
+
+@router.post("/recordings/{recording_id}/segments/rewrite")
+async def rewrite_segments(
+    recording_id: str,
+    req: SegmentRewriteBody,
+    session: AsyncSession = Depends(get_session),
+):
+    """Replace a run of transcript segments with a new list of pieces."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select, update
+    from sqlalchemy.orm.attributes import flag_modified
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    seqs = sorted({int(s) for s in req.seqs})
+    texts = [(p.text or "").strip() for p in req.pieces]
+    if not seqs or not texts or any(not t for t in texts):
+        raise HTTPException(
+            status_code=400,
+            detail="rewrite cần seqs + pieces có text không rỗng.",
+        )
+
+    segs = (
+        await session.execute(
+            select(TranscriptSegment)
+            .where(
+                TranscriptSegment.recording_id == rid,
+                TranscriptSegment.seq.in_(seqs),
+                TranscriptSegment.is_deleted.is_(False),
+            )
+            .order_by(TranscriptSegment.seq)
+        )
+    ).scalars().all()
+    if not segs:
+        raise HTTPException(status_code=404, detail=f"No segments for seqs={seqs}")
+
+    all_words: list = []
+    for s in segs:
+        if isinstance(s.words, list):
+            all_words.extend(s.words)
+    span_start, span_end = segs[0].start_time_ms, segs[-1].end_time_ms
+    default_speaker = segs[0].speaker
+    range_min, range_max = segs[0].seq, segs[-1].seq
+    P, S = len(req.pieces), len(segs)
+
+    word_groups = _distribute_words(all_words, texts)
+
+    def _spec(i: int) -> dict:
+        wg = word_groups[i]
+        st = en = None
+        if wg:
+            f, l = wg[0], wg[-1]
+            if isinstance(f.get("start"), (int, float)):
+                st = int(f["start"] * 1000)
+            if isinstance(l.get("end"), (int, float)):
+                en = int(l["end"] * 1000)
+        if (st is None or en is None) and span_start is not None and span_end is not None and span_end > span_start:
+            seg_len = (span_end - span_start) / P
+            if st is None:
+                st = int(span_start + i * seg_len)
+            if en is None:
+                en = int(span_start + (i + 1) * seg_len)
+        spk = req.pieces[i].speaker
+        return {
+            "speaker": (spk if spk is not None else default_speaker),
+            "text": texts[i],
+            "words": wg or None,
+            "start": st,
+            "end": en,
+        }
+
+    specs = [_spec(i) for i in range(P)]
+    now = datetime.now(timezone.utc)
+
+    if P > S:
+        # Need room for P-S extra segments after the run; shift later seqs up.
+        await session.execute(
+            update(TranscriptSegment)
+            .where(
+                TranscriptSegment.recording_id == rid,
+                TranscriptSegment.seq > range_max,
+                TranscriptSegment.is_deleted.is_(False),
+            )
+            .values(seq=TranscriptSegment.seq + (P - S))
+        )
+
+    reused = min(P, S)
+    for i in range(reused):
+        s, spec = segs[i], specs[i]
+        s.seq = range_min + i
+        s.edited_text = spec["text"]
+        s.speaker = spec["speaker"]
+        s.words = spec["words"]
+        flag_modified(s, "words")
+        s.start_time_ms = spec["start"]
+        s.end_time_ms = spec["end"]
+        s.edited_at = now
+    # Extra pieces (split) → brand-new segments right after the reused ones.
+    for i in range(reused, P):
+        spec = specs[i]
+        session.add(TranscriptSegment(
+            recording_id=rid,
+            seq=range_min + i,
+            start_time_ms=spec["start"],
+            end_time_ms=spec["end"],
+            speaker=spec["speaker"],
+            original_text=spec["text"],
+            edited_text=None,
+            words=spec["words"],
+        ))
+    # Surplus existing segs (collapse) → soft-delete.
+    for i in range(reused, S):
+        segs[i].is_deleted = True
+
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "first_seq": range_min,
+        "pieces": P,
+        "speakers": [sp["speaker"] for sp in specs],
+    }
+
+
+class SegmentSetSpeakerBody(BaseModel):
+    """Body for `POST /recordings/{id}/segments/set-speaker` — assign a speaker
+    to a single clean block in the Notta view (the 'apply to current' path).
+    Writes transcript_segments.speaker for the block's seqs directly — the
+    store the clean view renders — so the rename shows immediately without
+    touching the cluster-wide cluster_mapping (that's the 'apply to all'
+    path, handled by /segment-speaker)."""
+    seqs: list[int]
+    speaker: str
+
+
+@router.post("/recordings/{recording_id}/segments/set-speaker")
+async def set_segment_speaker(
+    recording_id: str,
+    req: SegmentSetSpeakerBody,
+    session: AsyncSession = Depends(get_session),
+):
+    """Set speaker on the given transcript segments (current-block rename)."""
+    from sqlalchemy import select, update
+    from meeting.db.models import TranscriptSegment
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    seqs = sorted({int(s) for s in req.seqs})
+    if not seqs:
+        raise HTTPException(status_code=400, detail="seqs required")
+    name = (req.speaker or "").strip()
+    result = await session.execute(
+        update(TranscriptSegment)
+        .where(
+            TranscriptSegment.recording_id == rid,
+            TranscriptSegment.seq.in_(seqs),
+            TranscriptSegment.is_deleted.is_(False),
+        )
+        .values(speaker=name or None)
+    )
+    await session.commit()
+    return {"recording_id": recording_id, "seqs": seqs, "renamed": result.rowcount}
+
+
+class MomBodyPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/mom/body` — user edited the
+    MoM in the rich-text editor. Stored on `recording.mom_json["edited_html"]`
+    alongside the LLM-generated `summary_html`. FE prefers `edited_html`
+    when rendering so the user's revisions take precedence; regenerating
+    the MoM via `/generate-mom` clears this field (gives user a clean
+    slate from the new LLM output)."""
+    html: str
+    text: Optional[str] = None  # plaintext extraction for search / export
+
+
+@router.patch("/recordings/{recording_id}/mom/body")
+async def patch_recording_mom_body(
+    recording_id: str,
+    req: MomBodyPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save a user edit of the per-recording MoM body."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    mom = recording.mom_json or {}
+    if not isinstance(mom, dict):
+        # Defensive: legacy data may be a list — wrap it.
+        mom = {"sections": mom}
+    mom["edited_html"] = req.html
+    if req.text is not None:
+        mom["edited_text"] = req.text
+    recording.mom_json = mom
+    flag_modified(recording, "mom_json")
+    await session.commit()
+    return {
+        "recording_id": recording_id,
+        "saved_chars": len(req.html),
+    }
+
+
+class MomJsonPatch(BaseModel):
+    """Body for `PATCH /api/recordings/{id}/mom` — the FE sends back the
+    full edited mom_json after inline field edits. Replaces the stored
+    structured MoM wholesale (the FE owns the merge; backend stays
+    dumb)."""
+    mom_json: Dict[str, Any]
+
+
+@router.patch("/recordings/{recording_id}/mom")
+async def patch_recording_mom(
+    recording_id: str,
+    req: MomJsonPatch,
+    session: AsyncSession = Depends(get_session),
+):
+    """Save inline edits to the structured per-recording MoM. The FE
+    sends the full updated mom_json — we replace it as-is. View mode
+    reads the same JSON so toggling edit ↔ view shows the edits.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    rid = _parse_uuid(recording_id)
+    recording = await repo.get_recording(session, rid)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    if not isinstance(req.mom_json, dict):
+        raise HTTPException(status_code=422, detail="mom_json must be an object")
+
+    recording.mom_json = req.mom_json
+    flag_modified(recording, "mom_json")
+    await session.commit()
+    return {"recording_id": recording_id, "saved": True}
 
 
 @router.patch("/recordings/{recording_id}/segment-speaker")
@@ -697,23 +1387,86 @@ async def patch_segment_speaker(
     seg_list = segs.get("segments") if isinstance(segs, dict) else segs
     if not isinstance(seg_list, list):
         raise HTTPException(status_code=400, detail="Recording has no clean segments yet")
-    if not (0 <= req.index < len(seg_list)):
-        raise HTTPException(status_code=400, detail=f"Segment index {req.index} out of range")
+
+    # When the FE's index is stale (e.g. backend re-cleaned and segs
+    # count shrank), fall back to cluster_id positional search. This
+    # keeps the rename actionable instead of dead-ending.
+    in_range = 0 <= req.index < len(seg_list)
+    resolved_index = req.index if in_range else -1
+    if not in_range and req.cluster_id:
+        for k, s in enumerate(seg_list):
+            if (s.get("cluster_id") or "").strip() == req.cluster_id.strip():
+                resolved_index = k
+                break
+    if resolved_index < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Không tìm thấy segment để rename (index={req.index} ngoài range, "
+                f"cluster_id={req.cluster_id or 'none'})"
+            ),
+        )
 
     new_name = (req.speaker or "").strip()
+    # cluster_mapping is a sibling dict on clean_segments — when the FE
+    # renames a cluster wholesale (scope=all), we MUST update this map
+    # too. Otherwise a future regenerate-clean call hands the LLM the
+    # stale mapping and the rename gets clobbered (the LLM substitutes
+    # the old name or leaves "SPEAKER_NN").
+    cluster_mapping = segs.get("cluster_mapping") if isinstance(segs, dict) else None
+    if not isinstance(cluster_mapping, dict):
+        cluster_mapping = {}
+
     if req.scope == "all":
-        # Rename every segment whose CURRENT speaker matches this row's
-        # speaker. Lets the FE do the "apply all" UX without a separate call.
-        target_label = (seg_list[req.index].get("speaker") or "").strip()
+        # Prefer matching by cluster_id when present — this disambiguates
+        # multiple clusters that happen to share the same display label
+        # (e.g. both SPEAKER_00 and SPEAKER_01 were labelled "Unknown"
+        # by the LLM cleaner; without cluster_id, "Apply to all" on
+        # "Unknown" would rename BOTH clusters together).
+        anchor_seg = seg_list[resolved_index]
+        # Use FE-supplied cluster_id when present (precise, immune to
+        # index drift); fall back to the anchor seg's stored cluster_id.
+        target_cid = (req.cluster_id or anchor_seg.get("cluster_id") or "").strip()
+        target_label = (anchor_seg.get("speaker") or "").strip()
         renamed = 0
-        for s in seg_list:
-            if (s.get("speaker") or "").strip() == target_label:
-                s["speaker"] = new_name
-                renamed += 1
+        if target_cid:
+            # Rename every segment with the same cluster_id (precise).
+            for s in seg_list:
+                if (s.get("cluster_id") or "").strip() == target_cid:
+                    s["speaker"] = new_name
+                    renamed += 1
+            cluster_mapping[target_cid] = new_name
+        else:
+            # Legacy fallback: no cluster_id stored (older clean runs).
+            # Match by current label — same as before. Ambiguous when
+            # multiple clusters share a label.
+            for s in seg_list:
+                if (s.get("speaker") or "").strip() == target_label:
+                    s["speaker"] = new_name
+                    renamed += 1
+            for cid, mapped in list(cluster_mapping.items()):
+                if (mapped or "").strip() == target_label or cid == target_label:
+                    cluster_mapping[cid] = new_name
+            if target_label.startswith("SPEAKER_") and target_label not in cluster_mapping:
+                cluster_mapping[target_label] = new_name
     else:
-        seg_list[req.index]["speaker"] = new_name
+        # scope=current: rename ONLY this segment. We deliberately do NOT
+        # touch cluster_mapping here. cluster_mapping is cluster-global and
+        # the FE's display layer resolves names through it
+        # (resolveSpeakerName = clusterMapping[speaker] || speaker), so
+        # writing it would make a "current" rename leak onto EVERY other
+        # block sharing this cluster_id (the reported bug: renaming one
+        # "..." block renamed all unknown-speaker blocks at once). When a
+        # merged view-block spans several rows the FE already PATCHes each
+        # row's index individually, so per-segment writes are sufficient.
+        seg_list[resolved_index]["speaker"] = new_name
         renamed = 1
 
+    # Persist the updated cluster_mapping back into the segs dict so the
+    # next /clean fetch returns the latest names.
+    if isinstance(segs, dict):
+        segs["cluster_mapping"] = cluster_mapping
+        recording.clean_segments = segs
     # JSONB column needs explicit flag — SQLAlchemy can't auto-detect dict mutation.
     flag_modified(recording, "clean_segments")
     await session.commit()
@@ -722,6 +1475,7 @@ async def patch_segment_speaker(
         "renamed": renamed,
         "scope": req.scope,
         "speaker": new_name,
+        "cluster_mapping": cluster_mapping,
     }
 
 
@@ -746,32 +1500,40 @@ async def upload_recording_audio(
     call. Use this when you only want to attach audio for playback.
     """
     import os as _os
+    from meeting.services import r2_storage
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
-    output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
-    audio_dir = _os.path.join(output_dir, "audio")
-    _os.makedirs(audio_dir, exist_ok=True)
-
     filename = file.filename or "audio.wav"
     ext = _os.path.splitext(filename)[1].lower() or ".wav"
     if ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
         ext = ".wav"
-    saved_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
 
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
-    with open(saved_path, "wb") as f:
-        f.write(audio_bytes)
-    recording.audio_path = _os.path.relpath(saved_path, project_root)
-    await session.commit()
+    # Same storage selector as /api/transcribe: R2 if configured,
+    # disk fallback otherwise. See app.py comment for the audio_path
+    # encoding (`r2://...` vs relative disk path).
+    if r2_storage.is_configured():
+        key = r2_storage.audio_key(recording_id, ext)
+        r2_storage.upload_bytes(key, audio_bytes)
+        recording.audio_path = f"r2://{key}"
+    else:
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
+        output_dir = _os.getenv("OUTPUT_DIR") or _os.path.join(project_root, "output")
+        audio_dir = _os.path.join(output_dir, "audio")
+        _os.makedirs(audio_dir, exist_ok=True)
+        disk_path = _os.path.join(audio_dir, f"{recording_id}{ext}")
+        with open(disk_path, "wb") as f:
+            f.write(audio_bytes)
+        recording.audio_path = _os.path.relpath(disk_path, project_root)
 
+    await session.commit()
     return {
         "recording_id": recording_id,
         "audio_path": recording.audio_path,
@@ -796,10 +1558,27 @@ async def get_recording_audio(
     import os as _os
     from fastapi.responses import FileResponse
 
+    from fastapi.responses import RedirectResponse
+    from meeting.services import r2_storage
+
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
+
+    # R2-backed audio: stored as `r2://<key>`. Redirect the browser to a
+    # short-lived presigned URL so the audio streams directly from R2
+    # (no Mee bandwidth, supports Range requests for fast seek).
+    if recording.audio_path and recording.audio_path.startswith("r2://"):
+        key = recording.audio_path[len("r2://"):]
+        try:
+            url = r2_storage.public_or_presigned_url(key, expires_sec=3600)
+            return RedirectResponse(url, status_code=302)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"R2 presign failed: {e}",
+            )
 
     project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))
     fpath: Optional[str] = None
@@ -919,6 +1698,7 @@ async def clean_recording_endpoint(
     recording_id: str,
     regenerate: bool = False,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """LLM clean transcript for 1 recording, cached per-recording in DB.
 
@@ -1004,6 +1784,7 @@ async def clean_recording_endpoint(
     # Capture parameters now — the coroutine runs later in a fresh session.
     target_rid_str = recording_id
     target_regenerate = regenerate
+    target_user_id = user.id
 
     async def _run_inline_clean():
         from meeting.db.base import AsyncSessionLocal
@@ -1026,9 +1807,8 @@ async def clean_recording_endpoint(
                 )
             pm: dict[str, str] = {}
             if r.speaker_embeddings:
-                u = await repo.get_or_create_dev_user(s2)
                 pm = await match_clusters_to_names(
-                    s2, user_id=u.id, speaker_embeddings=r.speaker_embeddings,
+                    s2, user_id=target_user_id, speaker_embeddings=r.speaker_embeddings,
                 )
             vocab_parts = [
                 (m.vocab_hints or "").strip() if m else "",
@@ -1124,7 +1904,6 @@ async def clean_recording_endpoint(
     pre_mapped: dict[str, str] = {}
     if recording.speaker_embeddings:
         from meeting.services.speaker_matcher import match_clusters_to_names
-        user = await repo.get_or_create_dev_user(session)
         pre_mapped = await match_clusters_to_names(
             session,
             user_id=user.id,
@@ -1739,6 +2518,11 @@ async def generate_recording_mom_endpoint(
             )
             if fs.get("error") and not fs.get("mom_json"):
                 return {"error": fs["error"]}
+            # save_recording_mom only flush()es — the graph never commits its
+            # session. The Celery path commits in the task; the inline fallback
+            # must commit here or recording.mom_json is rolled back on close
+            # (memory + .md persist via their own sessions, masking the loss).
+            await s2.commit()
             return {
                 "recording_id": target_rid,
                 "meeting_id": fs.get("meeting_id"),
@@ -1844,6 +2628,7 @@ async def bind_voiceprint_endpoint(
     recording_id: str,
     req: VoiceprintBind,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """User labelled a SPEAKER_NN with a real name → save its embedding to
     the user's voiceprint DB so future meetings auto-recognise this voice.
@@ -1866,7 +2651,6 @@ async def bind_voiceprint_endpoint(
     embeddings = recording.speaker_embeddings or {}
     emb = embeddings.get(req.cluster_id)
     new_name = req.name.strip()
-    user = await repo.get_or_create_dev_user(session)
     vp = None
     voiceprint_saved = False
 
@@ -2037,10 +2821,10 @@ async def bind_voiceprint_endpoint(
 @router.get("/voiceprints")
 async def list_voiceprints_endpoint(
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import list_voiceprints
 
-    user = await repo.get_or_create_dev_user(session)
     rows = await list_voiceprints(session, user.id)
     return [
         {
@@ -2059,11 +2843,11 @@ async def rename_voiceprint_endpoint(
     voiceprint_id: str,
     req: VoiceprintRename,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import rename_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
-    user = await repo.get_or_create_dev_user(session)
     vp = await rename_voiceprint(session, vp_id, user.id, req.name)
     if not vp:
         raise HTTPException(status_code=404, detail="Voiceprint not found")
@@ -2074,11 +2858,11 @@ async def rename_voiceprint_endpoint(
 async def delete_voiceprint_endpoint(
     voiceprint_id: str,
     session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     from meeting.db.repositories_voiceprint import delete_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
-    user = await repo.get_or_create_dev_user(session)
     ok = await delete_voiceprint(session, vp_id, user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Voiceprint not found")

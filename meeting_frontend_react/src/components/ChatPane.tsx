@@ -7,19 +7,27 @@ import {
   type ReactNode,
 } from "react";
 import { useApp } from "../store/AppContext";
-import { toolLabel as mapToolLabel } from "../i18n";
+import { toolLabel as mapToolLabel, argLabel } from "../i18n";
 import { api, ApiError } from "../api/client";
-import type { ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
+import type { ChatSessionSummary, ChatStreamStep, ChatTurnResult, PendingAction } from "../types/api";
 import { Markdown } from "./Markdown";
 import { WelcomeBanner } from "./WelcomeBanner";
 import { ActionArgsCard } from "./ActionArgsCard";
 import { CreateTaskCard, parseTaskTemplate, type TaskTemplate } from "./CreateTaskCard";
+import { pmAgentOptIn } from "../utils/pmAgent";
+import { slashMatches, type SlashCommand } from "../utils/slashCommands";
+import { ChatInput, type ChatInputHandle } from "./ChatInput";
 
 interface ThreadMsg {
-  role: "user" | "agent" | "note";
+  role: "user" | "agent" | "note" | "card";
   text: string;
   /** Activity-trace labels collected while the turn streamed (agent msgs only). */
   steps?: string[];
+  /** User msg sent via the /pm-agent command — render a chip and show stripped text. */
+  pmAgent?: boolean;
+  /** Read-only snapshot of a resolved pending action (role === "card"). */
+  card?: PendingAction;
+  cardStatus?: "approved" | "rejected" | "sent";
 }
 
 export function ChatPane() {
@@ -27,6 +35,10 @@ export function ChatPane() {
   const [messages, setMessages] = useState<ThreadMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Slash-command menu: highlighted row + an Escape-dismiss flag (reset on edit).
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashClosed, setSlashClosed] = useState(false);
+  const inputRef = useRef<ChatInputHandle>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   // Free-text reply for a pm-agent need_more_info pause.
   const [infoInput, setInfoInput] = useState("");
@@ -41,50 +53,43 @@ export function ChatPane() {
   const [zoomed, setZoomed] = useState(false);
   useEffect(() => setZoomed(false), [pending?.id]);
 
-  // The chat session id (LangGraph thread). Created lazily on first send and
-  // re-created when the bound meeting changes. Kept in refs so it survives
-  // re-renders without triggering them.
-  const sessionIdRef = useRef<string | null>(null);
-  const sessionMeetingRef = useRef<string | null>(null);
-
-  // Persist the thread per meeting so it survives a page refresh (F5).
-  const storageKey = `mee.chat.${currentMeetingId ?? "none"}`;
-
-  // Restore on mount / when the bound meeting changes.
+  // User-scoped sessions: the sidebar list + the active session. Sessions are
+  // decoupled from projects — currentMeetingId is sent per-turn for grounding.
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
-    sessionMeetingRef.current = currentMeetingId;
-    try {
-      const raw = localStorage.getItem(storageKey);
-      const saved = raw
-        ? (JSON.parse(raw) as {
-            sessionId?: string | null;
-            messages?: ThreadMsg[];
-            pending?: PendingAction | null;
-          })
-        : null;
-      sessionIdRef.current = saved?.sessionId ?? null;
-      setMessages(saved?.messages ?? []);
-      setPending(saved?.pending ?? null);
-    } catch {
-      sessionIdRef.current = null;
-      setMessages([]);
-      setPending(null);
+    activeSessionIdRef.current = activeSessionId;
+    // Remember the active session across agent-toggle off/on (ChatPane unmounts
+    // when the agent is closed; this restores the session the user was viewing).
+    if (activeSessionId) {
+      try {
+        localStorage.setItem("mee.activeSessionId", activeSessionId);
+      } catch {
+        /* ignore quota / unavailable */
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentMeetingId]);
-
-  // Save whenever the thread changes (sessionIdRef is set before any message,
-  // so it is captured alongside the messages that triggered its creation).
+  }, [activeSessionId]);
+  // Session picker is a dropdown ("list down") rather than an always-visible row.
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const sessionMenuRef = useRef<HTMLDivElement>(null);
+  // Inline rename: which session row is being edited + its draft title.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify({ sessionId: sessionIdRef.current, messages, pending }),
-      );
-    } catch {
-      /* ignore quota / serialization errors */
-    }
-  }, [messages, pending, storageKey]);
+    if (!sessionMenuOpen) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (sessionMenuRef.current && !sessionMenuRef.current.contains(e.target as Node)) {
+        setSessionMenuOpen(false);
+        setEditingId(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sessionMenuOpen]);
+  // Session ids already kicked off this mount, so Mee greets an empty thread once
+  // (survives StrictMode double-mount + re-renders).
+  const kickedOffRef = useRef<Set<string>>(new Set());
 
   // Rotating example placeholder — surfaces what users can ask, including how
   // to reach the Redmine/pm-agent path. Cycles only while the box is empty/idle.
@@ -157,21 +162,100 @@ export function ChatPane() {
   const errorText = (e: unknown) =>
     `${t("chat.error")}: ${e instanceof ApiError ? e.detail : String(e)}`;
 
-  const ensureSession = useCallback(async (): Promise<string> => {
-    if (sessionIdRef.current && sessionMeetingRef.current === currentMeetingId) {
-      return sessionIdRef.current;
+  // Fire the proactive kickoff once per session (role-based, project-agnostic).
+  // Best-effort — a failure leaves the thread empty (WelcomeBanner is the fallback).
+  const maybeKickoff = useCallback(async (sid: string) => {
+    if (kickedOffRef.current.has(sid)) return;
+    kickedOffRef.current.add(sid);
+    setBusy(true);
+    try {
+      const res = await api.chat.kickoff(sid);
+      if (res.reply) setMessages((m) => [...m, { role: "agent", text: res.reply as string }]);
+    } catch {
+      /* best-effort — WelcomeBanner remains the fallback */
+    } finally {
+      setBusy(false);
     }
-    const s = await api.chat.createSession(currentMeetingId ?? "");
-    sessionIdRef.current = s.id;
-    sessionMeetingRef.current = currentMeetingId;
+  }, []);
+
+  // Load a session's messages into the thread and switch to it. Kicks off if the
+  // thread is empty.
+  const openSession = useCallback(async (sid: string) => {
+    setActiveSessionId(sid);
+    setPending(null);
+    try {
+      const detail = await api.chat.sessionDetail(sid);
+      const msgs: ThreadMsg[] = (detail.messages ?? []).map((m) => ({
+        role: m.role === "user" ? "user" : "agent",
+        text: typeof m.content?.text === "string" ? m.content.text : "",
+      }));
+      setMessages(msgs);
+      if (msgs.length === 0) await maybeKickoff(sid);
+    } catch {
+      setMessages([]);
+    }
+  }, [maybeKickoff]);
+
+  // Create a fresh user-scoped session, prepend it to the sidebar, switch, kick off.
+  const createAndOpenSession = useCallback(async () => {
+    const s = await api.chat.createSession();
+    setSessions((prev) => [
+      { id: s.id, meeting_id: s.meeting_id, title: s.title, created_at: s.created_at, last_activity_at: s.created_at },
+      ...prev,
+    ]);
+    setActiveSessionId(s.id);
+    setMessages([]);
+    setPending(null);
+    await maybeKickoff(s.id);
+  }, [maybeKickoff]);
+
+  // On mount: fetch the user's sessions and open the most-recently-active (the
+  // backend returns them ordered last_activity_at desc, so [0] is the target).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await api.chat.listSessions();
+        setSessions(list);
+        if (list.length > 0) {
+          // Prefer the session the user last viewed (survives agent toggle);
+          // fall back to the most-recently-active if it's gone.
+          let saved: string | null = null;
+          try {
+            saved = localStorage.getItem("mee.activeSessionId");
+          } catch {
+            /* ignore */
+          }
+          const target = saved && list.some((s) => s.id === saved) ? saved : list[0].id;
+          await openSession(target);
+        } else {
+          await createAndOpenSession();
+        }
+      } catch {
+        /* best-effort — an empty pane with the New-session button stays usable */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const ensureSession = useCallback(async (): Promise<string> => {
+    if (activeSessionIdRef.current) return activeSessionIdRef.current;
+    const s = await api.chat.createSession();
+    setSessions((prev) => [
+      { id: s.id, meeting_id: s.meeting_id, title: s.title, created_at: s.created_at, last_activity_at: s.created_at },
+      ...prev,
+    ]);
+    setActiveSessionId(s.id);
     return s.id;
-  }, [currentMeetingId]);
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text }]);
+    // Mirror the backend /pm-agent opt-in for display: show a chip + the command-stripped
+    // text in the bubble, but still send the FULL text — the backend strips it itself.
+    const { opted: pmAgent, cleaned } = pmAgentOptIn(text);
+    setMessages((m) => [...m, { role: "user", text: pmAgent ? cleaned : text, pmAgent }]);
     setBusy(true);
     setSteps([]);
     const ctrl = new AbortController();
@@ -189,12 +273,12 @@ export function ChatPane() {
       const sid = await ensureSession();
       let res: ChatTurnResult;
       try {
-        res = await api.chat.sendStream(sid, text, onStep, ctrl.signal);
+        res = await api.chat.sendStream(sid, text, currentMeetingId, onStep, ctrl.signal);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") throw e;
         // Stream route missing (older backend) → fall back to the blocking POST.
         if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
-          res = await api.chat.send(sid, text);
+          res = await api.chat.send(sid, text, currentMeetingId);
         } else {
           throw e;
         }
@@ -211,7 +295,7 @@ export function ChatPane() {
       setSteps([]);
       setBusy(false);
     }
-  }, [input, busy, ensureSession, stepLabel, t]);
+  }, [input, busy, ensureSession, stepLabel, t, currentMeetingId]);
 
   // Clear the session in place: wipe its messages + pending + checkpoint on the
   // backend (keeping the session id / meeting binding), then empty the local
@@ -227,7 +311,7 @@ export function ChatPane() {
       accent: true,
     });
     if (!ok) return;
-    const sid = sessionIdRef.current;
+    const sid = activeSessionIdRef.current;
     setBusy(true);
     try {
       if (sid) await api.chat.clear(sid);
@@ -240,14 +324,81 @@ export function ChatPane() {
     }
   }, [busy, t, confirm]);
 
+  // "New session": create a fresh user-scoped session and switch to it.
+  const handleNewSession = useCallback(async () => {
+    if (busy) return;
+    try {
+      await createAndOpenSession();
+    } catch (e) {
+      pushAgent(errorText(e));
+    }
+  }, [busy, createAndOpenSession]);
+
+  // Remove a session permanently (hard delete). If it was active, fall back to
+  // the most-recent remaining session, or create a fresh one.
+  const handleRemoveSession = useCallback(
+    async (sid: string) => {
+      const ok = await confirm({
+        title: t("chat.session.remove"),
+        message: t("chat.session.removeConfirm"),
+        confirmLabel: t("chat.session.remove"),
+        cancelLabel: t("confirm.cancel"),
+        accent: true,
+      });
+      if (!ok) return;
+      try {
+        await api.chat.remove(sid);
+        const rest = sessions.filter((s) => s.id !== sid);
+        setSessions(rest);
+        kickedOffRef.current.delete(sid);
+        if (activeSessionIdRef.current === sid) {
+          if (rest.length > 0) await openSession(rest[0].id);
+          else await createAndOpenSession();
+        }
+      } catch (e) {
+        pushAgent(errorText(e));
+      }
+    },
+    [sessions, confirm, t, openSession, createAndOpenSession],
+  );
+
+  // Inline rename: open the editor on a row, then commit (Enter) or cancel (Esc).
+  const startRename = useCallback((s: ChatSessionSummary) => {
+    setEditingId(s.id);
+    setEditValue(s.title ?? "");
+  }, []);
+
+  const commitRename = useCallback(
+    async (sid: string) => {
+      const title = editValue.trim();
+      setEditingId(null);
+      if (!title) return; // empty → keep the auto date/time label
+      setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, title } : s)));
+      try {
+        await api.chat.rename(sid, title);
+      } catch (e) {
+        pushAgent(errorText(e));
+      }
+    },
+    [editValue],
+  );
+
+  // Keep a read-only snapshot of a resolved pending card in the thread, so the
+  // conversation history preserves what was approved / sent / rejected.
+  const archiveCard = useCallback(
+    (action: PendingAction, status: "approved" | "rejected" | "sent") =>
+      setMessages((m) => [...m, { role: "card", text: "", card: action, cardStatus: status }]),
+    [],
+  );
+
   const decide = useCallback(
     async (approve: boolean) => {
       if (!pending || busy) return;
       const id = pending.id;
-      const toolName = pending.tool;
+      const snapshot = pending;
       setPending(null);
-      // Leave a visible mark of the dismissed action in the thread.
-      if (!approve) pushNote(`✕ ${t("chat.rejectedNote")}: ${toolLabel(toolName)}`);
+      // Keep the resolved card visible in the thread history.
+      archiveCard(snapshot, approve ? "approved" : "rejected");
       setBusy(true);
       try {
         applyResult(approve ? await api.chat.approve(id) : await api.chat.reject(id));
@@ -266,7 +417,9 @@ export function ChatPane() {
     async (edited: Record<string, unknown>) => {
       if (!pending || busy) return;
       const id = pending.id;
+      const snapshot = pending;
       setPending(null);
+      archiveCard({ ...snapshot, args: { ...snapshot.args, ...edited } }, "approved");
       setBusy(true);
       try {
         applyResult(await api.chat.approve(id, { edited_args: edited }));
@@ -296,7 +449,9 @@ export function ChatPane() {
     async (edited: TaskTemplate, reason: string) => {
       if (!pending || busy) return;
       const id = pending.id;
+      const snapshot = pending;
       setPending(null);
+      archiveCard({ ...snapshot, args: { project: edited.project, items: edited.items } }, "sent");
       setBusy(true);
       try {
         applyResult(
@@ -321,8 +476,10 @@ export function ChatPane() {
     const text = infoInput.trim();
     if (!text) return;
     const id = pending.id;
+    const snapshot = pending;
     setPending(null);
     setInfoInput("");
+    archiveCard(snapshot, "sent");
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
     try {
@@ -340,8 +497,10 @@ export function ChatPane() {
   const cancelInfo = useCallback(async () => {
     if (!pending || busy) return;
     const id = pending.id;
+    const snapshot = pending;
     setPending(null);
     setInfoInput("");
+    archiveCard(snapshot, "rejected");
     setMessages((m) => [...m, { role: "user", text: "/cancel" }]);
     setBusy(true);
     try {
@@ -353,12 +512,60 @@ export function ChatPane() {
     }
   }, [pending, busy, t]);
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  // Slash-command menu state, derived from the input. Shown only while the user
+  // is still typing the command token; once committed, the /pm-agent prefix is
+  // highlighted inline inside the input itself (see ChatInput).
+  const slashList = slashClosed || busy ? null : slashMatches(input);
+  const showSlashMenu = !!slashList;
+  // Reset the highlight as the filtered list changes with each keystroke.
+  useEffect(() => setSlashIdx(0), [input]);
+
+  const acceptSlash = useCallback((cmd: SlashCommand) => {
+    setInput(cmd.command + " ");
+    setSlashClosed(true);
+    inputRef.current?.focus();
+  }, []);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (showSlashMenu && slashList) {
+      const n = slashList.length;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIdx((i) => (i + 1) % n);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIdx((i) => (i - 1 + n) % n);
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        acceptSlash(slashList[Math.min(slashIdx, n - 1)]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashClosed(true);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
     }
   };
+
+  // Display name for a session: its title if set, else a readable created-at
+  // stamp (sessions are untitled by default — renaming is a separate feature).
+  const sessionLabel = (s: ChatSessionSummary): string =>
+    s.title?.trim() ||
+    new Date(s.created_at).toLocaleString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
   // GATE 1 for create_task carries an editable {project, items} template
   // (tool === "create_task", no pm `kind`). Null for every other pending action.
@@ -377,6 +584,19 @@ export function ChatPane() {
           <span className="small">
             {currentMeeting ? currentMeeting.title : t("agent.noMeeting")}
           </span>
+          <button
+            className="icon-btn icon-btn-sm"
+            type="button"
+            title={t("chat.session.new")}
+            aria-label={t("chat.session.new")}
+            disabled={busy}
+            onClick={() => void handleNewSession()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
           {(messages.length > 0 || pending) && (
             <button
               className="icon-btn icon-btn-sm"
@@ -395,6 +615,101 @@ export function ChatPane() {
         </div>
       </div>
 
+      {sessions.length > 0 && (
+        <div className="chat-session-dropdown" ref={sessionMenuRef}>
+          <button
+            type="button"
+            className="chat-session-trigger"
+            onClick={() => setSessionMenuOpen((o) => !o)}
+            disabled={busy}
+            aria-haspopup="listbox"
+            aria-expanded={sessionMenuOpen}
+          >
+            <span className="chat-session-current">
+              {(() => {
+                const active = sessions.find((s) => s.id === activeSessionId);
+                return active ? sessionLabel(active) : t("chat.session.untitled");
+              })()}
+            </span>
+            <svg
+              className={`chat-session-caret${sessionMenuOpen ? " is-open" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          {sessionMenuOpen && (
+            <ul className="chat-session-menu" role="listbox" aria-label={t("chat.session.listLabel")}>
+              {sessions.map((s) => (
+                <li
+                  key={s.id}
+                  className={`chat-session-item${s.id === activeSessionId ? " is-active" : ""}`}
+                >
+                  {editingId === s.id ? (
+                    <input
+                      className="chat-session-edit"
+                      value={editValue}
+                      autoFocus
+                      placeholder={t("chat.session.renamePlaceholder")}
+                      disabled={busy}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitRename(s.id);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditingId(null);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="chat-session-open"
+                        onClick={() => {
+                          void openSession(s.id);
+                          setSessionMenuOpen(false);
+                        }}
+                        disabled={busy}
+                      >
+                        {sessionLabel(s)}
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-session-rename"
+                        title={t("chat.session.rename")}
+                        aria-label={t("chat.session.rename")}
+                        onClick={() => startRename(s)}
+                        disabled={busy}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-session-remove"
+                        title={t("chat.session.remove")}
+                        aria-label={t("chat.session.remove")}
+                        onClick={() => void handleRemoveSession(s.id)}
+                        disabled={busy}
+                      >
+                        ✕
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       <div className="chat-thread" ref={threadRef}>
         <WelcomeBanner />
 
@@ -409,6 +724,8 @@ export function ChatPane() {
         {messages.map((m, i) =>
           m.role === "note" ? (
             <div key={i} className="msg msg-note">{m.text}</div>
+          ) : m.role === "card" && m.card ? (
+            <ArchivedCard key={i} card={m.card} status={m.cardStatus ?? "approved"} />
           ) : (
             <div key={i} className={m.role === "user" ? "msg msg-user" : "msg msg-agent"}>
               {m.role === "agent" && m.steps?.length ? (
@@ -423,7 +740,19 @@ export function ChatPane() {
                   ))}
                 </details>
               ) : null}
-              {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
+              {m.role === "agent" ? (
+                <Markdown>{m.text}</Markdown>
+              ) : (
+                <>
+                  {m.pmAgent && (
+                    <span className="pm-chip">
+                      <img className="pm-chip-ava" src="/pm-agent-ava.webp" alt="" />
+                      {t("chat.pmAgentChip")}
+                    </span>
+                  )}
+                  {m.text}
+                </>
+              )}
               {m.role === "agent" && m.text && (
                 <button
                   className="msg-copy"
@@ -541,7 +870,18 @@ export function ChatPane() {
                 ))}
               </ul>
             ) : (
-              <pre className="pending-args">{JSON.stringify(pending.args, null, 2)}</pre>
+              <dl className="pending-args-list">
+                {Object.entries(pending.args ?? {}).map(([k, v]) =>
+                  v == null || v === "" ? null : (
+                    <div key={k} className="action-arg-row">
+                      <span className="task-label">{argLabel(t, k)}</span>
+                      <span className="action-arg-value">
+                        {typeof v === "string" ? v : JSON.stringify(v)}
+                      </span>
+                    </div>
+                  ),
+                )}
+              </dl>
             )}
             <div className="pending-buttons">
               <button className="btn btn-approve" type="button" disabled={busy} onClick={() => void decide(true)}>
@@ -584,13 +924,38 @@ export function ChatPane() {
       </div>
 
       <div className="chat-input-wrap">
-        <textarea
-          className="chat-input"
-          rows={1}
-          placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
+        {showSlashMenu && slashList && (
+          <div className="slash-menu" role="listbox" aria-label={t("chat.slash.menuLabel")}>
+            {slashList.map((c, i) => (
+              <button
+                key={c.command}
+                type="button"
+                role="option"
+                aria-selected={i === slashIdx}
+                className={`slash-item${i === slashIdx ? " slash-item-active" : ""}`}
+                onMouseEnter={() => setSlashIdx(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep textarea focus
+                  acceptSlash(c);
+                }}
+              >
+                {c.icon && <img className="slash-ava" src={c.icon} alt="" />}
+                <span className="slash-cmd">{c.command}</span>
+                <span className="slash-desc">{t(c.descKey)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <ChatInput
+          ref={inputRef}
           value={input}
+          placeholder={placeholderExamples[phIdx] ?? t("chat.placeholder")}
+          ariaLabel={t("chat.placeholder")}
           disabled={busy}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(v) => {
+            setInput(v);
+            setSlashClosed(false);
+          }}
           onKeyDown={onKeyDown}
         />
         {busy ? (
@@ -610,7 +975,7 @@ export function ChatPane() {
           <button
             className="chat-send"
             type="button"
-            title="Send"
+            title={t("chat.sendTitle")}
             disabled={!input.trim()}
             onClick={() => void handleSend()}
           >
@@ -622,6 +987,56 @@ export function ChatPane() {
         )}
       </div>
     </section>
+  );
+}
+
+function ArchivedCard({ card, status }: { card: PendingAction; status: string }) {
+  const { t } = useApp();
+  const items = (card.args?.items as Array<Record<string, unknown>> | undefined) ?? undefined;
+  const badge =
+    status === "rejected"
+      ? `✕ ${t("chat.card.rejected")}`
+      : status === "sent"
+        ? `↗ ${t("chat.card.sent")}`
+        : `✓ ${t("chat.card.approved")}`;
+  return (
+    <div className={`msg msg-agent pending-action card-archived card-${status}`}>
+      <div className="pending-title">
+        {mapToolLabel(t, card.tool)} <span className="card-badge">{badge}</span>
+      </div>
+      {card.prompt && <Markdown>{card.prompt}</Markdown>}
+      {card.issues?.length ? (
+        <ul className="pending-issues">
+          {card.issues.map((iss, i) => (
+            <li key={i}>
+              {String(iss.actions ?? "")}{" "}
+              <strong>{String(iss.subject ?? JSON.stringify(iss))}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : items?.length ? (
+        <ul className="pending-issues">
+          {items.map((it, i) => (
+            <li key={i}>
+              <strong>{String(it.subject ?? it.title ?? JSON.stringify(it))}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : !card.prompt && card.args ? (
+        <dl className="pending-args-list">
+          {Object.entries(card.args).map(([k, v]) =>
+            v == null || v === "" ? null : (
+              <div key={k} className="action-arg-row">
+                <span className="task-label">{argLabel(t, k)}</span>
+                <span className="action-arg-value">
+                  {typeof v === "string" ? v : JSON.stringify(v)}
+                </span>
+              </div>
+            ),
+          )}
+        </dl>
+      ) : null}
+    </div>
   );
 }
 
