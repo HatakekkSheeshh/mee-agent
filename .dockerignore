@@ -31,3 +31,4 @@ output/
 
 # Tests (not needed in the runtime image)
 tests/
+.agentbase/
