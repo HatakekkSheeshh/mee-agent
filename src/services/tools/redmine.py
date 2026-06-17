@@ -21,10 +21,10 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from meeting.db.models import User
-from meeting.services.identity_client import get_cached_user_key
-from meeting.services.redmine_mcp_client import get_redmine_mcp_client
-from meeting.services.tools._registry import TOOLS, tool
+from src.db.models import User
+from src.services.identity_client import get_cached_user_key
+from src.services.redmine_mcp_client import get_redmine_mcp_client
+from src.services.tools._registry import TOOLS, tool
 
 logger = logging.getLogger(__name__)
 

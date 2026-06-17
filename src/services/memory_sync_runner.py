@@ -24,14 +24,14 @@ import uuid
 from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
-from meeting.db.base import AsyncSessionLocal
-from meeting.memory_client import (
+from src.db import repositories as repo
+from src.db.base import AsyncSessionLocal
+from src.memory_client import (
     parse_project_marker,
     search_project_record,
     upsert_project_record,
 )
-from meeting.services.memory_sync import (
+from src.services.memory_sync import (
     build_session_bullets,
     distill_project_state,
     sync_one_project,

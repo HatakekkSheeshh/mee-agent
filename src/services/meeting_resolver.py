@@ -53,7 +53,7 @@ def default_generate(messages: list[dict[str, str]]) -> str:
     Reuses the chat graph's `_llm_client`/`_llm_model` (lazy import keeps this
     module's import side-effect-free and avoids a graphs↔services import cycle).
     """
-    from meeting.graphs._chat_llm import _llm_client, _llm_model
+    from src.graphs._chat_llm import _llm_client, _llm_model
 
     resp = _llm_client().chat.completions.create(
         model=_llm_model(),

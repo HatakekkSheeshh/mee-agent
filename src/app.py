@@ -22,15 +22,15 @@ from pydantic import BaseModel
 
 from contextlib import asynccontextmanager
 
-from meeting.api.chat import router as chat_router
-from meeting.api.meetings import router as meetings_router
-from meeting.api.voiceprints import router as voiceprints_router
-from meeting.auth import auth_router
-from meeting.graphs import close_checkpointer, init_checkpointer
-from meeting.memory_client import save_meeting_events
-from meeting.note_generator import generate_meeting_notes
-from meeting.report_generator import generate_mom_markdown
-from meeting.vocab_store import (
+from src.api.chat import router as chat_router
+from src.api.meetings import router as meetings_router
+from src.api.voiceprints import router as voiceprints_router
+from src.auth import auth_router
+from src.graphs import close_checkpointer, init_checkpointer
+from src.memory_client import save_meeting_events
+from src.note_generator import generate_meeting_notes
+from src.report_generator import generate_mom_markdown
+from src.vocab_store import (
     load_pool, add_correction, delete_correction,
     extract_and_save_terms, build_pool_prompt_fragment,
 )
@@ -377,8 +377,8 @@ def _chunk_and_transcribe(
     pending_diarize_path: Optional[str] = None
     if os.getenv("HF_TOKEN") and joined_text.strip():
         try:
-            from meeting.services.parallel_diarize import diarize_parallel
-            from meeting.services.local_diarize import split_text_proportional
+            from src.services.parallel_diarize import diarize_parallel
+            from src.services.local_diarize import split_text_proportional
 
             # Re-encode the full cleaned audio (already mono 16kHz from
             # earlier steps in this function) → bytes for diarize.
@@ -491,14 +491,14 @@ async def _lifespan(app: FastAPI):
     """Startup: init OTel tracing + LangGraph PostgresSaver + discover/register
     Redmine MCP tools. Shutdown: flush traces + close pool."""
     # Best-effort, env-gated: no-op unless OTEL_ENABLED / LANGFUSE_ENABLED is set.
-    from meeting.observability import init_tracing, shutdown_tracing
+    from src.observability import init_tracing, shutdown_tracing
 
     init_tracing(app)
     await init_checkpointer()
     # Best-effort: registers the deployed Redmine MCP server's tools into the
     # local registry (disk cache → live list_tools). Returns [] + logs if the
     # server is unreachable, so the app still boots without Redmine.
-    from meeting.services import load_and_register_redmine_tools
+    from src.services import load_and_register_redmine_tools
     await load_and_register_redmine_tools()
     yield
     await close_checkpointer()
@@ -529,7 +529,7 @@ def create_app(output_dir: str = None) -> FastAPI:
     # Voice enrollment endpoint — flips users.voice_enrolled
     app.include_router(voiceprints_router)
     # Per-user Redmine key status probe (FE banner + consent gate)
-    from meeting.api.redmine import router as redmine_router
+    from src.api.redmine import router as redmine_router
     app.include_router(redmine_router)
 
     @app.post("/api/session")
@@ -685,7 +685,7 @@ def create_app(output_dir: str = None) -> FastAPI:
         Notta player can replay the file after the stream ends.
         """
         from fastapi.responses import StreamingResponse
-        from meeting.services.model_registry import resolve_stt
+        from src.services.model_registry import resolve_stt
         import httpx
 
         profile = resolve_stt(recording_choice=(stt_model or None))
@@ -714,9 +714,9 @@ def create_app(output_dir: str = None) -> FastAPI:
         # configured, disk otherwise. See the batch endpoint's comment
         # for the audio_path schema (`r2://...` vs relative disk path).
         if recording_id:
-            from meeting.db import AsyncSessionLocal
-            from meeting.db.models import Recording as _Recording
-            from meeting.services import r2_storage
+            from src.db import AsyncSessionLocal
+            from src.db.models import Recording as _Recording
+            from src.services import r2_storage
             try:
                 _ext = os.path.splitext(filename)[1].lower() or ".wav"
                 if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
@@ -767,8 +767,8 @@ def create_app(output_dir: str = None) -> FastAPI:
         # some slack if they mis-checked attendance.
         if recording_id:
             try:
-                from meeting.db import AsyncSessionLocal
-                from meeting.db.models import Recording as _Recording
+                from src.db import AsyncSessionLocal
+                from src.db.models import Recording as _Recording
                 async with AsyncSessionLocal() as _sess:
                     _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
                     if _rec and isinstance(_rec.attendees, list) and _rec.attendees:
@@ -854,7 +854,7 @@ def create_app(output_dir: str = None) -> FastAPI:
         Auto-chunking: MaaS Whisper has a 25MB upload limit — files > 24MB
         are split into 10-min chunks. Self-hosted PhoWhisper has no cap.
         """
-        from meeting.services.model_registry import resolve_stt
+        from src.services.model_registry import resolve_stt
         profile = resolve_stt(recording_choice=(stt_model or None))
         base_url = (profile.get("base_url") or "").rstrip("/")
         api_key = profile.get("api_key") or ""
@@ -885,9 +885,9 @@ def create_app(output_dir: str = None) -> FastAPI:
         # The audio GET endpoint detects the prefix and redirects (R2) or
         # serves the file (local).
         if recording_id:
-            from meeting.db import AsyncSessionLocal
-            from meeting.db.models import Recording as _Recording
-            from meeting.services import r2_storage
+            from src.db import AsyncSessionLocal
+            from src.db.models import Recording as _Recording
+            from src.services import r2_storage
             try:
                 _ext = os.path.splitext(filename)[1].lower() or ".wav"
                 if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
@@ -1064,7 +1064,7 @@ def create_app(output_dir: str = None) -> FastAPI:
             # returned segments (PhoWhisper path) or when HF_TOKEN is unset.
             if text and not segments and os.getenv("HF_TOKEN"):
                 try:
-                    from meeting.services.local_diarize import (
+                    from src.services.local_diarize import (
                         diarize_audio, split_text_proportional,
                     )
                     diarize = diarize_audio(audio_bytes)
@@ -1150,7 +1150,7 @@ def create_app(output_dir: str = None) -> FastAPI:
     # serving so the /ws upgrade is routed here, not swallowed by StaticFiles.
     # This is what lets the single-port (8080) AgentBase runtime serve realtime
     # STT alongside the HTTP API (no separate :9091 server).
-    from meeting.ws_transcribe import register_ws_route
+    from src.ws_transcribe import register_ws_route
     register_ws_route(app)
 
     # Serve the frontend. Prefer the built React SPA (meeting_frontend_react/

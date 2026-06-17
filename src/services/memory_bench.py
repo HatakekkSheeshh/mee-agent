@@ -20,7 +20,7 @@ import json
 import math
 from dataclasses import dataclass, field
 
-from meeting.services.memory_sync import _mom_texts
+from src.services.memory_sync import _mom_texts
 
 
 @dataclass(frozen=True)
