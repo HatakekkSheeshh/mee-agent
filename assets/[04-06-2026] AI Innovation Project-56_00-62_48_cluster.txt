@@ -1,0 +1,104 @@
+ 
+
+Lộc 00:00 
+Tuần trước em có trình bày cái ba cái con đường happy case của con này.Đó là, là này.
+
+An 00:09 
+Chắc anh nghe tiếp nha, anh chị, chị đi họp.
+
+Lộc 00:21 
+Dạ. Hay nhờ Nhi, Nhi cắm giùm dây anh xem thử. Thì có một lần em test một câu tới, tới mười lần là để em check coi là nó cái độ tương đồng ấy. Thì cái đường thứ nhất á, là cái đường happy case, tức là nó lúc nào cũng phải qua cube ấy. Thì hiện tại là nó không, nó không có sự thay đổi nào hết, nó không có sai.
+
+Tất nhiên là em không tính tới trường hợp mà nó fetch lại câu trả lời. Nhưng mà cái đường mà liên quan tới post fetch query á, thì em đã thấy nó bị sai một hai lần, tức là nó có sự trả lời khác nhau ở schema query. Thì có một, có một trường hợp duy nhất là cái, cái con số nó sai, nó ra khác hoàn toàn. Thì cái trường hợp đó là kỳ trước là em nhận định nó là do gì cái semantic layer nó, cái, cái phần cube vòng lại ấy, nó gọi là nó không có rõ ràng thì dẫn tới cái bị sai. Thì, mà với lại em cũng nhận ra được cái đó là một cái vấn đề mà mình cần phải cải thiện. 
+
+An 01:21 
+Quao, là, là do sai ở cái path một hả?
+
+Lộc 01:24 
+Nó sai ở cái đường, cái đường thứ ba anh.
+
+An 01:25 
+Đường thứ ba.
+
+Lộc 01:26 
+Còn cái đường thứ nhất thì lúc nào nó cũng, nó cũng gọi là nó dựa trên- 
+
+An 01:29 
+À.
+
+Lộc 01:29 
+...cái cube để nó sinh ra query rồi nên hầu như là nó không sai.
+
+An 01:32 
+Còn cái, cái mà semantic layer là nằm ở đâu trong cái đường thứ ba này?
+
+Lộc 01:36 
+Cái đường thứ ba ấy là khi mà nó sinh từ semantic layer, nó dùng cube để nó query. Nhưng mà cái câu query của cube ấy nó không có đáp ứng được câu trả lời. Thì dẫn tới là nó phải bắt đầu nó tự đi sinh lại câu SQL. Tại vì trong cube ấy thì anh không thể nào thực hiện được phép chia, phép nhân với các phép cao ấy, và cũng không có thực hiện được những cái phép tree mà nó quá phức tạp. Thì dẫn tới là mình phải... Mà cái vấn đề này thì em cũng có nhận ra là trong cái này, thì nó là cái task thứ ba mà em đang research.
+
+Thì bản chất cái quy trình mà em đang làm ấy, là đầu tiên ấy là nó sẽ fetch những toàn bộ cái schema data. Ví dụ như em có bảy mươi lăm table thì sẽ tương đương với bảy mươi lăm cái cup, thì nó sẽ đưa hết vô agent luôn. Thì đây, đây là bảy mươi lăm cái cup đưa hết vô model. Thì dẫn tới cái context của model ấy, lúc này là cái màu đỏ ấy là những cái context cần thiết để trả lời. Nhưng mà nó lại có quá nhiều context dư thừa ở trong đây. Thì nó bắt đầu nó gọi là nó, nó không chính xác rồi. Thì lúc sau á là nó sẽ tự động chọn ba cái context, ba cái cube mà cần thiết cho câu trả lời đó. Và nó chọn ra những cái cột tương ứng. Thì lúc này là nó sẽ trả ra hai quá trình mà dẫn đến có thể, có thể gây ra hallucination cho model, là cái việc mà chọn cube với lại cái việc chọn cột. Thì em mới đang tính là thử, sẽ bây giờ mình sẽ thử, ờ, mình embed, mình nhúng hết tất cả cái này vô một cái vector database. Tại vì cái schema thì vốn nó không có đổi nên cái việc mà nhúng DB vào này thì mình chỉ cần làm một cái luồng data pipeline, chừng nào mà cái schema nó thay đổi thì mình mới phải inject nó lại thôi. Còn lại thì hầu như là không có đụng gì tới database này hết. Thì đến lúc đó thì mình sẽ bắt đầu truy xuất. Thì vì cái kết quả semantic layer ấy thì mình có thể, mình có thể quan niệm là hầu như nó không thay đổi sau mỗi lần truy vấn của query người dùng. Thì mình đảm bảo là mình vẫn sẽ luôn có được cái selected cube này theo đúng cái chuẩn của mình. Thì tới lúc này ấy, thì cái context của mình nhận á, sẽ là những cái context khá là chính xác. Nhưng mà tới lúc mà em nhận ra ấy, là cái việc mà nó trích xuất những cái column trong đó nó vẫn có thể gây hallucination thì em mới đề xuất là... Tại vì hiện tại là em thấy có một số repo về Claude ấy, thì nó cũng đã bắt đầu ứng dụng graphing nhanh rồi. Và cái việc mà truy vấn graph ấy thì người người ta cũng chứng minh được là nó rất hiệu quả. Thì sau khi mà cái giai đoạn mà mình có được cái select cube này này, mình sẽ bắt đầu tìm những cái join path, tức là tìm ra những cái column liên quan đến những cái cube đó, tức là nó sẽ liên quan đến cái câu trả lời luôn này. Thì sau đó là mình sẽ đưa hết vô model. Thì điều này sẽ giúp cho cái việc mà mình có được cái context nó chính xác hơn, có được những cái column-
+
+An 04:13 
+Cái mà em đưa thêm cho model đó là cái gì?
+
+Lộc 04:16 
+Dạ cái nào?
+
+An 04:16 
+Thì giả sử như sau khi ba cái cube mà em đã lấy ra được rồi đúng không?
+
+Lộc 04:20 
+Ừ.
+
+An 04:20 
+Thì em nói là truy xuất thêm những cái path đúng không?
+
+Lộc 04:24 
+Ừ.
+
+An 04:24 
+Thì cái path đó là cái gì?
+
+Lộc 04:26 
+Cái path đó là ví dụ như là trên những cái đường join á, ví dụ như là câu hỏi đó, cùng một câu hỏi đó thì nó sẽ có những cái tên cột, nó sẽ là, ờ, nó là những cái phép join, cái phép kết nối, cái, cái, à, cái mối quan hệ trong cái schema ấy. 
+
+An 04:38 
+À, à.
+
+Lộc 04:39 
+Dạ đúng rồi.
+
+An 04:39 
+Foreign key đồ đó.
+
+Lộc 04:40 
+Uhm. Tại vì khi mà bản chất khi mà em nhìn thấy cái DB trong bảng SQL ấy, là mấy anh đặt tên thì nó cũng khó có thể nhìn ra được cái nghĩa ấy.
+
+Thì nên cái việc mà mình dựa trên các mối quan hệ primary key rồi foreign key, rồi mình trích xuất cái path ấy thì nó sẽ kiểu, nó rulebase vào nó dễ hơn. 
+
+An 04:56 
+Là em sẽ đưa cho nó thêm mấy cái câu ví như là, à, field này trên database, trên cái schema này là, là field này trên cái table kia.Đúng vậy không?
+
+Lộc 05:07 
+Dạ đúng rồi.
+
+An 05:08 
+Vậy là truy xuất thêm từ trong graph, từ những cái field đó có móc nối gì với nhau thêm nữa không gì?
+
+Lộc 05:13 
+Dạ đúng rồi. Thì nói chung là em có tìm thấy mấy cái, ờ, hiện ra thì trên thực tế thì người ta dùng Claude ấy, thì người ta cũng có tạo ra mấy cái repo nó khá là hay mà cũng đã dùng graph rồi.
+
+Thì em đang tính là sẽ dành thời gian em đi research các, các phương pháp. Thì trong cái repo này này, thì hồi trước ấy là người ta tạo graph dựa trên schema thì người ta tạo ra thành hai cách. Là một là rulebase, và hai là người ta dùng một con LLM ở giữa để người ta bắt đầu người ta đọc logic các kiểu ấy. Thì em nhận ra là cái cách dùng LLM nó bị lâu quá, nên em đang cố gắng tìm được cái cách mà nó gọi là rulebase nhất. Thì em được, nhận thấy được thằng này thì nó đang có một cái thuật toán mà gọi là nó dùng cái cách rulebase để nó check cái source code mình á. Tức là bản chất của cái repo này ấy là nó sẽ biến cái code base của mình thành graph. Còn em thì đang cố gắng tận dụng thử cái thuật toán của nó để cố gắng là biến cái schema của mình thành graph thay vì cái code base. 
+
+An 06:03 
+Cái code graph này là như kiểu là, à, ở chỗ này em gọi function này mà function này lại ánh xạ tới cái file ở chỗ này chỗ kia đúng không?
+
+Lộc 06:12 
+Uhm, dạ đúng rồi.
+
+An 06:13 
+Nếu, nhưng mà nếu vậy thì nó sẽ gọi là nó sẽ thấy cái bài toán lớn hơn cái so với database đúng không?Tại vì số lượng database của em với so với code thì nó, nó không là gì hết.
+
+Lộc 06:23 
+Ờ, cái đúng là số lượng bảy mươi lăm table thì nó không là gì hết. Nhưng mà lúc mà em hỏi anh Vũ về cái việc mà schema trên thực tế thì anh Vũ kêu là nó sẽ có một ngàn schema, thì lúc đó là nó, gọi là nó, em nghĩ là nó đủ lớn để có thể làm cái graph để em nghiên cứu.
+
+Cái này là chỉ là phần em đi em, em, em nghiên cứu thêm ạ. Thì nói chung là cái vốn dĩ cái code graph này này là thay vì khi mà mỗi lần mình hỏi là con Claude nó bắt đầu

@@ -1,4 +1,77 @@
-# Mee — Meeting Note Agent
+# Mee — AI Meeting Agent for Vietnamese Teams
+
+> Turn Vietnamese meetings into clean transcripts, AI-drafted minutes, and tracked action items — **without losing a single commitment**.
+
+---
+
+## 📝 Submission summary (272 chars — copy-paste into the form)
+
+```text
+Mee — AI meeting agent for Vietnamese teams. PROBLEM: minutes take hours; action items get dropped. USERS: VN engineering, product, CS teams. SOLUTION: STT + diarize → editable transcript → AI-drafted MoM → Redmine tasks via HITL agent. VALUE: 2-4 hours saved per meeting.
+```
+
+## The problem
+
+- Vietnamese meetings produce hours of untranscribed audio. Manual minutes take 1-3 hours per call and arrive a day later (if at all).
+- **Action items mentioned mid-call get dropped** — by the time someone asks "wait, who's doing the deploy?", nobody remembers.
+- **Cross-meeting context is invisible.** Decisions from last sprint's retro are lost when planning this sprint's stories.
+- Existing tools (Otter, Fireflies, Notta) are English-first and stumble on Vietnamese, especially the Vietnamese-English code-switching that's the norm in tech meetings ("deploy", "API", "sprint", "code review" mixed with VN).
+
+## Who it's for
+
+- **Vietnamese engineering teams** running internal syncs, sprint reviews, technical design discussions, retros.
+- **Product & customer-success teams** capturing interview / customer-call notes that feed roadmap decisions.
+- **Project managers** who need their meetings to automatically convert into Redmine tasks without manual transcription.
+- Any VN team that needs **privacy-preserving on-prem** STT + LLM (the entire stack is self-hostable on your own GPU / Postgres).
+
+## How Mee solves it
+
+Two parallel flows in one app:
+
+**Flow 1 — Transcript (passive ingestion)**
+
+1. Record / upload / paste audio in any of mp3, wav, m4a, or live mic
+2. STT + speaker diarization (self-hosted PhoWhisper / faster-whisper + pyannote, OR VNG MaaS Whisper)
+3. LLM cleans the raw transcript and merges per-speaker turns
+4. User edits segments inline in a TipTap WYSIWYG editor; speaker names persist across recordings via a **voiceprint database**
+5. **LangGraph 4-node MoM graph** drafts the minutes: summary + decisions + action items + commitments + blockers
+6. **Project summary** aggregates every recording on a timeline narrative
+
+**Flow 2 — Chat agent (active + Human-in-the-Loop)**
+
+1. Ask anything about the meeting — "what did Nhi commit to?", "list overdue Redmine issues", "summarize this week's decisions"
+2. Agent classifies intent → proposes a tool call (`create_task`, `send_email`, `search_transcript`, `retrieve` from memory, etc.)
+3. **Side-effect tools require explicit approval.** The user sees the proposed action, can edit args, then approves or rejects — enforced by LangGraph `interrupt()`
+4. Approved tools execute against the local DB, **Microsoft Graph** (Mail.Send, Calendar), or **pm-agent over A2A v0.3** (auto-create Redmine tasks)
+5. Outcomes write back into memory + transcript so the next chat call sees them
+
+**Cross-cutting**
+
+- **Hybrid memory** — keyword tsvector + bge-m3 (1024-dim) vector + RRF fusion + optional rerank — so past decisions resurface
+- **Speaker recognition across meetings** via voice enrollment + voiceprint DB (cosine match)
+- **Multi-model picker** — switch STT (Whisper / PhoWhisper / faster-whisper) and LLM (Gemma 4 / Qwen 3.5 / GPT-OSS) per recording
+
+## Value brought
+
+- **2-4 hours saved per meeting** — manual transcription + minutes drafting eliminated
+- **Zero dropped action items** — agent surfaces commitments and prompts before forgetting
+- **Vietnamese-first quality** — Vietnamese-English code-switching tolerated; project vocabulary learned from user edits and pooled across the team
+- **Privacy-preserving** — the entire stack is self-hostable (your GPU for STT, your vLLM for LLM, your Postgres for data); no audio leaves your infrastructure if you don't want it to
+- **HITL by default** — every side-effect (email send, task create, calendar invite) goes through explicit user approval; the agent cannot act unilaterally
+
+## Demo + docs
+
+- **Implementation runbook + DB schema + setup**: see the Vietnamese tech sections below ↓
+- **For new dev sessions on this repo**: read [`HANDOFF.md`](./HANDOFF.md) + [`CLAUDE.md`](./CLAUDE.md) + [`PLAN.md`](./PLAN.md)
+- **Canonical product docs (Obsidian)**: `~/greennode/GreenNode/Meeting Agent/` (vault)
+
+---
+
+*Implementation guide continues below in Vietnamese.*
+
+---
+
+# Mee — Meeting Note Agent (tài liệu kỹ thuật)
 
 > AI meeting agent cho tiếng Việt: **paste / upload audio / live record** → transcript → **WYSIWYG Clean editor** → **Biên bản phiên họp (MoM)** + **Tổng kết project**. Powered by LangGraph + Qwen3 LLM + PhoWhisper STT.
 
@@ -8,70 +81,153 @@
 
 ## ✨ Tính năng chính
 
+### Luồng transcript (passive)
+
 | Feature | Mô tả |
 |---|---|
 | **Project / Phiên họp 2 cấp** | Project (folder) chứa N phiên họp. Mỗi phiên = 1 transcript + 1 biên bản riêng |
-| **3 input modes** | Paste text · Upload audio (mp3/wav/m4a, auto-chunk >24MB) · Live record (mic + WebSocket → Whisper streaming) |
-| **MoM per-recording** | Biên bản sinh ra cho **1 phiên cụ thể** (không phải toàn project). Lưu `recordings.mom_json` |
-| **Project summary** | Tổng kết toàn project = timeline các quyết định theo thời gian + narrative LLM (aggregate từ N MoM của các phiên) |
-| **TipTap WYSIWYG Clean editor** | User edit transcript inline với bold/italic/lists/headings + tag chips (commitment/decision/blocker) + auto-save 1.5s |
-| **MoM dùng edited Clean** | Khi tạo MoM, ưu tiên transcript đã edit (cleaner input → quality cao hơn) |
-| **Self-hosted PhoWhisper + pyannote** | Tiếng Việt 8.85% WER (BSD-3) + speaker diarization, deploy trên L40 GPU |
-| **Hybrid memory** | Cross-meeting memory: keyword tsvector + semantic bge-m3 (1024-dim pgvector) + RRF fusion, optional LLM rerank |
-| **Chat HITL** | Chat agent với Human-in-the-Loop: classify intent → propose action → user approve/reject → execute |
+| **3 input modes** | Paste text · Upload audio (mp3/wav/m4a, auto-chunk >24MB) · Live record (mic + WebSocket :9091 → Whisper streaming) |
+| **STT linh hoạt** | VNG MaaS Whisper-large-v3 (mặc định), hoặc self-host PhoWhisper / **faster-whisper** + pyannote trên GPU (L40 / 2080 — xem `HANDOFF.md §7`) |
+| **Speaker diarization** | pyannote 3.1 local hoặc remote (Kaggle GPU tunnel). Auto-cluster speakers + assign cluster_id |
+| **Voice enrollment + Voiceprint DB** | User enroll giọng 1 lần sau login. Voiceprint (cosine match) tự nhận diện speaker cross-meeting |
+| **Per-recording attendance** | Tick teammate có mặt trong phiên → backend forward count làm min/max-speakers hint cho pyannote (chính xác hơn cho clip ngắn) |
+| **TipTap WYSIWYG Clean editor** | Edit transcript inline với bold/italic/lists/headings + tag chips (commitment/decision/blocker) + auto-save 1.5s |
+| **Karaoke word-sync** | Word-level timestamps từ faster-whisper → highlight từng từ theo audio playback (Notta-style) |
+| **MoM per-recording** | Biên bản sinh cho **1 phiên cụ thể**, lưu `recordings.mom_json`. MoM ưu tiên `edited_text` (đã sửa) thay vì raw |
+| **Project summary** | Tổng kết toàn project = timeline decisions theo `started_at` + narrative LLM aggregate từ N MoM |
+| **MoM language picker** | Chọn VN/EN cho biên bản per-recording (default = ngôn ngữ UI hiện tại) |
+| **Multi-model picker** | Chọn STT (Whisper / PhoWhisper / faster-whisper) + LLM (Gemma 4 / Qwen 3.5 / GPT-OSS) per recording hoặc per meeting |
+
+### Luồng chat agent (active + HITL)
+
+| Feature | Mô tả |
+|---|---|
+| **Chat HITL** | LangGraph 5-node graph: classify intent → propose tool call → **interrupt() chờ user approve** → execute → write back |
+| **Tool registry** | `list_recordings` · `recording_mom` · `search_transcript` · `retrieve` (memory) · `create_task` · `send_email` · `switch_meeting` |
+| **pm-agent A2A** | `create_task` gọi sang external pm-agent (Redmine) qua A2A v0.3 JSON-RPC (`PM_AGENT_URL`) |
+| **MS Graph tools** | `send_email` qua Mail.Send · `find_meeting_availability` qua Calendars.ReadWrite |
+| **Hybrid memory** | Cross-meeting memory: keyword tsvector + bge-m3 vector (1024-dim pgvector) + RRF fusion + optional LLM rerank |
+
+### Collaboration + UI
+
+| Feature | Mô tả |
+|---|---|
+| **O365 Auth** | Real MSAL OAuth2 PKCE (Azure Entra) hoặc mock provider (dev). Session cookie HMAC-signed + AES-256-GCM refresh token at rest |
+| **Sharing model** | Owner / Editor / Viewer per project. Invite by email với autocomplete (`/users/search`) |
+| **Per-recording comments** | Anchor comment vào audio timestamp. Click ▸ M:SS → tua audio đến đó. Sprint 05 |
+| **Conversation insights** | Per-speaker stats: talk ratio, monologues count, longest monologue, pace (wpm), silence vs speaking bar. Sprint 05 |
+| **Floating rail** | 4-button right edge: AI chat · MoM document · Comment · Insights. Mutually exclusive. Sprint 05 |
+| **Sidebar icon-rail collapse** | 56px wide khi đóng — hiện chữ cái project + avatar. Click Mee logo: đóng → mở; mở → về landing. Sprint 05 |
+| **Audio device picker** | Settings cog → chọn mic + loa. Default = OS. Speaker route qua `audio.setSinkId()`. Sprint 05 |
 | **Sidebar context menu** | Hover project → ⋮ → Share / Rename / Pin / Delete. Hover phiên → × delete |
-| **i18n VI/EN** | Toàn bộ UI có 2 ngôn ngữ, switch trong settings |
-| **Theme dark/light** | Persist localStorage. Default = dark (GreenNode aesthetic) |
+| **i18n VI/EN** | Toàn bộ UI có 2 ngôn ngữ, switch trong settings. ~400 keys |
+| **Theme dark/light** | Persist localStorage. Default = dark (GreenNode aesthetic) — radial green glow ở top |
+
+### Infrastructure
+
+| Feature | Mô tả |
+|---|---|
+| **Background tasks** | Celery + RabbitMQ — `gen_mom_task`, `clean_recording_task`, `diarize_recording_task`. Default `pool=solo`; production → `prefork` + concurrency |
+| **R2 object storage** | Audio files + voice samples saved tới Cloudflare R2 (cấu hình `R2_*` env vars). Fallback local disk khi unconfigured |
+| **LangGraph checkpointer** | `AsyncPostgresSaver` resume từ failed node (thread_id = recording_id). MomGraph 4 nodes, ChatGraph 5 nodes |
+| **Vocab learning** | User-edit transcript → cross-project vocab pool → bias Whisper initial_prompt cho recording sau |
 
 ---
 
 ## 🔄 Workflow
 
-### Luồng chính: Tạo Biên bản
+Mee có **2 luồng chạy song song**:
 
 ```mermaid
-flowchart TD
-    A["👤 Click 'Project mới' → tạo Phiên 1"] -->|POST /api/meetings + /recordings| B[(meetings + recordings)]
-    B --> C{Choose input}
+flowchart TB
+    subgraph Auth["🔐 Auth + Enrollment"]
+        L["👤 Landing page"] -->|Click Login| MOCK[Mock O365 / MSAL]
+        MOCK -->|OAuth callback| S[Session cookie]
+        S --> VE{Voice enrolled?}
+        VE -->|No| ENR["🎤 Voice enrollment<br/>/onboard/voice"]
+        ENR -->|POST /voiceprints/enroll| VP[voiceprints table]
+        VP --> VE
+        VE -->|Yes| APP[App /app]
+    end
 
-    C --> D1[📝 Paste text]
-    C --> D2[📁 Upload audio]
-    C --> D3[🎤 Live record]
+    subgraph Flow1["📝 Luồng Transcript (passive)"]
+        APP --> F1A[Create Project<br/>+ Recording]
+        F1A --> F1B{Input}
+        F1B --> P1[📝 Paste text]
+        F1B --> U1[📁 Upload audio]
+        F1B --> R1[🎤 Live record]
+        
+        U1 --> STT[STT]
+        R1 --> WSS[WSS :9091]
+        WSS --> STT
+        P1 --> RAW[Raw transcript]
+        STT --> RAW
+        
+        RAW --> DIA[🔊 Diarize<br/>pyannote]
+        DIA --> CLS[Cluster → speaker<br/>+ cluster_id]
+        
+        CLS --> CLN{Optional}
+        CLN -->|Click Clean| CL[🪶 TipTap Editor<br/>LLM clean + edit]
+        CL -->|PATCH /clean-edited| CLSeg[clean_segments<br/>edited_text]
+        
+        CLS --> MOM[📋 Gen MoM]
+        CLSeg -->|preferred| MOM
+        MOM --> MGraph[🧠 MomGraph 4 nodes]
+        MGraph --> MOMJson[recordings.mom_json]
+        MOMJson --> UI1[MoM Pane]
+        
+        MOM --> MEM[memory_events<br/>+ bge-m3 vector]
+        
+        UI1 --> PS[📊 Project Summary]
+        PS --> PSSum[meetings<br/>project_summary_json]
+    end
 
-    D2 -->|POST /api/transcribe| W{{Whisper API<br/>PhoWhisper L40 / VNG MaaS}}
-    D3 -->|WSS :9091| W
+    subgraph Flow2["💬 Luồng Chat Agent (active + HITL)"]
+        APP --> C1[💬 Chat input]
+        C1 --> CG[🧠 ChatGraph 5 nodes]
+        
+        CG --> C2[Classify intent]
+        C2 --> C3[Propose tool call]
+        C3 --> HITL{"⚠️ HITL<br/>interrupt()"}
+        
+        HITL -->|Approve| EX[Execute tool]
+        HITL -->|Reject| C1
+        
+        EX --> T1[pm-agent A2A<br/>Redmine]
+        EX --> T2[MS Graph<br/>Mail.Send/Calendar]
+        EX --> T3[Internal<br/>list/search]
+        
+        T1 --> WB[Write back]
+        T2 --> WB
+        T3 --> WB
+        WB --> MEM2[memory_events]
+        WB --> C4[Response to UI]
+    end
 
-    D1 --> T[Raw transcript]
-    W --> T
-    T -->|/import-transcript<br/>recording_id| RS[(transcript_segments)]
-
-    RS --> CE{Optional}
-    CE -->|Click 'Clean' tab| TT[🪶 TipTap Editor<br/>LLM clean + user edit]
-    TT -->|PATCH /clean-edited| EDT[(clean_segments.<br/>edited_html<br/>edited_text)]
-
-    RS --> GM
-    EDT -->|preferred| GM[Click 'Biên bản phiên này']
-
-    GM -->|"POST /recordings/{id}/generate-mom"| LG[🧠 MomGraph 4 nodes]
-    LG --> N1[load_transcript<br/>edited_text > raw]
-    N1 --> N2[read_memory<br/>hybrid retrieval]
-    N2 --> N3[generate_mom<br/>Qwen3-8B map-reduce]
-    N3 --> N4[save_results]
-    N4 --> O1[(recordings.mom_json)]
-    N4 --> O2[(memory_events<br/>+ bge-m3 vector)]
-    N4 --> O3[output/MoM_*.md]
-
-    O1 --> UI[📋 MoM Pane render]
-
-    PS["📊 Click 'Tổng kết project'"] -->|/generate-project-summary| PSG[project_summarizer]
-    PSG -->|aggregate all recording.mom_json by started_at ASC| PS2[(meetings.project_summary_json)]
-    PS2 --> UI
-
-    style W fill:#ffe8cc,stroke:#fd7e14
-    style LG fill:#e5dbff,stroke:#862e9c
-    style TT fill:#fff3bf,stroke:#e67700
-    style UI fill:#d3f9d8,stroke:#2f9e44
+    style Auth fill:#e0f2fe,stroke:#0284c7
+    style Flow1 fill:#f0fdf4,stroke:#16a34a
+    style Flow2 fill:#faf5ff,stroke:#9333ea
+    style STT fill:#fff7ed,stroke:#f97316
+    style CLN fill:#fef9c3,stroke:#eab308
+    style MGraph fill:#f3e8ff,stroke:#7c3aed
+    style CG fill:#f3e8ff,stroke:#7c3aed
+    style HITL fill:#fee2e2,stroke:#dc2626
 ```
+
+### Chi tiết từng node
+
+| Node | Vai trò |
+|---|---|
+| **Auth** | O365 OAuth2 PKCE (Azure Entra) hoặc mock provider. Session cookie HMAC-signed |
+| **Voice enrollment** | User đọc slogan → enroll 1 lần → voiceprints table → cosine match cross-meeting |
+| **STT** | VNG MaaS Whisper-large-v3 (default) hoặc self-host faster-whisper |
+| **Diarize** | pyannote 3.1 → cluster → speaker labels. Attendance hint (len(attendees) ±1) cho clip ngắn |
+| **Clean** | LLM transcript cleaner → TipTap editor → user edit → `clean_segments.edited_text` |
+| **MomGraph** | LangGraph 4 nodes: load_transcript → read_memory → generate_mom → save_results |
+| **ChatGraph** | LangGraph 5 nodes: classify → propose → **interrupt()** → execute → write_back |
+| **HITL** | User approve/reject trước khi tool execute (pm-agent, MS Graph, internal) |
+| **pm-agent** | External A2A v0.3 → Redmine task creation |
+| **MS Graph** | Mail.Send, Calendars.ReadWrite |
 
 ### Output ở đâu?
 
@@ -87,7 +243,7 @@ flowchart TD
 
 ---
 
-## 🚀 Cài đặt & chạy
+## Cài đặt & chạy
 
 ### 1. Yêu cầu
 
@@ -97,15 +253,26 @@ flowchart TD
 - Browser hiện đại (Chrome/Firefox/Edge)
 - VNG Cloud MaaS API key HOẶC self-hosted Qwen3 + bge-m3
 
-### 2. Clone & install backend
+### 2. Clone & install backend (Python libs)
 
 ```bash
 git clone <repo-url>
 cd mee-meeting-agent
 
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python -m venv venv                       # tên venv chuẩn của repo là `venv` (KHÔNG phải .venv)
+venv/bin/pip install --upgrade pip
+venv/bin/pip install -r requirements.txt
+
+# BẮT BUỘC: psycopg3 binary cho LangGraph checkpointer (Postgres).
+# Thiếu bước này → server crash: "ImportError: no pq wrapper available / libpq not found".
+venv/bin/pip install "psycopg[binary]"
 ```
+
+> **Lưu ý venv:** mọi lệnh trong README này dùng `venv/bin/...`. Một số script/tài liệu cũ ghi `.venv` —
+> repo đang dùng `venv`. Đừng commit thư mục `venv/` (đã gitignore; commit nhầm → push 50MB → lỗi HTTP 413).
+>
+> **Nếu `psycopg[binary]` không có wheel cho máy bạn**, cài libpq hệ thống thay thế:
+> `sudo apt-get install -y libpq5` (Debian/Ubuntu) hoặc `brew install libpq` (macOS).
 
 ### 3. Cấu hình `.env`
 
@@ -166,37 +333,54 @@ Migrations:
 ```
 
 Server khởi động:
-- **HTTP API** ở `http://localhost:8001`
+- **HTTP API** ở `http://localhost:8002`
 - **WebSocket transcription** ở `ws://localhost:9091`
 
-### 6. Run React frontend (dev mode, recommended)
+### 6. Run React frontend — UI (cài package Node)
+
+Yêu cầu **Node.js ≥ 18** (kiểm tra: `node -v`). Lần đầu phải `npm install` để tải toàn bộ
+package UI (React 18, Vite, TipTap, …) vào `node_modules/` — chỉ cần chạy lại khi `package.json` đổi.
 
 ```bash
 cd meeting_frontend_react
-npm install
-npm run dev
+npm install        # cài dependencies UI (lần đầu, hoặc khi package.json thay đổi)
+npm run dev        # chạy Vite dev server
 ```
 
-Vite dev server ở `http://localhost:5173`. Proxy `/api` → backend `:8001`, `/ws` → `:9091`.
+Vite dev server ở `http://localhost:8001` (trùng host callback OAuth đã đăng ký trên Azure). Proxy `/api` + `/auth` → backend `:8002`, `/ws` → `:9091`.
 
 Build cho production: `npm run build` → `dist/`.
 
-Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8001/`.
+> **Lỗi npm thường gặp:** nếu `npm install` báo xung đột peer-deps → thử `npm install --legacy-peer-deps`.
+> Đừng commit `node_modules/` (đã gitignore). Backend phải chạy trước (`:8002`) thì proxy `/api` mới hoạt động.
 
-### 7. (Optional) Self-host PhoWhisper + pyannote
+Legacy vanilla frontend vẫn ở `meeting_frontend/`, served bởi FastAPI tại `http://localhost:8002/`.
+
+### 7. (Optional) Self-host STT + Diarize
 
 Nếu muốn STT chất lượng cao tiếng Việt + speaker diarization:
 
 ```bash
+# Tùy chọn A: Deploy lên L40 GPU (48GB VRAM)
 cd tools/phowhisper-server
-# Đọc README.md để deploy lên L40
+# Đọc README.md để deploy
+
+# Tùy chọn B: Deploy lên RTX 2080 (11GB VRAM) - tight nhưng doable
+# Xem chi tiết trong HANDOFF.md §7
 ```
 
 Server expose `/v1/audio/transcriptions` OpenAI-compatible. Update `WHISPER_BASE_URL` trong `.env`.
 
+**Hybrid routing** (recommended):
+- Audio < 5 phút → AgentBase CPU runtime
+- Audio > 5 phút → Kaggle GPU tunnel (free)
+- Both unreachable → local CPU fallback
+
+Xem `HANDOFF.md §7` để setup `nhihb-gpu-2080` self-host với SSH tunnel.
+
 ---
 
-## 🎯 Cách dùng (User flow)
+## Cách dùng (User flow)
 
 ### A. Tạo project + phiên đầu tiên
 
@@ -230,13 +414,39 @@ Server expose `/v1/audio/transcriptions` OpenAI-compatible. Update `WHISPER_BASE
 3. Click **"Tổng kết project"** ở MoMPane header
 4. Hiện timeline decisions theo `started_at` của từng phiên + narrative
 
-### E. Quản lý
+### E. Voice enrollment (first-time)
+
+1. Login lần đầu → redirect `/onboard/voice`
+2. Đọc slogan (VI + EN, ~15-30s): `AI Cloud hiệu năng cao dành riêng cho doanh nghiệp số`
+3. Click record → cho phép mic → đọc xong → stop
+4. Nghe playback → submit → voiceprints enrolled
+5. Từ giờ speaker sẽ tự nhận diện cross-meeting qua cosine match
+
+### F. Comments + Insights
+
+1. **Comments**: Trong workspace phiên → click 💬 floating rail → gõ comment → nhấn Ctrl+Enter
+2. Comment anchor vào `audio.currentTime` → click ⏱ M:SS chip → tua audio đến đó
+3. **Insights**: Click 📊 floating rail → xem per-speaker stats (talk ratio, monologues, longest monologue, pace wpm, silence bar)
+
+### G. Members + Invite
+
+1. Click 👥 Members panel trong sidebar → xem danh sách
+2. **Invite**: Gõ email → autocomplete `/users/search` → chọn → role (Editor/Viewer)
+3. **Per-recording attendance**: Tick checkbox teammate có mặt trong phiên → backend dùng count làm min/max-speakers cho pyannote
+
+### H. Audio devices
+
+1. Click ⚙️ Settings (gear icon) → **Audio devices**
+2. Chọn mic + speaker từ dropdown (lọc duplicate browser aliases)
+3. Mic dùng cho live recording, speaker dùng cho playback trong NottaCleanView
+
+### I. Quản lý
 
 - **Hover project** → ⋮ menu: Share / Pin / Rename / Delete (red)
 - **Hover phiên** → × delete
-- **Settings (gear icon)** → Theme (light/dark) + Language (VI/EN)
-- **Chat toggle (góc phải)** → mở/đóng chat panel (HITL chat agent)
-- **Sidebar toggle (≡)** → collapse sidebar
+- **Settings (gear icon)** → Theme (light/dark) + Language (VI/EN) + Audio devices
+- **Floating rail (phải)** → AI chat / MoM doc / Comments / Insights (mutually exclusive)
+- **Sidebar collapse** → click Mee logo khi collapsed → mở; khi open → về landing
 
 ---
 
@@ -245,51 +455,82 @@ Server expose `/v1/audio/transcriptions` OpenAI-compatible. Update `WHISPER_BASE
 ```mermaid
 flowchart TB
     subgraph FE["🖥 Frontend"]
-        FE1[React 18 + TS + Vite<br/>+ TipTap editor]
+        FE1[React 18 + TS + Vite<br/>+ TipTap + Zustand]
         FE2[Legacy vanilla JS<br/>meeting_frontend/]
     end
 
     subgraph BE["⚙️ FastAPI Backend"]
+        AUTH[Auth<br/>mock · microsoft]
         API[API endpoints<br/>meetings.py · chat.py]
-        SVC[Services<br/>memory · cleaner · summarizer · embedding · reranker]
+        SVC[Services<br/>memory · cleaner · summarizer<br/>embedding · reranker · vocab]
+        CEL[Celery tasks<br/>gen_mom · clean · diarize]
         LG[LangGraph<br/>MomGraph · ChatGraph<br/>AsyncPostgresSaver]
-        WSP[WhisperLive streaming<br/>maas_backend.py]
+        WSP[WebSocket<br/>:9091 live STT]
     end
 
-    subgraph EXT["☁️ AI services"]
-        STT[STT cluster L40<br/>PhoWhisper + pyannote<br/>OR VNG MaaS Whisper]
-        LLM[LLM<br/>Qwen3-8B self-hosted vLLM<br/>OR VNG MaaS]
-        EMB[bge-m3 embedding<br/>VNG MaaS]
+    subgraph MQ["🐇 Message Queue"]
+        RABBIT[RabbitMQ]
     end
 
-    PG[("🗄 Postgres + pgvector<br/>13 tables")]
+    subgraph EXT["☁️ External services"]
+        STT[VNG MaaS Whisper<br/>OR self-host faster-whisper]
+        LLM[VNG MaaS<br/>Qwen3 / Gemma / GPT-OSS<br/>OR self-host vLLM]
+        EMB[VNG MaaS<br/>bge-m3 (1024-dim)]
+        RER[VNG MaaS<br/>bge-reranker]
+        PM[pm-agent<br/>A2A v0.3 Redmine]
+        MS[Microsoft Graph<br/>Mail.Send / Calendar]
+        R2[Cloudflare R2<br/>audio + voice samples]
+    end
 
-    FE -->|HTTP REST<br/>WebSocket| BE
+    subgraph GPU["🚀 Self-host GPU"]
+        KAGGLE[Kaggle T4<br/>pyannote remote]
+    end
+
+    PG[("🗄 Postgres + pgvector<br/>15 tables")]
+
+    FE -->|HTTP / WSS| BE
+    AUTH -.->|OAuth callback| FE
     API --> SVC
     API --> LG
+    SVC --> CEL
+    CEL --> RABBIT
+    RABBIT --> CEL
     LG --> SVC
     SVC --> PG
     LG --> PG
     WSP --> STT
     SVC --> EMB
+    SVC --> RER
     SVC --> LLM
     LG --> LLM
+    SVC --> R2
+    CEL --> KAGGLE
+    LG --> PM
+    LG --> MS
 
     style FE fill:#d0ebff,stroke:#1971c2
     style BE fill:#fff3bf,stroke:#e67700
+    style MQ fill:#ffedd5,stroke:#ea580c
     style EXT fill:#ffe8cc,stroke:#fd7e14
+    style GPU fill:#fce7f3,stroke:#db2777
     style PG fill:#e7f5ff,stroke:#1971c2
 ```
 
-### DB Schema (13 tables)
+### DB Schema (15 tables)
 
 | Cấp | Table | Description |
 |---|---|---|
-| 1 | `meetings` | Project — title, attendees, is_pinned, project_summary_json |
-| 2 | `recordings` | Phiên họp — session_label, started_at, mom_json, clean_segments |
-| 3 | `transcript_segments` | Raw segments per câu — seq, original_text, edited_text |
-| Side | `users` · `meeting_members` · `memory_events` (+ embedding) | Auth + sharing + cross-meeting memory |
-| Chat | `chat_sessions` · `chat_messages` · `pending_actions` · `audit_log` | Chat HITL |
+| 1 | `users` | Auth — email, display_name, avatar_url, voice_enrolled, ms_tenant_id, ms_oid |
+| 1 | `voiceprints` | User voice embeddings (wespeaker 256-d) |
+| 2 | `meetings` | Project — title, attendees, is_pinned, project_summary_json, vocab_hints, stt_model, llm_model |
+| 2 | `meeting_members` | Owner / Editor / Viewer per user × meeting |
+| 3 | `recordings` | Phiên — session_label, started_at, mom_json, clean_segments, attendees, vocab_hints |
+| 3 | `transcript_segments` | Raw STT — seq, original_text, edited_text, speaker, cluster_id, words[] (start_ms/end_ms) |
+| 3 | `recording_comments` | Anchor timestamp + text (Sprint 05) |
+| 3 | `speaker_samples` | 3s WAV per cluster for voice preview |
+| Side | `memory_events` | Cross-meeting facts + bge-m3 vector(1024) + tsvector |
+| Chat | `chat_sessions` · `chat_messages` · `pending_actions` | Chat HITL |
+| Vocab | `vocab_pool` | Learned terms from user edits |
 | LangGraph | `checkpoints` · `checkpoint_writes` · `checkpoint_blobs` | Resume state |
 
 ---
@@ -322,7 +563,7 @@ mee-meeting-agent/
 │
 ├── meeting_frontend_react/           # New React frontend (recommended)
 │   ├── package.json                  # Vite + React 18 + TS + TipTap
-│   ├── vite.config.ts                # Proxy /api → :8001, /ws → :9091
+│   ├── vite.config.ts                # Vite :8001, proxy /api+/auth → :8002, /ws → :9091
 │   ├── public/audioprocessor.js      # AudioWorklet PCM resampler
 │   └── src/
 │       ├── App.tsx
@@ -372,7 +613,7 @@ mee-meeting-agent/
 
 ---
 
-## 🧪 Test workflow nhanh
+## Test workflow nhanh
 
 ```bash
 # Terminal 1: backend
