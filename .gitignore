@@ -3,6 +3,11 @@ output/
 __pycache__/
 *.pyc
 .greennode.json
+.greennode_runtime.json
+.mcp_redmine_tools_cache.json
+AGENTS.md
+AGENT.md
+logs/
 .agentbase/
 .dockerignore
 venv
