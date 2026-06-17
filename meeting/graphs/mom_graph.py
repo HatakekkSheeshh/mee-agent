@@ -56,6 +56,9 @@ class MomState(TypedDict, total=False):
     # ── Input ──
     recording_id: str
     output_dir: str
+    # MoM output language ("vi" / "en"). Resolved by run_mom_graph from
+    # recording.mom_language → meeting.mom_language → request body → "vi".
+    mom_language: str
 
     # ── Filled by load_transcript ──
     meeting_id: str
@@ -93,42 +96,130 @@ def make_load_transcript(session: AsyncSession):
         if not meeting:
             return {"error": f"Parent meeting {recording.meeting_id} not found"}
 
-        # Prefer user-edited clean transcript (TipTap WYSIWYG output) if it
-        # exists — that's the curated source. Fall back to raw joined segments.
+        # Transcript source priority (best → worst):
+        #   1. User-edited clean (TipTap output) — curated by the user
+        #   2. LLM-cleaned segments with speaker labels — already attributed,
+        #      filler-stripped, and structured. Big quality bump over raw.
+        #   3. Raw joined segments from DB — Whisper output with no cleanup.
         clean = recording.clean_segments or {}
+        clean_segs = clean.get("segments") or []
+
+        # Race-condition guard: when the user clicks Generate MoM while the
+        # background cleaner is still running on this recording, clean_segments
+        # is null → we'd otherwise fall through to raw segments (no
+        # cluster_mapping → MoM cites "SPEAKER_NN" instead of names). Wait
+        # for the cleaner if it's in-flight, then re-fetch.
+        if not clean_segs:
+            try:
+                from meeting.services.clean_orchestrator import (
+                    is_inflight, wait_for_inflight,
+                )
+                if is_inflight(recording_id):
+                    logger.info(
+                        f"[Node load_transcript] cleaner is in-flight, "
+                        f"waiting up to 5 min before reading transcript"
+                    )
+                    await wait_for_inflight(recording_id, timeout_s=300)
+                    await session.refresh(recording)
+                    clean = recording.clean_segments or {}
+                    clean_segs = clean.get("segments") or []
+                    logger.info(
+                        f"[Node load_transcript] cleaner done, "
+                        f"got {len(clean_segs)} clean segments"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[Node load_transcript] wait_for_cleaner failed "
+                    f"(non-fatal): {e}"
+                )
+
         edited = (clean.get("edited_text") or "").strip()
+        # cluster_mapping maps raw pyannote cluster id ("SPEAKER_00") →
+        # human name ("Duy Anh"). Populated by the cleaner LLM (context
+        # inference) + by user save in SpeakerMapper (voiceprint bind).
+        # Apply BEFORE passing to MoM LLM so attribution lands on real
+        # names — without this, MoM output cites raw "SPEAKER_00" labels
+        # which is the bug users see after renaming.
+        cluster_mapping = clean.get("cluster_mapping") or {}
+
+        def _resolve_speaker(raw: str) -> str:
+            if not raw:
+                return "Unknown"
+            mapped = cluster_mapping.get(raw)
+            # Empty string / "Unknown" mapping → fall back to raw cluster id
+            # so the LLM still has SOME label for that turn.
+            return mapped if mapped and mapped != "Unknown" else raw
+
         if edited:
+            # Apply cluster_mapping to edited_text too — TipTap export may
+            # carry raw "SPEAKER_NN: text" labels even when the rendered UI
+            # showed mapped names (depends on how the editor serialises).
+            # Regex-replace each cluster id at line-start to its mapped name.
             transcript = edited
-            logger.info(f"[Node load_transcript] using user-edited clean ({len(edited)} chars)")
+            if cluster_mapping:
+                import re as _re
+                for raw_id, name in cluster_mapping.items():
+                    if not name or name == "Unknown":
+                        continue
+                    # "SPEAKER_00: ..." → "Huyền: ..." (anchor to line start
+                    # + literal colon so we don't replace mid-sentence).
+                    transcript = _re.sub(
+                        rf"(^|\n){_re.escape(raw_id)}\s*:",
+                        rf"\1{name}:",
+                        transcript,
+                    )
+            logger.info(
+                f"[Node load_transcript] using user-edited clean "
+                f"({len(edited)} chars, applied {len(cluster_mapping)} mappings)"
+            )
+        elif clean_segs:
+            # Assemble "Speaker: text" lines from the LLM-cleaned segments.
+            # MoM-gen LLM finds attribution + decisions + action items much
+            # easier from this than from raw.
+            transcript = "\n".join(
+                f"{_resolve_speaker(seg.get('speaker') or '')}: "
+                f"{seg.get('text', '').strip()}"
+                for seg in clean_segs
+                if seg.get("text", "").strip()
+            )
+            logger.info(
+                f"[Node load_transcript] using LLM-cleaned segments "
+                f"({len(clean_segs)} blocks, {len(transcript)} chars, "
+                f"cluster_mapping={cluster_mapping})"
+            )
         else:
             transcript = await repo.join_recording_transcript(
                 session, uuid.UUID(recording_id)
             )
+            logger.info(f"[Node load_transcript] using raw segments ({len(transcript)} chars)")
         if not transcript.strip():
             return {"error": "No transcript segments for this recording"}
 
         logger.info(f"[Node load_transcript] loaded {len(transcript)} chars")
 
-        # Pack meta for downstream nodes — title is project + session label
+        # Pack meta for downstream nodes. Per-meeting-event fields live on
+        # recording now (migration 0012). Project (meeting) keeps only title +
+        # vocab. recording.title overrides session_label if set.
         attendees_str = ""
-        if meeting.attendees:
+        if recording.attendees:
             attendees_str = ", ".join(
                 f"{a.get('name', '')} ({a.get('department', '')})".strip()
-                for a in meeting.attendees if isinstance(a, dict)
+                for a in recording.attendees if isinstance(a, dict)
             )
-        rec_label = recording.session_label or "Phiên họp"
+        rec_label = recording.title or recording.session_label or "Phiên họp"
         title = f"{meeting.title} — {rec_label}" if meeting.title else rec_label
         meta = {
             "title": title,
             "project_title": meeting.title,
             "session_label": rec_label,
-            "purpose": meeting.purpose or "",
-            "date": recording.started_at.isoformat() if recording.started_at else (
-                meeting.date.isoformat() if meeting.date else ""
+            "purpose": recording.purpose or "",
+            "date": (
+                recording.date.isoformat() if recording.date
+                else (recording.started_at.isoformat() if recording.started_at else "")
             ),
-            "chaired_by": meeting.chaired_by or "",
-            "noted_by": meeting.noted_by or "Mee Agent",
-            "venue": meeting.venue or "",
+            "chaired_by": recording.chaired_by or "",
+            "noted_by": recording.noted_by or "Mee Agent",
+            "venue": recording.venue or "",
             "attendees": attendees_str,
             "topic": meeting.topic or "",
         }
@@ -171,7 +262,17 @@ def make_read_memory(memory_service: MemoryService, session: AsyncSession):
 
 
 async def generate_mom(state: MomState) -> dict:
-    """Node 3: LLM call với transcript + memory_context."""
+    """Node 3: LLM call với transcript + memory_context.
+
+    CRITICAL: generate_meeting_notes uses the OpenAI SDK *synchronously*
+    (it's not async). Calling it directly here would block FastAPI's event
+    loop for the entire 1-3 minute LLM run — every concurrent request (other
+    users, clean-status polls, sidebar fetches, even just clicking another
+    project) would pile up pending and the UI would freeze. Wrap in
+    asyncio.to_thread so the blocking call runs in the thread pool while
+    the event loop stays free to serve other requests.
+    """
+    import asyncio as _aio
     meta = state.get("meeting_meta", {})
     logger.info(
         f"[Node generate_mom] title={meta.get('title')!r}, "
@@ -179,7 +280,11 @@ async def generate_mom(state: MomState) -> dict:
         f"memory_events={len(state.get('memory_context', []))}"
     )
 
-    notes = generate_meeting_notes(
+    # MoM language resolver: recording → meeting → request body → "vi"
+    # (the state's "mom_language" is set by run_mom_graph caller).
+    lang = state.get("mom_language") or "vi"
+    notes = await _aio.to_thread(
+        generate_meeting_notes,
         transcript=state["transcript"],
         title=meta.get("title", ""),
         purpose=meta.get("purpose", ""),
@@ -188,6 +293,7 @@ async def generate_mom(state: MomState) -> dict:
         noted_by=meta.get("noted_by", "Mee Agent"),
         venue=meta.get("venue", ""),
         attendees=meta.get("attendees", ""),
+        lang=lang,
     )
 
     if "error" in notes:
@@ -342,12 +448,35 @@ async def run_mom_graph(
     output_dir: str = "output",
     checkpointer=None,
     memory_service: Optional[MemoryService] = None,
+    mom_language: Optional[str] = None,
 ) -> MomState:
     """
     Invoke the graph for 1 recording. thread_id = recording_id → per-recording resume.
+
+    `mom_language`: ui_lang fallback when neither recording nor meeting has
+    a value set. Resolved here so generate_mom node just reads state.
     """
     if memory_service is None:
         memory_service = get_memory_service()
+
+    # Resolver: recording.mom_language → meeting.mom_language → caller hint → "vi".
+    # We need the DB to know recording/meeting values — fetch quickly here.
+    import uuid as _uuid
+    from meeting.db import repositories as repo
+    try:
+        rid = _uuid.UUID(recording_id)
+        rec = await repo.get_recording(session, rid)
+        if rec:
+            mt = await repo.get_meeting(session, rec.meeting_id)
+            resolved_lang = (
+                (rec.mom_language or "").strip()
+                or (mt.mom_language if mt else None and mt.mom_language.strip())
+                or (mom_language or "vi")
+            )
+        else:
+            resolved_lang = mom_language or "vi"
+    except Exception:
+        resolved_lang = mom_language or "vi"
 
     graph = build_mom_graph(session, memory_service, checkpointer)
 
@@ -355,6 +484,7 @@ async def run_mom_graph(
     initial_state: MomState = {
         "recording_id": recording_id,
         "output_dir": output_dir,
+        "mom_language": resolved_lang,
     }
 
     logger.info(f"=== Running MomGraph for recording {recording_id} ===")

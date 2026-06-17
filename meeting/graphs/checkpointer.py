@@ -90,3 +90,19 @@ async def close_checkpointer() -> None:
         _pool = None
         _checkpointer = None
         logger.info("PostgresSaver pool closed.")
+
+
+def reset_checkpointer() -> None:
+    """Drop the cached checkpointer + pool references WITHOUT awaiting close().
+
+    Use case: Celery workers re-create the event loop per task. The
+    psycopg3 AsyncConnectionPool stored on `_pool` is bound to whatever
+    loop first called `init_checkpointer()`. Subsequent tasks on a fresh
+    loop must re-init from scratch, but `await _pool.close()` would need
+    the original (dead) loop. So we just nuke the references — the
+    orphaned pool gets GC'd, OS reclaims the TCP sockets a few seconds
+    later. Same `close=False` pattern as SQLAlchemy engine.dispose.
+    """
+    global _pool, _checkpointer
+    _pool = None
+    _checkpointer = None

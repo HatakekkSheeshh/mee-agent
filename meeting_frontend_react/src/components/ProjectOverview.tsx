@@ -32,9 +32,9 @@ export function ProjectOverview() {
     return (
       <div className="project-overview">
         <div className="project-overview-empty muted">
-          Project này chưa có phiên họp nào.
+          {t("projectOverview.empty.title")}
           <br />
-          Bấm "+ Thêm phiên họp" trong sidebar để bắt đầu.
+          {t("projectOverview.empty.body")}
         </div>
       </div>
     );

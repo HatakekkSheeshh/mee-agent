@@ -10,6 +10,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import requests
@@ -149,6 +150,238 @@ class ServeClientMaaS(ServeClientBase):
             if int(total_dur) % 5 == 0 and int(total_dur) != getattr(self, '_last_log', 0):
                 self._last_log = int(total_dur)
                 logging.info(f"Audio buffer: {total_dur:.1f}s total, {unproc:.1f}s unprocessed, {len(frame_np)} new samples")
+
+    def post_record_diarize(self):
+        """After END_OF_AUDIO, run speaker diarization on the buffered audio
+        and push cluster_embeddings + speaker-tagged diarized_text to the
+        backend so voiceprint enrollment + cross-meeting recognition work
+        for live recordings — parity with the file-upload path.
+
+        Two-tier execution:
+          1. Try PhoWhisper server (PHOWHISPER_DIARIZE_URL) — higher quality,
+             single API call, returns segments+embeddings+text.
+          2. Fallback to local pyannote 3.1 (meeting.services.local_diarize)
+             when PhoWhisper is unreachable. CPU inference, ~10x realtime.
+             Builds diarized_text by joining transcript_segments from the
+             backend and proportionally splitting across pyannote turns.
+
+        Called once per client lifecycle from run_meeting.py's recv_audio
+        finally-block. Safe to no-op if audio buffer is empty.
+        """
+        with self.audio_lock:
+            if self.all_audio.size == 0:
+                logging.info("[post-record diarize] no audio buffered, skip")
+                return
+            audio_copy = self.all_audio.copy()
+        duration = len(audio_copy) / self.RATE
+        if duration < 2.0:
+            logging.info(f"[post-record diarize] audio too short ({duration:.1f}s), skip")
+            return
+
+        backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
+        diarize_url = (
+            os.getenv("PHOWHISPER_DIARIZE_URL")
+            or self.maas_base_url
+        ).rstrip("/")
+
+        # Try PhoWhisper first. On any failure, fall through to local pyannote.
+        phowhisper_ok = False
+        if diarize_url:
+            phowhisper_ok = self._try_phowhisper_diarize(
+                audio_copy, duration, diarize_url, backend_url
+            )
+
+        if not phowhisper_ok:
+            logging.info(
+                "[post-record diarize] PhoWhisper unavailable — trying "
+                "local pyannote fallback"
+            )
+            self._try_local_pyannote_diarize(audio_copy, duration, backend_url)
+
+    def _try_phowhisper_diarize(
+        self, audio_copy, duration, diarize_url: str, backend_url: str
+    ) -> bool:
+        """PhoWhisper path. Returns True iff diarization succeeded and was
+        posted to the backend. False on any failure → caller runs fallback."""
+        try:
+            # Assemble WAV in-memory (16kHz mono PCM_16).
+            wav_buf = io.BytesIO()
+            sf.write(wav_buf, audio_copy, self.RATE, format="WAV", subtype="PCM_16")
+            wav_buf.seek(0)
+            wav_bytes = wav_buf.read()
+            mb = len(wav_bytes) / 1024 / 1024
+            logging.info(
+                f"[post-record diarize] uploading {duration:.1f}s ({mb:.1f}MB) "
+                f"to {diarize_url} for client_uid={self.client_uid}"
+            )
+            resp = requests.post(
+                f"{diarize_url}/v1/audio/transcriptions",
+                files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+                data={
+                    "model": os.getenv("WHISPER_MODEL", "phowhisper"),
+                    "language": self.language or "vi",
+                    "response_format": "json",
+                },
+                headers={"Authorization": f"Bearer {self.maas_api_key}"} if self.maas_api_key else {},
+                timeout=600,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            embeddings = payload.get("cluster_embeddings") or {}
+            phowhisper_segments = payload.get("segments") or []
+            if not embeddings:
+                logging.info("[post-record diarize] no cluster_embeddings returned (mono speaker or audio too short)")
+                return False
+
+            # Format diarized segments as "SPEAKER_NN: text" lines so the
+            # cleaner LLM gets speaker-tagged input (instead of the untagged
+            # MaaS Whisper stream that the FE saved during recording).
+            #
+            # PhoWhisper segments shape: [{start, end, speaker, text}, ...]
+            # Already in time order. We merge consecutive same-speaker turns
+            # so the output isn't fragmented into one-sentence chunks.
+            diarized_text_lines: list[str] = []
+            current_speaker: Optional[str] = None
+            current_buf: list[str] = []
+            for seg in phowhisper_segments:
+                spk = (seg.get("speaker") or "").strip() or "Unknown"
+                txt = (seg.get("text") or "").strip()
+                if not txt:
+                    continue
+                if spk == current_speaker:
+                    current_buf.append(txt)
+                else:
+                    if current_buf and current_speaker:
+                        diarized_text_lines.append(f"{current_speaker}: {' '.join(current_buf)}")
+                    current_speaker = spk
+                    current_buf = [txt]
+            if current_buf and current_speaker:
+                diarized_text_lines.append(f"{current_speaker}: {' '.join(current_buf)}")
+            diarized_text = "\n\n".join(diarized_text_lines) if diarized_text_lines else None
+
+            # POST embeddings + diarized text to backend so /clean uses the
+            # speaker-tagged version as authoritative input.
+            r = requests.post(
+                f"{backend_url}/api/recordings/{self.client_uid}/diarize-result",
+                json={
+                    "cluster_embeddings": embeddings,
+                    "diarized_text": diarized_text,
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+            logging.info(
+                f"[post-record diarize] saved {len(embeddings)} cluster embeddings "
+                f"({list(embeddings.keys())}) + {len(diarized_text_lines)} diarized turns "
+                f"for recording {self.client_uid}"
+            )
+            return True
+        except Exception as e:
+            logging.warning(f"[post-record diarize] PhoWhisper failed: {e}")
+            return False
+
+    def _try_local_pyannote_diarize(
+        self, audio_copy, duration, backend_url: str
+    ) -> None:
+        """Local pyannote 3.1 fallback. Runs on CPU (~10x realtime), uses
+        the audio already buffered in self.all_audio + fetches transcript
+        text from the backend to split proportionally across pyannote turns.
+
+        Saves the same {cluster_embeddings, diarized_text} payload to
+        /diarize-result so /clean treats it identically to the PhoWhisper
+        path. Requires HF_TOKEN env + pyannote terms accepted on HF.
+        """
+        # Lazy import — pyannote ~5s init + heavy deps; don't pull at module
+        # load time so the WebSocket server starts fast even without it.
+        try:
+            from meeting.services.local_diarize import (
+                diarize_audio, split_text_proportional,
+            )
+        except Exception as e:
+            logging.warning(
+                f"[post-record diarize] local pyannote unavailable ({e}). "
+                f"Skip diarize — cleaner will see untagged text."
+            )
+            return
+
+        try:
+            # Pyannote expects bytes (WAV/MP3). Encode the numpy buffer.
+            wav_buf = io.BytesIO()
+            sf.write(wav_buf, audio_copy, self.RATE, format="WAV", subtype="PCM_16")
+            wav_bytes = wav_buf.getvalue()
+
+            logging.info(
+                f"[post-record diarize] running local pyannote on {duration:.1f}s "
+                f"audio for client_uid={self.client_uid} (CPU ~{duration/10:.0f}s ETA)"
+            )
+            result = diarize_audio(wav_bytes, sample_rate=self.RATE)
+            turns = result.get("turns", [])
+            embeddings = result.get("cluster_embeddings", {})
+            sample_audio_b64 = result.get("sample_audio_b64") or {}
+            if not turns or not embeddings:
+                logging.info(
+                    "[post-record diarize] local pyannote returned empty "
+                    "(mono speaker / no HF_TOKEN / model load failed) — skip"
+                )
+                return
+
+            # Build diarized_text by fetching transcript_segments and splitting
+            # proportionally across pyannote turns (same trick as file-upload
+            # path when MaaS Whisper returns text-only).
+            diarized_text = None
+            try:
+                rt = requests.get(
+                    f"{backend_url}/api/recordings/{self.client_uid}/transcript",
+                    timeout=15,
+                )
+                rt.raise_for_status()
+                segs = rt.json().get("segments", []) or []
+                joined = " ".join(
+                    (s.get("text") or "").strip() for s in segs if s.get("text")
+                ).strip()
+                if joined:
+                    split = split_text_proportional(joined, turns)
+                    # Merge consecutive same-speaker turns same as PhoWhisper path.
+                    lines, cur_spk, cur_buf = [], None, []
+                    for s in split:
+                        spk = s.get("speaker") or "Unknown"
+                        txt = (s.get("text") or "").strip()
+                        if not txt:
+                            continue
+                        if spk == cur_spk:
+                            cur_buf.append(txt)
+                        else:
+                            if cur_buf and cur_spk:
+                                lines.append(f"{cur_spk}: {' '.join(cur_buf)}")
+                            cur_spk = spk
+                            cur_buf = [txt]
+                    if cur_buf and cur_spk:
+                        lines.append(f"{cur_spk}: {' '.join(cur_buf)}")
+                    diarized_text = "\n\n".join(lines) if lines else None
+            except Exception as e:
+                logging.warning(
+                    f"[post-record diarize] fetch transcript for text-split failed "
+                    f"({e}); saving embeddings only"
+                )
+
+            r = requests.post(
+                f"{backend_url}/api/recordings/{self.client_uid}/diarize-result",
+                json={
+                    "cluster_embeddings": embeddings,
+                    "diarized_text": diarized_text,
+                    "sample_audio_b64": sample_audio_b64,
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+            logging.info(
+                f"[post-record diarize] LOCAL pyannote saved "
+                f"{len(embeddings)} clusters ({list(embeddings.keys())}) + "
+                f"{len(diarized_text.split(chr(10) + chr(10))) if diarized_text else 0} "
+                f"turns for recording {self.client_uid}"
+            )
+        except Exception as e:
+            logging.exception(f"[post-record diarize] local pyannote failed: {e}")
 
     def speech_to_text(self):
         """

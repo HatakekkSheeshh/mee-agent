@@ -3,12 +3,15 @@ FastAPI application for the Meeting Note Agent.
 Serves the web UI, handles note generation requests, and provides Markdown downloads.
 """
 import io
+import json
 import logging
 import os
 import threading
 import uuid
 from datetime import datetime
+from typing import Optional
 
+import httpx
 import requests
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -21,6 +24,8 @@ from contextlib import asynccontextmanager
 
 from meeting.api.chat import router as chat_router
 from meeting.api.meetings import router as meetings_router
+from meeting.api.voiceprints import router as voiceprints_router
+from meeting.auth import auth_router
 from meeting.graphs import close_checkpointer, init_checkpointer
 from meeting.memory_client import save_meeting_events
 from meeting.note_generator import generate_meeting_notes
@@ -64,7 +69,10 @@ class CorrectionRequest(BaseModel):
 
 
 WHISPER_FILE_SIZE_LIMIT = 24 * 1024 * 1024  # 24MB safe under Whisper 25MB hard limit
-CHUNK_DURATION_SEC = 10 * 60  # 10-min chunks → ~19MB at 16kHz mono PCM16
+CHUNK_DURATION_SEC = 5 * 60  # 5-min chunks → ~9.5MB at 16kHz mono PCM16.
+# Was 10 min — shrunk because Whisper large-v3 has a ~5% chance per chunk
+# of getting stuck in a repetition loop on Vietnamese; smaller chunks limit
+# the damage when one loops + reduce odds proportionally to chunk length.
 
 # Hallucination words list (Whisper sometimes outputs these from silence/noise)
 WHISPER_HALLUCINATIONS = [
@@ -83,6 +91,117 @@ def _filter_hallucinations(text: str) -> str:
     return text
 
 
+def _strip_repetition_loops(
+    text: str,
+    sent_min_repeats: int = 5,
+    word_min_repeats: int = 8,
+    degenerate_unique_ratio: float = 0.05,
+) -> str:
+    """Detect + cut Whisper repetition loops within a chunk.
+
+    Whisper large-v3 has three failure modes we guard against:
+
+      1) Same SENTENCE repeated 20-50× ("Trên đó có gì không? Trên đó…")
+         → split on .!?\\n, cut runs ≥ sent_min_repeats.
+
+      2) Same WORD repeated 100-1000× without sentence boundaries
+         ("direct direct direct…", "earlier earlier earlier…",
+         "Number Number Number…"). Splitting by .!?\\n leaves these
+         intact because they're a single long run-on "sentence".
+         → tokenise on whitespace, cut runs ≥ word_min_repeats.
+
+      3) Whole chunk is degenerate gibberish (unique_words/total < 0.05
+         means the chunk is 95%+ a single token loop). Even after trimming
+         the loop, almost no real content remains.
+         → drop the entire chunk, replace with a marker.
+    """
+    import re
+    if not text:
+        return text
+
+    # ─── Pass 1: word-level loop trim ──────────────────────────────
+    tokens = text.split()
+    if len(tokens) >= word_min_repeats:
+        kept_tokens: list[str] = []
+        i = 0
+        cut = False
+        while i < len(tokens):
+            tok = tokens[i].lower().strip(".,!?:;\"'()[]")
+            j = i + 1
+            while (
+                j < len(tokens)
+                and tokens[j].lower().strip(".,!?:;\"'()[]") == tok
+            ):
+                j += 1
+            run = j - i
+            if run >= word_min_repeats and tok:
+                kept_tokens.append(tokens[i])
+                logging.warning(
+                    f"[whisper] word-loop detected: '{tok}' "
+                    f"repeated {run}× — keeping 1 of run"
+                )
+                cut = True
+                i = j
+            else:
+                kept_tokens.extend(tokens[i:j])
+                i = j
+        text = " ".join(kept_tokens)
+        if cut:
+            text += " […repetition loop trimmed]"
+
+    # ─── Pass 2: sentence-level loop trim ──────────────────────────
+    sents = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    sents = [s for s in (s.strip() for s in sents) if s]
+    if len(sents) >= sent_min_repeats:
+        def _norm(s: str) -> str:
+            return re.sub(r"[\s\W]+", "", s.lower())
+        kept: list[str] = []
+        i = 0
+        cut_at = None
+        while i < len(sents):
+            s = sents[i]
+            norm = _norm(s)
+            if not norm:
+                kept.append(s)
+                i += 1
+                continue
+            j = i + 1
+            while j < len(sents) and _norm(sents[j]) == norm:
+                j += 1
+            run = j - i
+            if run >= sent_min_repeats:
+                kept.append(s)
+                cut_at = j
+                logging.warning(
+                    f"[whisper] sentence-loop detected: '{s[:60]}…' "
+                    f"repeated {run}× — trimming chunk"
+                )
+                break
+            kept.extend(sents[i:j])
+            i = j
+        text = " ".join(kept)
+        if cut_at is not None and "[…repetition loop trimmed]" not in text:
+            text += " […repetition loop trimmed]"
+
+    # ─── Pass 3: degenerate-chunk drop ─────────────────────────────
+    # If after trimming the chunk still has terrible token diversity, it
+    # was hopelessly gibberish to start with — drop it entirely.
+    final_tokens = [
+        t.lower().strip(".,!?:;\"'()[]") for t in text.split() if t.strip()
+    ]
+    if len(final_tokens) >= 20:
+        unique_ratio = len(set(final_tokens)) / len(final_tokens)
+        if unique_ratio < degenerate_unique_ratio:
+            logging.warning(
+                f"[whisper] degenerate chunk dropped — only "
+                f"{len(set(final_tokens))}/{len(final_tokens)} unique tokens "
+                f"({unique_ratio:.1%})"
+            )
+            return "[chunk dropped — Whisper hallucination loop, no recoverable content]"
+
+    return text
+
+
 def _call_whisper_api(
     audio_bytes: bytes,
     filename: str,
@@ -92,8 +211,12 @@ def _call_whisper_api(
     prompt: str,
     language: str,
     timeout: int = 120,
-) -> str:
-    """Single Whisper API call. Returns transcribed text (filtered)."""
+) -> dict:
+    """Single Whisper API call. Returns full dict:
+        {text, segments?, cluster_embeddings?, language?}
+    PhoWhisper-server includes segments + cluster_embeddings; VNG MaaS Whisper
+    returns only text. Caller handles both.
+    """
     resp = requests.post(
         f"{base_url}/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {api_key}"},
@@ -103,12 +226,22 @@ def _call_whisper_api(
             "language": language,
             "response_format": "json",
             "prompt": prompt,
+            # NOTE: we deliberately do NOT pin temperature here. The Whisper
+            # paper (Sec. 4.5) defines a cascading fallback — start at temp=0,
+            # and if the chunk fails compression_ratio>2.4 or logprob<-1.0
+            # (signals of repetition loop), retry at 0.2, 0.4, 0.6, 0.8.
+            # Forcing temperature=0 disables that fallback and traps the
+            # decoder in the loop with no way out. The server's default does
+            # the cascading automatically.
         },
         timeout=timeout,
     )
     resp.raise_for_status()
-    text = resp.json().get("text", "")
-    return _filter_hallucinations(text)
+    payload = resp.json()
+    text = payload.get("text", "")
+    text = _strip_repetition_loops(text)
+    payload["text"] = _filter_hallucinations(text)
+    return payload
 
 
 def _chunk_and_transcribe(
@@ -118,20 +251,65 @@ def _chunk_and_transcribe(
     model: str,
     prompt: str,
     language: str,
-) -> tuple[str, int]:
+) -> dict:
     """
-    Split large audio into 10-min chunks (mono 16kHz WAV), transcribe each,
-    concat results. Returns (joined_text, chunk_count).
+    Split large audio into 5-min chunks (mono 16kHz WAV), transcribe each,
+    concat results, then run pyannote ONCE on the full audio to recover
+    speaker turns + cluster embeddings + 3s sample clips.
 
-    Uses soundfile to read source (handles MP3/WAV/FLAC), then writes WAV chunks
-    in-memory before sending to Whisper. Resampling to 16kHz handled via numpy.
+    Returns:
+      {
+        "text": str,                       # joined transcript
+        "chunks": int,                     # chunks processed
+        "segments": list | None,           # [{start,end,speaker,text}, ...]
+        "cluster_embeddings": dict | None, # {SPEAKER_NN: [256d]}
+        "sample_audio_b64": dict,          # {SPEAKER_NN: base64 wav}
+      }
+    segments/cluster_embeddings are None when pyannote isn't available
+    (no HF_TOKEN) — caller treats those like the MaaS-text-only path.
     """
     import numpy as np  # local import — only needed in chunking path
 
     logging.info(f"[chunking] source size = {len(audio_bytes) / 1024 / 1024:.1f}MB")
 
-    # Read full audio → numpy (any format soundfile supports)
-    audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    # Read full audio → numpy (any format soundfile supports). Some files
+    # have corrupt headers — most commonly FLAC with frames=INT64_MAX, which
+    # makes soundfile try to allocate a multi-GB array ("array is too big").
+    # In that case (and for codecs soundfile can't read at all: m4a/aac/opus),
+    # round-trip through ffmpeg → clean 16kHz mono WAV → retry.
+    try:
+        audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+    except Exception as sf_err:
+        logging.warning(
+            f"[chunking] soundfile failed ({sf_err}); transcoding via ffmpeg…"
+        )
+        import subprocess
+        try:
+            proc = subprocess.run(
+                [
+                    "ffmpeg", "-loglevel", "error", "-y",
+                    "-i", "pipe:0",
+                    "-ac", "1", "-ar", "16000",
+                    "-f", "wav", "pipe:1",
+                ],
+                input=audio_bytes, capture_output=True, timeout=180,
+            )
+            if proc.returncode != 0 or not proc.stdout:
+                raise RuntimeError(
+                    f"ffmpeg rc={proc.returncode}: "
+                    f"{proc.stderr.decode('utf-8', 'replace')[:300]}"
+                )
+            audio_bytes = proc.stdout
+            logging.info(
+                f"[chunking] ffmpeg-transcoded source → "
+                f"{len(audio_bytes) // 1024}KB clean WAV"
+            )
+            audio_data, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+        except FileNotFoundError:
+            raise RuntimeError(
+                "Cannot decode audio: soundfile failed and ffmpeg not installed. "
+                "Install ffmpeg (apt install ffmpeg) or upload WAV/FLAC with valid header."
+            )
 
     # Stereo → mono
     if audio_data.ndim > 1:
@@ -173,16 +351,95 @@ def _chunk_and_transcribe(
         )
 
         try:
-            text = _call_whisper_api(
+            resp = _call_whisper_api(
                 chunk_bytes, f"chunk_{idx+1}.wav",
                 base_url, api_key, model, prompt, language,
             )
-            transcripts.append(text)
+            transcripts.append(resp.get("text", ""))
         except Exception as e:
             logging.error(f"[chunking] chunk {idx+1} failed: {e}")
             transcripts.append(f"[chunk {idx+1} failed: {e}]")
 
-    return "\n".join(t for t in transcripts if t), n_chunks
+    joined_text = "\n".join(t for t in transcripts if t)
+
+    # Run pyannote INLINE right after Whisper finishes so the HTTP response
+    # carries text + segments + embeddings + samples together — same shape
+    # as the small-file standard path. No Celery defer, no "Not recognized"
+    # race condition. Trade ~3-5 extra min in this request for guaranteed
+    # data-complete-on-return.
+    #
+    # parallel_diarize chunks the audio into 15-min slices internally and
+    # runs N pyannote threads in parallel, then merges via cosine AHC →
+    # global SPEAKER_NN labels consistent across the whole file.
+    segments = None
+    cluster_embeddings: dict = {}
+    sample_audio_b64: dict = {}
+    pending_diarize_path: Optional[str] = None
+    if os.getenv("HF_TOKEN") and joined_text.strip():
+        try:
+            from meeting.services.parallel_diarize import diarize_parallel
+            from meeting.services.local_diarize import split_text_proportional
+
+            # Re-encode the full cleaned audio (already mono 16kHz from
+            # earlier steps in this function) → bytes for diarize.
+            full_wav_buf = io.BytesIO()
+            sf.write(full_wav_buf, audio_data, sr, format="WAV", subtype="PCM_16")
+            full_wav_bytes = full_wav_buf.getvalue()
+
+            logging.info(
+                f"[chunking] running INLINE pyannote on full {duration_sec:.0f}s "
+                f"audio (parallel chunked) — adds ~3-5 min to this request "
+                f"in exchange for embeddings ready on return"
+            )
+            diarize_result = diarize_parallel(full_wav_bytes, slice_seconds=15 * 60)
+            turns = diarize_result.get("turns") or []
+            if turns:
+                segments = split_text_proportional(joined_text, turns)
+                cluster_embeddings = diarize_result.get("cluster_embeddings") or {}
+                sample_audio_b64 = diarize_result.get("sample_audio_b64") or {}
+                logging.info(
+                    f"[chunking] inline pyannote → {len(turns)} turns, "
+                    f"{len(cluster_embeddings)} speakers, "
+                    f"{len(sample_audio_b64)} samples"
+                )
+            else:
+                logging.warning(
+                    "[chunking] pyannote returned 0 turns — staging WAV "
+                    "as fallback for retry via /api/recordings/{id}/rediarize"
+                )
+                raise RuntimeError("pyannote returned no turns")
+        except Exception as e:
+            # Fallback: stage WAV to disk so an admin/operator can dispatch
+            # diarize manually later if pyannote fails inline (eg. HF_TOKEN
+            # expired mid-request, OOM, etc).
+            logging.warning(
+                f"[chunking] inline pyannote failed ({e}); staging WAV "
+                f"for async retry"
+            )
+            try:
+                import uuid as _uuid
+                output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), "output"
+                )
+                pending_dir = os.path.join(output_dir, "_pending_diarize")
+                os.makedirs(pending_dir, exist_ok=True)
+                tmp_path = os.path.join(pending_dir, f"{_uuid.uuid4().hex}.wav")
+                sf.write(tmp_path, audio_data, sr, format="WAV", subtype="PCM_16")
+                pending_diarize_path = os.path.relpath(tmp_path, output_dir)
+            except Exception as ee:
+                logging.warning(f"[chunking] WAV stage also failed: {ee}")
+
+    return {
+        "text": joined_text,
+        "chunks": n_chunks,
+        "segments": segments,
+        "cluster_embeddings": cluster_embeddings,
+        "sample_audio_b64": sample_audio_b64,
+        # Set only when inline pyannote failed and we staged a WAV instead —
+        # FE forwards this so /import-transcript can dispatch the Celery
+        # retry path.
+        "pending_diarize_path": pending_diarize_path,
+    }
 
 
 def _build_whisper_prompt(
@@ -256,6 +513,10 @@ def create_app(output_dir: str = None) -> FastAPI:
     app.include_router(meetings_router)
     # Phase B2 — Chat + HITL router
     app.include_router(chat_router)
+    # Auth Phase 1 — mock/real O365 login + voice enrollment gate
+    app.include_router(auth_router)
+    # Voice enrollment endpoint — flips users.voice_enrolled
+    app.include_router(voiceprints_router)
 
     @app.post("/api/session")
     async def create_session(info: MeetingInfo):
@@ -363,45 +624,327 @@ def create_app(output_dir: str = None) -> FastAPI:
             filename=os.path.basename(md_path),
         )
 
+    @app.get("/api/sse-test")
+    async def sse_test():
+        """Diagnostic: emits 5 SSE events 1 second apart. If `curl -N` to
+        this endpoint sees events 1-by-1, the Mee→FE path is fine and any
+        SSE delay on /api/transcribe/stream is the Kaggle→Mee leg
+        (Cloudflare quick-tunnel buffering). If everything arrives in a
+        single burst at the end, the buffering is on the Mee side and
+        we'll need to chase it here (httpx chunk size, Vite proxy, etc.).
+        """
+        from fastapi.responses import StreamingResponse
+        import asyncio as _asyncio
+
+        async def gen():
+            yield ":" + (" " * 2048) + "\n\n"  # padding to defeat proxy buffering
+            for i in range(5):
+                yield f"data: {{\"i\": {i}, \"t\": {i}}}\n\n"
+                await _asyncio.sleep(1)
+            yield "data: {\"type\": \"done\"}\n\n"
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/transcribe/stream")
+    async def transcribe_file_stream(
+        file: UploadFile = File(...),
+        language: str = Form(default=""),
+        vocab_hints: str = Form(default=""),
+        attendees: str = Form(default=""),
+        stt_model: str = Form(default=""),
+        recording_id: str = Form(default=""),
+    ):
+        """SSE-streamed transcription. Forwards the upload to the chosen STT
+        backend's /stream endpoint and pipes the event-stream straight to
+        the FE. Only `faster_whisper` profile supports this — VNG MaaS +
+        PhoWhisper return a single JSON. Caller should pick the right
+        profile before hitting this endpoint.
+
+        Persists audio_path the same way batch /api/transcribe does so the
+        Notta player can replay the file after the stream ends.
+        """
+        from fastapi.responses import StreamingResponse
+        from meeting.services.model_registry import resolve_stt
+        import httpx
+
+        profile = resolve_stt(recording_choice=(stt_model or None))
+        if not profile.get("has_word_timestamps"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"STT profile '{profile.get('id')}' does not support "
+                    f"streaming. Use stt_model=faster_whisper."
+                ),
+            )
+        base_url = (profile.get("base_url") or "").rstrip("/")
+        if not base_url:
+            raise HTTPException(
+                status_code=500,
+                detail=f"STT profile '{profile.get('id')}' missing base_url",
+            )
+        # Forward the profile's api_key as a Bearer token — self-hosted servers
+        # (e.g. the 2080 box) enforce SERVER_TOKEN auth and 401 without it.
+        api_key = profile.get("api_key") or ""
+
+        audio_bytes = await file.read()
+        filename = file.filename or "audio.wav"
+        if not language.strip():
+            language = profile.get("language") or "vi"
+        prompt = _build_whisper_prompt(vocab_hints, language, attendees)
+
+        # Mirror batch path: save audio for in-browser playback. R2 when
+        # configured, disk otherwise. See the batch endpoint's comment
+        # for the audio_path schema (`r2://...` vs relative disk path).
+        if recording_id:
+            from meeting.db import AsyncSessionLocal
+            from meeting.db.models import Recording as _Recording
+            from meeting.services import r2_storage
+            try:
+                _ext = os.path.splitext(filename)[1].lower() or ".wav"
+                if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                    _ext = ".wav"
+                if r2_storage.is_configured():
+                    _key = r2_storage.audio_key(recording_id, _ext)
+                    r2_storage.upload_bytes(_key, audio_bytes)
+                    _saved_path = f"r2://{_key}"
+                else:
+                    _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)), "output"
+                    )
+                    _audio_dir = os.path.join(_output_dir, "audio")
+                    os.makedirs(_audio_dir, exist_ok=True)
+                    _disk_path = os.path.join(_audio_dir, f"{recording_id}{_ext}")
+                    with open(_disk_path, "wb") as _f:
+                        _f.write(audio_bytes)
+                    _saved_path = os.path.relpath(
+                        _disk_path, os.path.dirname(os.path.dirname(__file__))
+                    )
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec is not None:
+                        _rec.audio_path = _saved_path
+                        await _sess.commit()
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe/stream] audio save failed: {_e}"
+                )
+
+        upstream_url = f"{base_url}/v1/audio/transcriptions/stream"
+        form_data = {
+            "language": language,
+            "prompt": prompt or "",
+        }
+        # Pass expected speaker count to pyannote — derived from the
+        # recording's `attendees` list (people the user marked as
+        # present in this session). Without this hint pyannote can
+        # cluster wildly for short utterances (3 sentences from one
+        # speaker → 3 clusters). We use a ±1 buffer so the user has
+        # some slack if they mis-checked attendance.
+        if recording_id:
+            try:
+                from meeting.db import AsyncSessionLocal
+                from meeting.db.models import Recording as _Recording
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec and isinstance(_rec.attendees, list) and _rec.attendees:
+                        n = len(_rec.attendees)
+                        if n > 0:
+                            form_data["min_speakers"] = str(max(1, n - 1))
+                            form_data["max_speakers"] = str(n + 1)
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe/stream] could not read attendees for speaker hint: {_e}"
+                )
+
+        async def event_stream():
+            """Open an httpx stream upstream, pipe SSE frames downstream
+            byte-for-byte. Using `aiter_raw()` instead of `aiter_text()`
+            is the critical detail: `aiter_text()` aggregates chunks to
+            UTF-8 boundaries and to its own buffer size (~64KB), which
+            held SSE frames hostage until enough bytes piled up. Raw
+            iteration yields whatever the socket delivers, so each
+            cloudflared-flushed frame reaches the FE immediately.
+
+            We open a fresh padding flush ahead of the upstream call
+            so the FE EventSource receives the response headers + first
+            bytes without waiting for the upstream's own padding to
+            traverse the chain."""
+            # First-byte flush: forces any reverse-proxy on this leg
+            # (uvicorn, possibly a future nginx) to commit response
+            # headers + open the stream window to the FE immediately.
+            yield ":" + (" " * 2048) + "\n\n"
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    files = {"file": (filename, audio_bytes, "audio/wav")}
+                    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                    async with client.stream(
+                        "POST", upstream_url, files=files, data=form_data,
+                        headers=headers,
+                    ) as r:
+                        if r.status_code != 200:
+                            body = await r.aread()
+                            yield (
+                                "data: " + json.dumps({
+                                    "type": "error",
+                                    "detail": f"upstream {r.status_code}: {body.decode(errors='replace')[:200]}",
+                                }) + "\n\n"
+                            )
+                            return
+                        async for chunk in r.aiter_raw():
+                            if chunk:
+                                yield chunk
+            except Exception as e:
+                logging.exception("[/api/transcribe/stream] proxy failed")
+                yield (
+                    "data: " + json.dumps({
+                        "type": "error", "detail": str(e),
+                    }) + "\n\n"
+                )
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # disable nginx buffering if any
+            },
+        )
+
     @app.post("/api/transcribe")
     async def transcribe_file(
         file: UploadFile = File(...),
-        language: str = Form(default="vi"),
+        language: str = Form(default=""),
         vocab_hints: str = Form(default=""),
         attendees: str = Form(default=""),
+        stt_model: str = Form(default=""),
+        recording_id: str = Form(default=""),
     ):
-        """Upload an audio file and transcribe via VNGCloud MaaS Whisper API.
+        """Upload an audio file and transcribe via the chosen STT backend.
 
-        Auto-chunking: files > 24MB are split into 10-min chunks and processed
-        in sequence (avoids Whisper 25MB hard limit).
+        STT backend resolution priority:
+          1. `stt_model` form param (e.g. "whisper", "phowhisper")
+          2. legacy env (WHISPER_*) for backward compat
+        `language` defaults to the STT profile's language when not given
+        (PhoWhisper → 'vi', Whisper → 'auto').
+
+        Auto-chunking: MaaS Whisper has a 25MB upload limit — files > 24MB
+        are split into 10-min chunks. Self-hosted PhoWhisper has no cap.
         """
-        base_url = os.getenv("WHISPER_BASE_URL", "").rstrip("/")
-        api_key = os.getenv("WHISPER_API_KEY", "")
-        model = os.getenv("WHISPER_MODEL", "openai/whisper-large-v3")
+        from meeting.services.model_registry import resolve_stt
+        profile = resolve_stt(recording_choice=(stt_model or None))
+        base_url = (profile.get("base_url") or "").rstrip("/")
+        api_key = profile.get("api_key") or ""
+        model = profile.get("model") or os.getenv("WHISPER_MODEL", "openai/whisper-large-v3")
+        if not language.strip():
+            language = profile.get("language") or "vi"
 
         if not base_url:
-            raise HTTPException(status_code=500, detail="WHISPER_BASE_URL not configured")
+            raise HTTPException(
+                status_code=500,
+                detail=f"STT profile '{profile.get('id')}' missing base_url — "
+                       f"set {profile['env']['base_url']} in .env",
+            )
+        logging.info(
+            f"[/api/transcribe] STT={profile.get('id')} model={model} language={language}"
+        )
 
         audio_bytes = await file.read()
         filename = file.filename or "audio.wav"
         original_size_mb = len(audio_bytes) / 1024 / 1024
 
+        # ─── Persist the upload for Notta-style in-browser playback ───
+        # Prefer R2 object storage when configured (production). Fall back
+        # to disk under output/audio/ for dev / no-R2 setups so the path
+        # works in both modes. recording.audio_path stores either:
+        #   • "r2://<key>"    – Cloudflare R2 object key (e.g. r2://audio/<rid>.wav)
+        #   • "<rel path>"    – legacy local path under project root
+        # The audio GET endpoint detects the prefix and redirects (R2) or
+        # serves the file (local).
+        if recording_id:
+            from meeting.db import AsyncSessionLocal
+            from meeting.db.models import Recording as _Recording
+            from meeting.services import r2_storage
+            try:
+                _ext = os.path.splitext(filename)[1].lower() or ".wav"
+                if _ext not in (".wav", ".mp3", ".m4a", ".flac", ".webm", ".ogg"):
+                    _ext = ".wav"
+
+                if r2_storage.is_configured():
+                    _key = r2_storage.audio_key(recording_id, _ext)
+                    r2_storage.upload_bytes(_key, audio_bytes)
+                    _saved_path = f"r2://{_key}"
+                    _saved_desc = _saved_path
+                else:
+                    _output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)), "output"
+                    )
+                    _audio_dir = os.path.join(_output_dir, "audio")
+                    os.makedirs(_audio_dir, exist_ok=True)
+                    _disk_path = os.path.join(_audio_dir, f"{recording_id}{_ext}")
+                    with open(_disk_path, "wb") as _f:
+                        _f.write(audio_bytes)
+                    _saved_path = os.path.relpath(
+                        _disk_path, os.path.dirname(os.path.dirname(__file__))
+                    )
+                    _saved_desc = _saved_path
+
+                async with AsyncSessionLocal() as _sess:
+                    _rec = await _sess.get(_Recording, uuid.UUID(recording_id))
+                    if _rec is not None:
+                        _rec.audio_path = _saved_path
+                        await _sess.commit()
+                logging.info(
+                    f"[/api/transcribe] saved audio for recording {recording_id} → {_saved_desc}"
+                )
+            except Exception as _e:
+                logging.warning(
+                    f"[/api/transcribe] failed to persist audio for recording {recording_id}: {_e}"
+                )
+
         prompt = _build_whisper_prompt(vocab_hints, language, attendees)
 
         # ─── Auto-chunking path for large files ───
-        if len(audio_bytes) > WHISPER_FILE_SIZE_LIMIT:
+        # Self-hosted PhoWhisper has no upload size cap and runs diarization on
+        # the FULL audio in one shot — chunking would split a speaker across
+        # chunks and lose cross-chunk cluster alignment + embeddings. Only
+        # chunk when talking to size-capped backends (VNG MaaS Whisper: 25MB).
+        is_self_hosted = (
+            model.lower() == "phowhisper"
+            or "59.153.246.55" in base_url
+            or "localhost" in base_url
+            or "127.0.0.1" in base_url
+        )
+        if len(audio_bytes) > WHISPER_FILE_SIZE_LIMIT and not is_self_hosted:
             logging.info(
                 f"File {filename} is {original_size_mb:.1f}MB > 24MB threshold → auto-chunking"
             )
             try:
-                text, n_chunks = _chunk_and_transcribe(
+                chunk_out = _chunk_and_transcribe(
                     audio_bytes, base_url, api_key, model, prompt, language,
                 )
                 return {
-                    "text": text,
+                    "text": chunk_out["text"],
                     "chunked": True,
-                    "chunks": n_chunks,
+                    "chunks": chunk_out["chunks"],
                     "original_size_mb": round(original_size_mb, 1),
+                    # Same shape as the small-file standard path: pyannote
+                    # ran INLINE so embeddings + samples are ready right now.
+                    # FE forwards everything to /import-transcript → DB
+                    # has speakers populated by the time the user looks.
+                    "segments": chunk_out.get("segments"),
+                    "cluster_embeddings": chunk_out.get("cluster_embeddings") or {},
+                    "sample_audio_b64": chunk_out.get("sample_audio_b64") or {},
+                    # Only set when inline pyannote failed and we staged a
+                    # WAV for async retry instead. FE-side, this triggers
+                    # the old Celery diarize dispatch path.
+                    "pending_diarize_path": chunk_out.get("pending_diarize_path"),
                 }
             except Exception as e:
                 logging.exception("Auto-chunk transcribe failed")
@@ -409,26 +952,129 @@ def create_app(output_dir: str = None) -> FastAPI:
                     status_code=500,
                     detail=f"Chunked transcribe failed: {e}",
                 )
+        if len(audio_bytes) > WHISPER_FILE_SIZE_LIMIT and is_self_hosted:
+            logging.info(
+                f"File {filename} is {original_size_mb:.1f}MB > 24MB but backend is "
+                f"self-hosted PhoWhisper — sending full audio to preserve diarization "
+                f"+ cluster embeddings."
+            )
 
         # ─── Standard path: single Whisper call ───
-        # Convert non-WAV to WAV in-memory (Whisper preferred format)
+        # Convert non-WAV to WAV in-memory (Whisper preferred format).
+        # MaaS Whisper rejects anything not RIFF-headed with HTTP 500
+        # "file does not start with RIFF id". soundfile handles
+        # WAV/FLAC/OGG/AIFF natively; m4a/aac/opus/webm need ffmpeg.
         if not filename.lower().endswith(".wav"):
+            converted = False
+            # Try soundfile first (zero-dep, in-process).
             try:
                 audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
                 wav_buf = io.BytesIO()
                 sf.write(wav_buf, audio_data, sample_rate, format="WAV", subtype="PCM_16")
-                wav_buf.seek(0)
-                audio_bytes = wav_buf.read()
+                audio_bytes = wav_buf.getvalue()
                 filename = "audio.wav"
-            except Exception:
-                pass
+                converted = True
+                logging.info(
+                    f"[transcribe] sf-converted {file.filename} → WAV "
+                    f"({sample_rate}Hz, {len(audio_bytes)//1024}KB)"
+                )
+            except Exception as sf_err:
+                logging.warning(
+                    f"[transcribe] soundfile cannot read {file.filename}: {sf_err}. "
+                    f"Trying ffmpeg fallback for m4a/aac/opus/webm/etc…"
+                )
+            # ffmpeg fallback for codecs soundfile can't handle.
+            if not converted:
+                try:
+                    import subprocess
+                    proc = subprocess.run(
+                        [
+                            "ffmpeg", "-loglevel", "error", "-y",
+                            "-i", "pipe:0",
+                            "-ac", "1", "-ar", "16000",
+                            "-f", "wav", "pipe:1",
+                        ],
+                        input=audio_bytes, capture_output=True, timeout=120,
+                    )
+                    if proc.returncode != 0 or not proc.stdout:
+                        raise RuntimeError(
+                            f"ffmpeg rc={proc.returncode}: {proc.stderr.decode('utf-8','replace')[:300]}"
+                        )
+                    audio_bytes = proc.stdout
+                    filename = "audio.wav"
+                    converted = True
+                    logging.info(
+                        f"[transcribe] ffmpeg-converted {file.filename} → WAV "
+                        f"({len(audio_bytes)//1024}KB)"
+                    )
+                except FileNotFoundError:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            f"Cannot decode {file.filename}: soundfile failed and "
+                            f"ffmpeg not installed. Install ffmpeg or upload WAV/FLAC/OGG."
+                        ),
+                    )
+                except Exception as ff_err:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Cannot decode audio file {file.filename}. "
+                            f"Tried soundfile + ffmpeg, both failed. "
+                            f"ffmpeg error: {ff_err}"
+                        ),
+                    )
 
+        # Scale timeout with file size — PhoWhisper on L40 ~1x realtime for STT
+        # + diarization (~30s of audio per second of wall clock). 50MB PCM 16k
+        # mono ≈ 27 min → up to ~3 min processing. Padding to 600s buys safety.
+        # ≤24MB: keep the original 180s tight bound (faster fail on hangs).
+        api_timeout = 600 if original_size_mb > 24 else 180
         try:
-            text = _call_whisper_api(
+            resp = _call_whisper_api(
                 audio_bytes, filename, base_url, api_key, model, prompt, language,
-                timeout=180,  # 3 min — file 20-24MB có thể cần 1-2 phút
+                timeout=api_timeout,
             )
-            return {"text": text, "chunked": False, "size_mb": round(original_size_mb, 1)}
+            text = resp.get("text", "")
+            segments = resp.get("segments")
+            cluster_embeddings = resp.get("cluster_embeddings")
+            sample_audio_b64: dict = {}
+
+            # Fallback path: MaaS Whisper returns text-only (no segments, no
+            # cluster_embeddings). Run pyannote LOCALLY on the audio to
+            # recover speaker turns + embeddings, then proportionally split
+            # the text across turns. Skipped automatically when STT already
+            # returned segments (PhoWhisper path) or when HF_TOKEN is unset.
+            if text and not segments and os.getenv("HF_TOKEN"):
+                try:
+                    from meeting.services.local_diarize import (
+                        diarize_audio, split_text_proportional,
+                    )
+                    diarize = diarize_audio(audio_bytes)
+                    if diarize["turns"]:
+                        segments = split_text_proportional(text, diarize["turns"])
+                        cluster_embeddings = (
+                            cluster_embeddings or diarize["cluster_embeddings"]
+                        )
+                        sample_audio_b64 = diarize.get("sample_audio_b64") or {}
+                        logging.info(
+                            f"[local pyannote] recovered {len(segments)} segments "
+                            f"+ {len(cluster_embeddings)} cluster embeddings "
+                            f"+ {len(sample_audio_b64)} sample clips"
+                        )
+                except Exception as e:
+                    logging.warning(
+                        f"[local pyannote] failed (skipping diarize): {e}"
+                    )
+
+            return {
+                "text": text,
+                "segments": segments,
+                "cluster_embeddings": cluster_embeddings,
+                "sample_audio_b64": sample_audio_b64,
+                "chunked": False,
+                "size_mb": round(original_size_mb, 1),
+            }
         except requests.exceptions.HTTPError as e:
             # Whisper trả HTTP error status — include detail
             detail = f"Whisper HTTP error: {e}"
