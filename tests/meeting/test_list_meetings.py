@@ -12,11 +12,11 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from meeting.services.tools import list_meetings as lm
-from meeting.services.tools._registry import get_tool
+from src.services.tools import list_meetings as lm
+from src.services.tools._registry import get_tool
 
 # Importing the tools package registers every @tool (no network for Redmine defs).
-import meeting.services.tools  # noqa: F401,E402
+import src.services.tools  # noqa: F401,E402
 
 
 def test_list_meetings_is_registered():

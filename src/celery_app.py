@@ -15,16 +15,16 @@ Env vars (defaults match docker-compose.yml RabbitMQ service):
   CELERY_RESULT_BACKEND — default rpc://
 
 Start worker (already wired into run_meeting.py):
-  celery -A meeting.celery_app worker --loglevel=info --concurrency=4
+  celery -A src.celery_app worker --loglevel=info --concurrency=4
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-# Load .env so `python -m celery -A meeting.celery_app worker` works without
+# Load .env so `python -m celery -A src.celery_app worker` works without
 # going through run_meeting.py (which load_dotenv()'s before importing).
-# Searches upward from this file: meeting/ → project root.
+# Searches upward from this file: src/ → project root.
 try:
     from dotenv import load_dotenv
     _env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -52,7 +52,7 @@ celery_app = Celery(
     "mee",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["meeting.tasks"],
+    include=["src.tasks"],
 )
 
 celery_app.conf.update(

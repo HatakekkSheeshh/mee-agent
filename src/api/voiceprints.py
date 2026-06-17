@@ -27,9 +27,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.auth import get_current_user
-from meeting.db.base import get_session
-from meeting.db.models import SpeakerVoiceprint, User
+from src.auth import get_current_user
+from src.db.base import get_session
+from src.db.models import SpeakerVoiceprint, User
 
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ def _embed_audio_local(wav_path: str) -> list[float]:
     """Load pyannote wespeaker embedder and produce a single 256-d embedding
     for the whole clip. Embedder is cached after first call (see local_diarize)."""
     # Lazy import — pyannote is a heavy dep, defer until actually needed.
-    from meeting.services.local_diarize import _ensure_loaded
+    from src.services.local_diarize import _ensure_loaded
     import soundfile as sf
     import torch
 
@@ -168,7 +168,7 @@ async def enroll_voice(
     # we also upload the same bytes to R2 for the long-term audit trail
     # (re-processing if we ever want to re-embed with a better model).
     # The temp file is removed after embed; R2 holds the canonical copy.
-    from meeting.services import r2_storage
+    from src.services import r2_storage
 
     ext = "webm"
     if audio.filename and "." in audio.filename:

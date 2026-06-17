@@ -34,7 +34,7 @@ upload a recorded `.mp3/.wav/.m4a`; sometimes they record a live meeting from th
 (Whisper file upload) with auto-chunking of audio >24 MB into 10-min 16 kHz mono WAV
 chunks. Live record streams mic audio over WebSocket (:9091) to Whisper streaming.
 
-**Key files:** `meeting/app.py` (`/api/transcribe`, chunking), `meeting_frontend_react/src/hooks/useLiveRecording.ts`.
+**Key files:** `meeting/app.py` (`/api/transcribe`, chunking), `frontend/src/hooks/useLiveRecording.ts`.
 
 ---
 
@@ -62,7 +62,7 @@ commitments/decisions inline before generating minutes, so the MoM is higher qua
 writes to `recordings.clean_segments` (JSONB `edited_html`/`edited_text`) with 1.5s
 auto-save. MoM generation **prefers `edited_text`** over raw transcript when present.
 
-**Key files:** `meeting_frontend_react/` (TipTap editor), `meeting/services/transcript_cleaner.py`,
+**Key files:** `frontend/` (TipTap editor), `meeting/services/transcript_cleaner.py`,
 `meeting/services/clean_orchestrator.py`.
 
 ---
@@ -298,7 +298,7 @@ zero-shot speaker ID during diarization.
 sidebar context menu (Share/Rename/Pin/Delete project; delete phiên), and streaming chat
 responses.
 
-**Key files:** `meeting_frontend_react/src/i18n.ts`, `src/store/AppContext.tsx`,
+**Key files:** `frontend/src/i18n.ts`, `src/store/AppContext.tsx`,
 `src/api/client.ts`.
 Spec: `docs/superpowers/specs/2026-06-10-chat-ux-streaming-design.md`.
 

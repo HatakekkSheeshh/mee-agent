@@ -25,19 +25,19 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.auth.base import AuthProvider
-from meeting.auth.mock import MockProvider, encode_mock_code
-from meeting.auth.base import UserInfo
-from meeting.auth.token_crypto import encrypt_token
-from meeting.auth.session import (
+from src.auth.base import AuthProvider
+from src.auth.mock import MockProvider, encode_mock_code
+from src.auth.base import UserInfo
+from src.auth.token_crypto import encrypt_token
+from src.auth.session import (
     COOKIE_NAME,
     DEFAULT_TTL_SECONDS,
     get_current_user_optional,
     issue_session_cookie,
 )
-from meeting.db.base import get_session
-from meeting.db.models import User
-from meeting.db import repositories as repo
+from src.db.base import get_session
+from src.db.models import User
+from src.db import repositories as repo
 
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def _build_provider() -> AuthProvider:
     name = os.environ.get("AUTH_PROVIDER", "mock").lower()
     if name == "microsoft":
-        from meeting.auth.microsoft import MicrosoftProvider
+        from src.auth.microsoft import MicrosoftProvider
         return MicrosoftProvider()
     return MockProvider()
 

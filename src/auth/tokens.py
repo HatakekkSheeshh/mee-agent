@@ -25,9 +25,9 @@ from typing import Dict, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.auth.microsoft import SCOPES, build_msal_app
-from meeting.auth.token_crypto import decrypt_token, encrypt_token
-from meeting.db.models import User
+from src.auth.microsoft import SCOPES, build_msal_app
+from src.auth.token_crypto import decrypt_token, encrypt_token
+from src.db.models import User
 
 logger = logging.getLogger(__name__)
 

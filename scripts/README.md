@@ -48,15 +48,15 @@ CELERY_LOGLEVEL=warning scripts/celery.sh
 |-------------------------------------|---------------------------------|
 | Dev local (nhanh, ít CPU)           | `scripts/{db,rabbitmq,backend,celery}.sh` (4 tab) |
 | Demo / show off                     | `python run_meeting.py` (1 tab, auto-spawn cả 2)  |
-| Test code mới ở `meeting/tasks.py`  | Ctrl+C `scripts/celery.sh` rồi chạy lại           |
-| Test code mới ở `meeting/api/*.py`  | FastAPI auto-reload, không cần restart            |
+| Test code mới ở `src/tasks.py`      | Ctrl+C `scripts/celery.sh` rồi chạy lại           |
+| Test code mới ở `src/api/*.py`      | FastAPI auto-reload, không cần restart            |
 
 ## Troubleshooting
 
 **Backend lag / CPU cao**: do `run_meeting.py` chạy 2 file-watcher song song.
 Chuyển sang `scripts/backend.sh` + `scripts/celery.sh` (mỗi cái 1 watcher).
 
-**Celery worker không thấy task mới**: nó cache `meeting/tasks.py` lúc start.
+**Celery worker không thấy task mới**: nó cache `src/tasks.py` lúc start.
 Ctrl+C `scripts/celery.sh` → chạy lại để pick up code mới.
 
 **`docker exec mee-postgres ... not found`**: chạy `scripts/db.sh` trước.

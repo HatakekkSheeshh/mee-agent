@@ -1,4 +1,4 @@
-// i18n translation table — verbatim port from meeting_frontend/index.html STRINGS.
+// i18n translation table — verbatim port from the previous vanilla frontend.
 // Single source of truth. Adding a new key requires both vi + en entries.
 
 export type Lang = "vi" | "en";

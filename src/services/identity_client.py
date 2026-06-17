@@ -3,7 +3,7 @@
 Resolves each end-user's own Redmine API key from the `delegated` API-key
 provider, keyed by the user's Azure OID (agentUserId = users.ms_oid). Auth to
 AgentBase is IAM client-credentials (GREENNODE_CLIENT_ID/SECRET), the same flow
-proven in meeting/memory_client.py — here async (httpx) with an injectable
+proven in src/memory_client.py — here async (httpx) with an injectable
 transport so the parsing/URL logic is unit-tested offline.
 
 The raw Redmine key never passes through Mee's chat/LLM/logs: get_user_key only

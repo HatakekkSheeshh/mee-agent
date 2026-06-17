@@ -6,7 +6,7 @@ Create Date: 2026-06-14
 
 Creates the `roles` table (the authoritative, enumerable role-persona pool that
 drives Mee's proactive chat kickoff) and seeds the 10 company roles from
-meeting.db.seed_roles. The seed is idempotent (ON CONFLICT (name) DO NOTHING)
+src.db.seed_roles. The seed is idempotent (ON CONFLICT (name) DO NOTHING)
 so it's safe to re-apply against the shared DB that is stamped past head and run
 without `alembic upgrade head` (see the spec's Migration note +
 memory db-alembic-drift-remote-ahead).
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-from meeting.db.seed_roles import SEED_ROLES
+from src.db.seed_roles import SEED_ROLES
 
 revision: str = "0019"
 down_revision: Union[str, None] = "0018"

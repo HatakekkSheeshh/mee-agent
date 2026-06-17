@@ -6,7 +6,7 @@ delegated logic rather than a live-DB endpoint (see test_chat_api_pm.py).
 """
 from __future__ import annotations
 
-from meeting.services.kickoff import (
+from src.services.kickoff import (
     DEFAULT_KICKOFF,
     fetch_role_data,
     run_kickoff,

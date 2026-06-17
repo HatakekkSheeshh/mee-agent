@@ -6,7 +6,7 @@ before the reply reaches the user.
 """
 from __future__ import annotations
 
-from meeting.graphs._chat_serde import strip_think
+from src.graphs._chat_serde import strip_think
 
 
 def test_strip_removes_complete_think_block_keeps_answer():

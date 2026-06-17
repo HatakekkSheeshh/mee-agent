@@ -3,7 +3,7 @@
 No DB / no graph: the mapper is a pure function (repo convention: DB-touching
 paths are exercised via fakes, pure helpers directly).
 """
-from meeting.graphs.chat_graph import update_to_events
+from src.graphs.chat_graph import update_to_events
 
 
 def test_load_context_emits_context_step():

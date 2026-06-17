@@ -22,9 +22,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))  # for imports``
 
 import json  # noqa: E402
 
-from meeting.services.redmine_mcp_client import get_redmine_mcp_client  # noqa: E402
-from meeting.services.tools import get_tool  # noqa: E402
-from meeting.services.tools.redmine import (  # noqa: E402
+from src.services.redmine_mcp_client import get_redmine_mcp_client  # noqa: E402
+from src.services.tools import get_tool  # noqa: E402
+from src.services.tools.redmine import (  # noqa: E402
     fetch_redmine_tool_schemas,
     is_write_tool,
     register_redmine_tools,

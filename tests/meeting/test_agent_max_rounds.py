@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.graphs.chat_graph.agent import make_agent
-from meeting.graphs._chat_state import MAX_AGENT_ROUNDS
+from src.graphs.chat_graph.agent import make_agent
+from src.graphs._chat_state import MAX_AGENT_ROUNDS
 
 
 def _llm(content, capture):

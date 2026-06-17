@@ -25,13 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import os
 
-from meeting.db import get_session
-from meeting.db import repositories as repo
-from meeting.db.models import User
-from meeting.auth import get_current_user
-from meeting.graphs import get_checkpointer, run_mom_graph
-from meeting.note_generator import generate_meeting_notes
-from meeting.services import clean_transcript
+from src.db import get_session
+from src.db import repositories as repo
+from src.db.models import User
+from src.auth import get_current_user
+from src.graphs import get_checkpointer, run_mom_graph
+from src.note_generator import generate_meeting_notes
+from src.services import clean_transcript
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["meetings"])
@@ -165,7 +165,7 @@ async def list_available_models():
     """List STT + LLM profiles for the model-picker dropdown in the UI.
     Each entry has id, label, description. Defaults indicate the fallback
     when neither recording nor meeting has a value set."""
-    from meeting.services.model_registry import (
+    from src.services.model_registry import (
         get_profiles, DEFAULT_STT, DEFAULT_LLM,
     )
     return {
@@ -286,7 +286,7 @@ async def download_meeting_summary(
     For per-recording MoM, use /api/recordings/{id}/download instead.
     """
     from fastapi.responses import FileResponse, JSONResponse
-    from meeting.report_generator import generate_mom_markdown
+    from src.report_generator import generate_mom_markdown
     import os as _os
 
     mid = _parse_uuid(meeting_id)
@@ -334,7 +334,7 @@ async def list_meeting_members(
     They're flagged `voice_enrolled=false` since no voiceprint exists.
     """
     from sqlalchemy import select
-    from meeting.db.models import MeetingMember, User as UserM, Recording as RecordingM
+    from src.db.models import MeetingMember, User as UserM, Recording as RecordingM
 
     mid = _parse_uuid(meeting_id)
     meeting = await repo.get_meeting(session, mid)
@@ -434,7 +434,7 @@ async def _require_owner_or_editor(session: AsyncSession, meeting, user: User) -
     hold an active (non-revoked) editor/owner membership.
     """
     from sqlalchemy import select
-    from meeting.db.models import MeetingMember
+    from src.db.models import MeetingMember
 
     if meeting.user_id == user.id:
         return "owner"
@@ -466,7 +466,7 @@ async def add_meeting_member(
     must exist in `users` (logged in O365 once). Re-invite of a previously
     revoked member un-revokes them. Cannot demote the meeting creator."""
     from sqlalchemy import select
-    from meeting.db.models import MeetingMember, User as UserM
+    from src.db.models import MeetingMember, User as UserM
 
     mid = _parse_uuid(meeting_id)
     meeting = await repo.get_meeting(session, mid)
@@ -532,7 +532,7 @@ async def remove_meeting_member(
     historical attribution intact. Cannot remove the meeting creator."""
     from sqlalchemy import select
     from datetime import datetime, timezone
-    from meeting.db.models import MeetingMember
+    from src.db.models import MeetingMember
 
     mid = _parse_uuid(meeting_id)
     uid = _parse_uuid(user_id)
@@ -566,7 +566,7 @@ async def search_users(
     """Autocomplete user search by email or display_name. Used by the
     invite UI to suggest who to add. Empty/short query returns []."""
     from sqlalchemy import select, or_, func
-    from meeting.db.models import User as UserM
+    from src.db.models import User as UserM
 
     q = (q or "").strip().lower()
     if len(q) < 1:
@@ -651,7 +651,7 @@ async def list_recording_comments(
     """Return all non-deleted comments for this recording, sorted by
     anchor_ms ascending (general comments with anchor=NULL go first)."""
     from sqlalchemy import select
-    from meeting.db.models import RecordingComment, User as UserM
+    from src.db.models import RecordingComment, User as UserM
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -684,7 +684,7 @@ async def create_recording_comment(
 ):
     """Create a new comment on the recording. Author = current user
     (resolved via the dev-user shortcut until auth migration lands)."""
-    from meeting.db.models import RecordingComment
+    from src.db.models import RecordingComment
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -718,7 +718,7 @@ async def edit_comment(
     are owned by the same user). Sets edited_at."""
     from datetime import datetime, timezone
     from sqlalchemy import select
-    from meeting.db.models import RecordingComment, User as UserM
+    from src.db.models import RecordingComment, User as UserM
 
     cid = _parse_uuid(comment_id)
     c = (
@@ -748,7 +748,7 @@ async def delete_comment(
     """Soft-delete: sets deleted_at — keeps the row for audit."""
     from datetime import datetime, timezone
     from sqlalchemy import select
-    from meeting.db.models import RecordingComment
+    from src.db.models import RecordingComment
 
     cid = _parse_uuid(comment_id)
     c = (
@@ -789,7 +789,7 @@ async def get_recording_transcript_endpoint(
     recording_id: str, session: AsyncSession = Depends(get_session)
 ):
     """Return joined raw transcript text + meta (segment_count, duration_sec) of 1 recording."""
-    from meeting.db.models import TranscriptSegment
+    from src.db.models import TranscriptSegment
     from sqlalchemy import select, func
 
     rid = _parse_uuid(recording_id)
@@ -1000,7 +1000,7 @@ async def diarize_result_endpoint(
     # before diarize finished), trigger background clean NOW that we have
     # both embeddings + diarized text. User clicks Clean tab → instant.
     if not recording.clean_segments:
-        from meeting.services.clean_orchestrator import trigger_background
+        from src.services.clean_orchestrator import trigger_background
         trigger_background(recording_id)
     return {
         "updated": True,
@@ -1049,7 +1049,7 @@ async def patch_segment_text(
     original_text resurfaces via the `text` property).
     """
     from sqlalchemy import select, update
-    from meeting.db.models import TranscriptSegment
+    from src.db.models import TranscriptSegment
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -1137,7 +1137,7 @@ async def rewrite_segments(
     from datetime import datetime, timezone
     from sqlalchemy import select, update
     from sqlalchemy.orm.attributes import flag_modified
-    from meeting.db.models import TranscriptSegment
+    from src.db.models import TranscriptSegment
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -1272,7 +1272,7 @@ async def set_segment_speaker(
 ):
     """Set speaker on the given transcript segments (current-block rename)."""
     from sqlalchemy import select, update
-    from meeting.db.models import TranscriptSegment
+    from src.db.models import TranscriptSegment
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -1500,7 +1500,7 @@ async def upload_recording_audio(
     call. Use this when you only want to attach audio for playback.
     """
     import os as _os
-    from meeting.services import r2_storage
+    from src.services import r2_storage
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -1559,7 +1559,7 @@ async def get_recording_audio(
     from fastapi.responses import FileResponse
 
     from fastapi.responses import RedirectResponse
-    from meeting.services import r2_storage
+    from src.services import r2_storage
 
     rid = _parse_uuid(recording_id)
     recording = await repo.get_recording(session, rid)
@@ -1670,7 +1670,7 @@ async def clean_status_endpoint(
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    from meeting.services.clean_orchestrator import is_inflight, get_progress
+    from src.services.clean_orchestrator import is_inflight, get_progress
     is_running = is_inflight(recording_id)
     has_clean = recording.clean_segments is not None and bool(
         recording.clean_segments
@@ -1719,7 +1719,7 @@ async def clean_recording_endpoint(
     # Share in-flight background clean if any — avoid duplicate LLM call when
     # user clicks Clean before the post-import background task finishes.
     if not regenerate:
-        from meeting.services.clean_orchestrator import (
+        from src.services.clean_orchestrator import (
             is_inflight, wait_for_inflight,
         )
         if is_inflight(recording_id):
@@ -1748,9 +1748,9 @@ async def clean_recording_endpoint(
     # the MaaS gateway times out earlier with 504 anyway. FE polls
     # /api/tasks/{id}; on SUCCESS it re-calls /clean and hits the cache.
     try:
-        from meeting.celery_app import is_broker_reachable
+        from src.celery_app import is_broker_reachable
         if is_broker_reachable():
-            from meeting.tasks import clean_recording_task
+            from src.tasks import clean_recording_task
             ar = clean_recording_task.delay(recording_id, regenerate)
             logger.info(
                 f"[/clean] dispatched clean_recording_task id={ar.id} for "
@@ -1772,11 +1772,11 @@ async def clean_recording_endpoint(
     # Celery path). Heavy LLM work runs in background; FE polls
     # /api/tasks/{local_task_id}. The endpoint registers state into
     # _local_task_state via clean_orchestrator.
-    from meeting.services.clean_orchestrator import dispatch_local_task
-    from meeting.services.transcript_cleaner import clean_transcript as _clean_fn
-    from meeting.services.speaker_matcher import match_clusters_to_names
-    from meeting.services.model_registry import resolve_llm
-    from meeting.services.phonetic_generator import (
+    from src.services.clean_orchestrator import dispatch_local_task
+    from src.services.transcript_cleaner import clean_transcript as _clean_fn
+    from src.services.speaker_matcher import match_clusters_to_names
+    from src.services.model_registry import resolve_llm
+    from src.services.phonetic_generator import (
         generate_phonetic_mappings, needs_regeneration,
     )
     from sqlalchemy.orm.attributes import flag_modified
@@ -1787,7 +1787,7 @@ async def clean_recording_endpoint(
     target_user_id = user.id
 
     async def _run_inline_clean():
-        from meeting.db.base import AsyncSessionLocal
+        from src.db.base import AsyncSessionLocal
         async with AsyncSessionLocal() as s2:
             r = await repo.get_recording(s2, _parse_uuid(target_rid_str))
             if not r:
@@ -1903,7 +1903,7 @@ async def clean_recording_endpoint(
     # Recognises returning speakers across meetings (Approach D of speaker ID).
     pre_mapped: dict[str, str] = {}
     if recording.speaker_embeddings:
-        from meeting.services.speaker_matcher import match_clusters_to_names
+        from src.services.speaker_matcher import match_clusters_to_names
         pre_mapped = await match_clusters_to_names(
             session,
             user_id=user.id,
@@ -1919,7 +1919,7 @@ async def clean_recording_endpoint(
     merged_vocab = ", ".join(p for p in vocab_parts if p) or None
 
     # Resolve effective LLM profile (recording → meeting → registry default).
-    from meeting.services.model_registry import resolve_llm
+    from src.services.model_registry import resolve_llm
     llm_profile = resolve_llm(
         recording_choice=recording.llm_model,
         meeting_choice=getattr(meeting, "llm_model", None) if meeting else None,
@@ -1937,7 +1937,7 @@ async def clean_recording_endpoint(
     phonetic_mappings: list[dict] = []
     if merged_vocab:
         import asyncio as _aio
-        from meeting.services.phonetic_generator import (
+        from src.services.phonetic_generator import (
             generate_phonetic_mappings, needs_regeneration,
         )
         cached_phon = recording.phonetic_examples_json or {}
@@ -2056,7 +2056,7 @@ async def save_clean_edited_endpoint(
             if (s.get("text") or "").strip()
         )
         if original_text:
-            from meeting.vocab_store import (
+            from src.vocab_store import (
                 extract_corrections_from_edit, bulk_add_corrections,
             )
             pairs = extract_corrections_from_edit(
@@ -2148,7 +2148,7 @@ async def import_transcript_endpoint(
         # Target an EXISTING recording → overwrite its segments. No new recording
         # is created. `replace` flag ignored (it's about deleting OTHER recordings).
         from sqlalchemy import delete as sa_delete
-        from meeting.db.models import TranscriptSegment
+        from src.db.models import TranscriptSegment
         rid = _parse_uuid(req.recording_id)
         recording = await repo.get_recording(session, rid)
         if not recording or recording.meeting_id != mid:
@@ -2297,7 +2297,7 @@ async def import_transcript_endpoint(
     # and Gen MoM would wait for it. When unchanged, the existing
     # clean_segments cache is still valid → Gen MoM uses it directly.
     if transcript_changed:
-        from meeting.services.clean_orchestrator import trigger_background
+        from src.services.clean_orchestrator import trigger_background
         trigger_background(str(recording.id))
 
     # Dispatch async pyannote when caller staged a WAV for diarization
@@ -2306,9 +2306,9 @@ async def import_transcript_endpoint(
     diarize_task_id: Optional[str] = None
     if req.pending_diarize_path:
         try:
-            from meeting.celery_app import is_broker_reachable
+            from src.celery_app import is_broker_reachable
             if is_broker_reachable():
-                from meeting.tasks import diarize_recording_task
+                from src.tasks import diarize_recording_task
                 ar = diarize_recording_task.delay(
                     str(recording.id), req.pending_diarize_path,
                 )
@@ -2337,7 +2337,7 @@ async def import_transcript_endpoint(
                     # Reuse the Celery task body but invoke it directly.
                     # The task function is a sync callable — wrap in to_thread
                     # so it doesn't block the FastAPI event loop.
-                    from meeting.tasks import diarize_recording_task
+                    from src.tasks import diarize_recording_task
                     try:
                         await _aio.to_thread(
                             diarize_recording_task.run, rid_str, pending_path,
@@ -2445,7 +2445,7 @@ async def generate_project_summary_endpoint(
     narrative. Writes to meetings.project_summary_json. Idempotent — re-run
     after new recordings produce updated summary.
     """
-    from meeting.services.project_summarizer import generate_project_summary
+    from src.services.project_summarizer import generate_project_summary
 
     mid = _parse_uuid(meeting_id)
     summary = await generate_project_summary(session, mid)
@@ -2475,8 +2475,8 @@ async def generate_recording_mom_endpoint(
     """
     _parse_uuid(recording_id)  # validate format only
 
-    from meeting.celery_app import is_broker_reachable
-    from meeting.tasks import gen_mom_task
+    from src.celery_app import is_broker_reachable
+    from src.tasks import gen_mom_task
 
     if is_broker_reachable():
         # Happy path — enqueue task, return task_id. FE polls /tasks/{id}.
@@ -2506,7 +2506,7 @@ async def generate_recording_mom_endpoint(
     target_lang = ui_lang
 
     async def _run_inline_mom():
-        from meeting.db.base import AsyncSessionLocal
+        from src.db.base import AsyncSessionLocal
         async with AsyncSessionLocal() as s2:
             ckpt = get_checkpointer()
             fs = await run_mom_graph(
@@ -2531,7 +2531,7 @@ async def generate_recording_mom_endpoint(
                 "memory_context_count": len(fs.get("memory_context", [])),
             }
 
-    from meeting.services.clean_orchestrator import dispatch_local_task
+    from src.services.clean_orchestrator import dispatch_local_task
     local_task_id = dispatch_local_task(_run_inline_mom, prefix="mom-local")
     return {
         "recording_id": recording_id,
@@ -2552,11 +2552,11 @@ async def task_status_endpoint(task_id: str):
     # Local (in-process asyncio) tasks first — cheap dict lookup, and
     # local task_ids have a distinct prefix so we can route quickly.
     if task_id.startswith(("local-", "clean-local-", "mom-local-")):
-        from meeting.services.clean_orchestrator import get_local_task_state
+        from src.services.clean_orchestrator import get_local_task_state
         state = get_local_task_state(task_id)
         if state is not None:
             return state
-    from meeting.tasks import get_task_state
+    from src.tasks import get_task_state
     return get_task_state(task_id)
 
 
@@ -2582,7 +2582,7 @@ async def download_recording_mom(
 ):
     """Download per-recording MoM as Markdown (fmt=md) or JSON (fmt=json)."""
     from fastapi.responses import FileResponse, JSONResponse
-    from meeting.report_generator import generate_mom_markdown
+    from src.report_generator import generate_mom_markdown
     import os as _os
 
     rid = _parse_uuid(recording_id)
@@ -2637,7 +2637,7 @@ async def bind_voiceprint_endpoint(
     view text + cluster_mapping stay in sync (text "Đại:" → "Đại Nghi:").
     """
     from datetime import datetime
-    from meeting.db.repositories_voiceprint import (
+    from src.db.repositories_voiceprint import (
         save_voiceprint,
         find_similar_voiceprint,
     )
@@ -2659,7 +2659,7 @@ async def bind_voiceprint_endpoint(
     # rename to persist (rename "SPEAKER_00:" → "Thầy Thông:" in the Clean
     # view). Skip the voiceprint write and fall through to the text-rename
     # block below.
-    from meeting.db.models import SpeakerVoiceprint as _SV
+    from src.db.models import SpeakerVoiceprint as _SV
     close: list = []
     if emb:
         # Voice-level dedup: if this embedding is already very close to an
@@ -2823,7 +2823,7 @@ async def list_voiceprints_endpoint(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    from meeting.db.repositories_voiceprint import list_voiceprints
+    from src.db.repositories_voiceprint import list_voiceprints
 
     rows = await list_voiceprints(session, user.id)
     return [
@@ -2845,7 +2845,7 @@ async def rename_voiceprint_endpoint(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    from meeting.db.repositories_voiceprint import rename_voiceprint
+    from src.db.repositories_voiceprint import rename_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
     vp = await rename_voiceprint(session, vp_id, user.id, req.name)
@@ -2860,7 +2860,7 @@ async def delete_voiceprint_endpoint(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    from meeting.db.repositories_voiceprint import delete_voiceprint
+    from src.db.repositories_voiceprint import delete_voiceprint
 
     vp_id = _parse_uuid(voiceprint_id)
     ok = await delete_voiceprint(session, vp_id, user.id)

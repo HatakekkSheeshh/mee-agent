@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from meeting.services.memory_bench import (
+from src.services.memory_bench import (
     BenchRow,
     build_postgres_chunks,
     cosine,

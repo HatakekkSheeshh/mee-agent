@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Start React + Vite dev server (meeting_frontend_react/).
-# Vanilla JS frontend (meeting_frontend/) is served by FastAPI directly —
+# Start React + Vite dev server (frontend/).
+# Vanilla JS frontend (frontend/) is served by FastAPI directly —
 # no separate process needed for that.
 set -euo pipefail
-cd "$(dirname "$0")/../meeting_frontend_react"
+cd "$(dirname "$0")/../frontend"
 
 if [[ ! -d node_modules ]]; then
     echo "→ Installing npm deps (first-time)…"

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.graphs.chat_graph.classify import make_classify_intent
+from src.graphs.chat_graph.classify import make_classify_intent
 
 
 def _llm(content):

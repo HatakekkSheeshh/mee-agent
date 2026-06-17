@@ -3,7 +3,7 @@
 Path A: native OpenAI tool-calling. Replay-safety: the LLM call (agent) and tool
 execution (agent_tools/agent_execute) NEVER interrupt; agent_approve is the ONLY
 node that interrupts and performs no side effects, so a side-effect tool runs
-exactly once. The `tools` bundle (default = meeting.services) is the DI seam.
+exactly once. The `tools` bundle (default = src.services) is the DI seam.
 """
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from typing import Literal, Optional
 from langgraph.types import interrupt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import meeting.services as _services  # default toolset bundle (DI seam)
-from meeting.db import repositories as repo
-from meeting.graphs._chat_llm import _llm_client, _llm_model
-from meeting.graphs._chat_prompts import _to_llm_messages
-from meeting.graphs.chat_graph.redmine_format import format_issue_list, is_formattable
-from meeting.graphs._chat_serde import (
+import src.services as _services  # default toolset bundle (DI seam)
+from src.db import repositories as repo
+from src.graphs._chat_llm import _llm_client, _llm_model
+from src.graphs._chat_prompts import _to_llm_messages
+from src.graphs.chat_graph.redmine_format import format_issue_list, is_formattable
+from src.graphs._chat_serde import (
     _json,
     _last_assistant_text,
     _parse_tool_args,
@@ -32,8 +32,8 @@ from meeting.graphs._chat_serde import (
     strip_think,
     summarize_redmine_apply,
 )
-from meeting.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
-from meeting.services.tools.create_task import assignee_matches, build_agenda_task_items
+from src.graphs._chat_state import ChatState, MAX_AGENT_ROUNDS
+from src.services.tools.create_task import assignee_matches, build_agenda_task_items
 
 logger = logging.getLogger(__name__)
 

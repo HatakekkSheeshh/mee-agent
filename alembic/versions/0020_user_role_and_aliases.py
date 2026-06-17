@@ -6,7 +6,7 @@ Create Date: 2026-06-14
 
 Adds users.role_id (FK→roles.id, nullable — resolved from O365 jobTitle at
 login) and roles.aliases (text[], the jobTitle strings that map to each role),
-then reseeds aliases from meeting.db.seed_roles by name. The reseed is an UPDATE
+then reseeds aliases from src.db.seed_roles by name. The reseed is an UPDATE
 by unique name (idempotent).
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-from meeting.db.seed_roles import SEED_ROLES
+from src.db.seed_roles import SEED_ROLES
 
 revision: str = "0020"
 down_revision: Union[str, None] = "0019"

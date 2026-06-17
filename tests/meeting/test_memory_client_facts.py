@@ -1,4 +1,4 @@
-"""Unit tests for the chat-captured FACT records layer in meeting/memory_client.py.
+"""Unit tests for the chat-captured FACT records layer in src/memory_client.py.
 
 Distinct from the project-state distillation blob (`[mee-sync …]`): a remembered
 fact carries a `[mee-fact scope=… author=… session=…]` marker, is written to a
@@ -11,7 +11,7 @@ v1 is insert-only, newest-wins (record DELETE is denied for our SA).
 """
 from __future__ import annotations
 
-from meeting import memory_client as mc
+from src import memory_client as mc
 
 
 # ── build / parse fact marker (round-trip) ──────────────────────────────────

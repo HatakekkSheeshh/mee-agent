@@ -28,7 +28,7 @@ import asyncio
 import os
 import sys
 
-# Make `import meeting` work when run as `python scripts/verify_multiturn.py`
+# Make `import src` work when run as `python scripts/verify_multiturn.py`
 # (sys.path[0] is scripts/, not the repo root).
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -38,9 +38,9 @@ from dotenv import load_dotenv  # noqa: E402
 # Same loader contract as the app: keep '$' in passwords intact.
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"), override=True, interpolate=False)
 
-from meeting.db import repositories as repo  # noqa: E402
-from meeting.db.base import AsyncSessionLocal  # noqa: E402
-from meeting.graphs import (  # noqa: E402
+from src.db import repositories as repo  # noqa: E402
+from src.db.base import AsyncSessionLocal  # noqa: E402
+from src.graphs import (  # noqa: E402
     close_checkpointer,
     get_checkpointer,
     init_checkpointer,

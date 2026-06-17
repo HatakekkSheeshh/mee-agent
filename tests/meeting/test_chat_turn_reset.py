@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from meeting.graphs.chat_graph import (
+from src.graphs.chat_graph import (
     ChatState,
     _initial_turn_state,
     make_agent,

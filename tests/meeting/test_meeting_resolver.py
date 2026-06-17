@@ -16,7 +16,7 @@ import json
 import uuid
 from types import SimpleNamespace
 
-from meeting.services.meeting_resolver import (
+from src.services.meeting_resolver import (
     build_meeting_match_messages,
     find_meeting_named_in,
     llm_resolve_meeting,

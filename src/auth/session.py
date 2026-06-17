@@ -29,8 +29,8 @@ from fastapi import Cookie, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db.base import get_session
-from meeting.db.models import User
+from src.db.base import get_session
+from src.db.models import User
 
 
 COOKIE_NAME = "mee_session"

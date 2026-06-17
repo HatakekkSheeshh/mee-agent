@@ -29,7 +29,7 @@ celery>=5.3
 # platforms that don't compile (e.g. Alpine) — Celery handles transparently.
 celery[librabbitmq]>=5.3
 # Dev-time only: watchmedo (from watchdog) wraps the Celery worker in
-# run_meeting.py so it auto-restarts when meeting/*.py changes.
+# run_meeting.py so it auto-restarts when src/*.py changes.
 # Celery doesn't pick up new @task definitions until the process restarts.
 watchdog>=4.0
 psycopg[binary]
@@ -44,10 +44,14 @@ opentelemetry-instrumentation-fastapi>=0.48b0
 openinference-instrumentation-openai>=0.1.18
 openinference-instrumentation-langchain>=0.1.29
 
+# === Tests ===
+pytest
+pytest-asyncio
+
 # deeplearning
 torch>=2.8.0
 # pyannote.audio — local speaker embedding for voiceprint enroll/match
-# (meeting/api/voiceprints.py + services/local_diarize.py). Pulls in torchaudio.
+# (src/api/voiceprints.py + services/local_diarize.py). Pulls in torchaudio.
 # NOTE: the wespeaker-voxceleb-resnet34-LM model is gated on Hugging Face —
 # first load needs a HF token + accepting the model terms.
 pyannote.audio>=3.1

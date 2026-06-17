@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.db import models, repositories as repo
+from src.db import models, repositories as repo
 
 
 # ─── model schema contract ────────────────────────────────────────────
@@ -100,7 +100,7 @@ async def test_resolve_role_by_title_unknown_returns_none():
 # ─── User.role_id FK contract ─────────────────────────────────────────
 
 def test_user_model_has_role_id_fk():
-    from meeting.db import models as m
+    from src.db import models as m
     cols = {c.name for c in m.User.__table__.columns}
     assert "role_id" in cols
     # FK targets roles.id

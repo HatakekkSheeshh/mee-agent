@@ -1,6 +1,6 @@
 """Unit tests for the agent-memory sync distillation layer (pure, no DB/network).
 
-Covers the two network-free pieces of `meeting/services/memory_sync.py`:
+Covers the two network-free pieces of `src/services/memory_sync.py`:
   - canonical_source_hash: stable content hash used for change detection
     (skip re-distilling a project whose MoMs/summary are unchanged);
   - distill_project_state: assembles the LLM prompt from project_summary_json
@@ -10,7 +10,7 @@ Spec: docs/superpowers/specs/2026-06-11-agent-memory-sync-design.md
 """
 from __future__ import annotations
 
-from meeting.services.memory_sync import (
+from src.services.memory_sync import (
     build_session_bullets,
     canonical_source_hash,
     distill_project_state,

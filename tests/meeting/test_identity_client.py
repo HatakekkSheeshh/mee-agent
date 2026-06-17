@@ -11,7 +11,7 @@ import json
 import httpx
 import pytest
 
-from meeting.services.identity_client import (
+from src.services.identity_client import (
     IdentityClient,
     RequestKeyResult,
     build_request_key_url,
@@ -102,7 +102,7 @@ def test_rejects_non_allowlisted_base_url():
         )
 
 
-import meeting.services.identity_client as idc
+import src.services.identity_client as idc
 
 
 def test_cache_hits_avoid_second_resolve(monkeypatch):

@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 load_dotenv(override=True, interpolate=False)
 
 from sqlalchemy import select, update
-from meeting.db.base import AsyncSessionLocal, async_engine
-from meeting.db.models import MemoryEventRow
-from meeting.services.embedding import embed_batch
+from src.db.base import AsyncSessionLocal, async_engine
+from src.db.models import MemoryEventRow
+from src.services.embedding import embed_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)

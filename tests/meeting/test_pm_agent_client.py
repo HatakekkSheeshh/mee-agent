@@ -15,7 +15,7 @@ import httpx
 import pytest
 import dotenv
 
-from meeting.services.pm_agent_client import (
+from src.services.pm_agent_client import (
     PmAgentClient,
     PmAgentError,
     PmAgentResult,

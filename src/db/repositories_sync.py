@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from meeting.db.models import (
+from src.db.models import (
     Meeting,
     Recording,
     TranscriptSegment,
@@ -121,7 +121,7 @@ def match_clusters_to_names_sync(
     """
     if not speaker_embeddings:
         return {}
-    from meeting.db.models import SpeakerVoiceprint
+    from src.db.models import SpeakerVoiceprint
     out: dict[str, str] = {}
     for cluster_id, emb in speaker_embeddings.items():
         if not emb:

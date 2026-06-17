@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from meeting.api import chat as chat_api
-from meeting.db import repositories as repo
+from src.api import chat as chat_api
+from src.db import repositories as repo
 
 SID = "55555555-5555-5555-5555-555555555555"
 TURN_MEETING = "66666666-6666-6666-6666-666666666666"

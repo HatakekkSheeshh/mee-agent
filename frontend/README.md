@@ -5,7 +5,7 @@ Vite + React 18 + TypeScript + Tailwind CSS.
 ## Setup
 
 ```bash
-cd meeting_frontend_react
+cd frontend
 npm install
 npm run dev
 ```

@@ -6,8 +6,8 @@ network discovery lazily + idempotently. Offline — no MCP server, no DB.
 """
 from __future__ import annotations
 
-import meeting.services.tools as tools
-from meeting.services.tools import redmine
+import src.services.tools as tools
+from src.services.tools import redmine
 
 _FAKE = [{"name": "get_redmine_projects", "description": "", "inputSchema": {}}]
 _EXTRA_NAMES = ("get_overdue_issues", "list_redmine_issue")

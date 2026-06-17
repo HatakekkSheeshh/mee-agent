@@ -13,8 +13,8 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from meeting.services import tools
-from meeting.services.memory_service import MemoryEvent
+from src.services import tools
+from src.services.memory_service import MemoryEvent
 
 MID = "11111111-1111-1111-1111-111111111111"
 UID = uuid.UUID("22222222-2222-2222-2222-222222222222")

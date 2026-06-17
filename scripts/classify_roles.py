@@ -29,11 +29,11 @@ load_dotenv(override=True, interpolate=False)
 
 from sqlalchemy import select
 
-from meeting.db.base import AsyncSessionLocal, async_engine
-from meeting.db import models, repositories as repo
-from meeting.services.role_mapping import classify_role, resolve_role
-from meeting.graphs._chat_llm import _llm_client, _llm_model
-from meeting.observability.tracing import init_tracing, shutdown_tracing
+from src.db.base import AsyncSessionLocal, async_engine
+from src.db import models, repositories as repo
+from src.services.role_mapping import classify_role, resolve_role
+from src.graphs._chat_llm import _llm_client, _llm_model
+from src.observability.tracing import init_tracing, shutdown_tracing
 
 # LOG_LEVEL=DEBUG surfaces classify_role's per-decision reasoning (raw answer,
 # parsed name + confidence) — useful for tuning the confidence threshold/prompt.

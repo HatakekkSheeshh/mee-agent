@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from meeting.graphs import _chat_serde as serde
-from meeting.graphs.chat_graph import make_agent
+from src.graphs import _chat_serde as serde
+from src.graphs.chat_graph import make_agent
 
 LEAKED = (
     "minimax:tool_call\n"

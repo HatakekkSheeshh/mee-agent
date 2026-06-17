@@ -1,6 +1,6 @@
 """The MCP client builds its Authorization header from a per-call key when
 given one, else the constructed (env) key. Pure header logic — no network."""
-from meeting.services.redmine_mcp_client import RedmineMcpClient
+from src.services.redmine_mcp_client import RedmineMcpClient
 
 
 def _client():

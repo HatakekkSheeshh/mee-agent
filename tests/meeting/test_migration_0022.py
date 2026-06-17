@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from meeting.db.models import ChatSession
+from src.db.models import ChatSession
 
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]

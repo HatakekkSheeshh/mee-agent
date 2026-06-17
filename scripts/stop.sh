@@ -21,11 +21,11 @@ stop() {
 }
 
 echo "→ Stopping Mee dev processes:"
-stop "Celery     " "celery.*meeting.celery_app"
+stop "Celery     " "celery.*src.celery_app"
 stop "Watchmedo  " "watchmedo.*celery"
 stop "FastAPI    " "run_meeting.py"
 stop "Uvicorn    " "uvicorn.*meeting"
-stop "Vite       " "vite.*meeting_frontend_react"
+stop "Vite       " "vite.*frontend"
 echo
 echo "Docker services (postgres, rabbitmq, adminer) still running."
 echo "To stop them too: docker compose stop"

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from meeting.api import chat as chat_api
-from meeting.db import repositories as repo
+from src.api import chat as chat_api
+from src.db import repositories as repo
 
 SID = "77777777-7777-7777-7777-777777777777"
 

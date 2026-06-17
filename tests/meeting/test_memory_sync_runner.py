@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from meeting.services import memory_sync_runner as runner
+from src.services import memory_sync_runner as runner
 
 
 @pytest.mark.asyncio

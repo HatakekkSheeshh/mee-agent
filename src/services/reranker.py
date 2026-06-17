@@ -5,7 +5,7 @@ fall back to prompting the chat LLM (Qwen3-5-27b) to score relevance. Slower
 than a cross-encoder but zero extra deps + works with current infra.
 
 Usage:
-    from meeting.services.reranker import rerank_with_llm
+    from src.services.reranker import rerank_with_llm
     top_ids = rerank_with_llm(
         query="Sprint Review",
         candidates=[(id1, "Tuấn deploy v1..."), (id2, "Linh chốt budget..."), ...],

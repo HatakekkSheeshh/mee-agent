@@ -14,7 +14,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from meeting.db.models import (
+from src.db.models import (
     AuditLog,
     ChatMessage,
     ChatSession,
@@ -28,7 +28,7 @@ from meeting.db.models import (
     TranscriptSegment,
     User,
 )
-from meeting.services.role_mapping import resolve_role
+from src.services.role_mapping import resolve_role
 
 
 # ─── User ─────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ async def update_recording_metadata(
     mom_language: Optional[str] = None,
 ) -> Optional["Recording"]:  # type: ignore[name-defined]
     """Patch per-recording metadata. All fields optional."""
-    from meeting.db.models import Recording
+    from src.db.models import Recording
     rec = await session.get(Recording, recording_id)
     if not rec:
         return None
@@ -879,7 +879,7 @@ async def save_memory_events_bulk(
     Embeds `text` in batch (1 API call for N events) before INSERT.
     Falls back to NULL embedding if embedding service unavailable.
     """
-    from meeting.services.embedding import embed_batch
+    from src.services.embedding import embed_batch
 
     valid = [ev for ev in events if ev.get("text") and ev.get("event_type")]
     if not valid:
@@ -928,8 +928,8 @@ async def retrieve_memory_events(
     """
     import os
     from sqlalchemy import func as sql_func
-    from meeting.services.embedding import embed_text
-    from meeting.services.reranker import rerank_with_llm
+    from src.services.embedding import embed_text
+    from src.services.reranker import rerank_with_llm
 
     def _base_filter(stmt):
         stmt = stmt.where(MemoryEventRow.user_id == user_id)

@@ -15,7 +15,7 @@ import json
 import uuid
 from types import SimpleNamespace
 
-from meeting.graphs import chat_graph
+from src.graphs import chat_graph
 
 UID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 

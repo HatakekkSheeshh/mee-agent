@@ -10,13 +10,13 @@ Endpoint-level live verification is deferred to the manual smoke (Task 6).
 """
 from __future__ import annotations
 
-from meeting.api.chat import (
+from src.api.chat import (
     PM_TOOL_NAME,
     _approve_decision,
     _persist_fields,
     _reject_decision,
 )
-from meeting.graphs.chat_graph import _decision_to_payload
+from src.graphs.chat_graph import _decision_to_payload
 
 
 # ─── _persist_fields: distinguish pm interrupt vs local-tool interrupt ──

@@ -19,9 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App code + legacy SPA (FastAPI mounts meeting_frontend/ at /) + migrations.
-COPY meeting/ ./meeting/
-COPY meeting_frontend/ ./meeting_frontend/
+# App code + React SPA source/build target (FastAPI mounts frontend/ at /) + migrations.
+COPY src/ ./src/
+COPY frontend/ ./frontend/
 COPY alembic/ ./alembic/
 COPY alembic.ini run_meeting.py ./
 

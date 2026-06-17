@@ -13,7 +13,7 @@ import json
 import uuid
 from types import SimpleNamespace
 
-from meeting.services.tools import switch_meeting as sm
+from src.services.tools import switch_meeting as sm
 
 UID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 

@@ -6,10 +6,10 @@ import logging
 import re
 from typing import Literal
 
-from meeting.graphs._chat_llm import _llm_client, _llm_model
-from meeting.graphs._chat_serde import strip_think
-from meeting.graphs._chat_prompts import CLASSIFY_SYSTEM_PROMPT
-from meeting.graphs._chat_state import ChatState, PM_AGENT_COMMAND
+from src.graphs._chat_llm import _llm_client, _llm_model
+from src.graphs._chat_serde import strip_think
+from src.graphs._chat_prompts import CLASSIFY_SYSTEM_PROMPT
+from src.graphs._chat_state import ChatState, PM_AGENT_COMMAND
 
 logger = logging.getLogger(__name__)
 

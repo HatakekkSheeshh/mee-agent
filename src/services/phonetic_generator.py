@@ -144,7 +144,7 @@ def generate_phonetic_mappings(
     llm_vocab = vocab
     if use_pool:
         try:
-            from meeting.vocab_store import (
+            from src.vocab_store import (
                 get_corrections_for_vocab, terms_without_pool_corrections,
             )
             pool_mappings = get_corrections_for_vocab(vocab)
@@ -274,7 +274,7 @@ def generate_phonetic_mappings(
         # Bulk-save new mappings to the global pool so future meetings reuse.
         if use_pool and clean:
             try:
-                from meeting.vocab_store import bulk_add_corrections
+                from src.vocab_store import bulk_add_corrections
                 added = bulk_add_corrections(clean)
                 logger.info(
                     f"[phonetic_generator] saved {added} new mappings to pool"

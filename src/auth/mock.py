@@ -20,7 +20,7 @@ import json
 from typing import Optional
 from urllib.parse import urlencode
 
-from meeting.auth.base import UserInfo
+from src.auth.base import UserInfo
 
 
 MOCK_PREFIX = "mock:"

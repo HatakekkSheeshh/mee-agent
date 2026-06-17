@@ -233,7 +233,7 @@ def start_celery_worker() -> subprocess.Popen:
     cap is MaaS rate limits / token quota, not local CPU.
 
     When `watchmedo` (from the `watchdog` package) is on PATH, wrap the
-    worker so it auto-restarts on any .py change under meeting/. Celery
+    worker so it auto-restarts on any .py change under src/. Celery
     doesn't pick up new @celery_app.task definitions until the worker
     process is restarted; without auto-reload, the dev loop is "edit
     tasks.py → manually kill + restart worker" which is annoying.
@@ -249,7 +249,7 @@ def start_celery_worker() -> subprocess.Popen:
     loglevel = os.getenv("CELERY_LOGLEVEL", "warning")
     celery_cmd = [
         sys.executable, "-m", "celery",
-        "-A", "meeting.celery_app",
+        "-A", "src.celery_app",
         "worker",
         f"--loglevel={loglevel}",
         f"--pool={pool}",
@@ -266,7 +266,7 @@ def start_celery_worker() -> subprocess.Popen:
     if watchmedo_bin:
         cmd = [
             watchmedo_bin, "auto-restart",
-            "--directory=meeting",
+            "--directory=src",
             "--pattern=*.py",
             "--recursive",
             "--signal=SIGTERM",
@@ -380,13 +380,13 @@ def start_http_server(args):
     # file changes. create_app() defaults output_dir to <repo>/output when
     # None is passed, which matches the previous behavior.
     uvicorn.run(
-        "meeting.app:create_app",
+        "src.app:create_app",
         host="0.0.0.0",
         port=args.http_port,
         log_level="info",
         reload=True,
         factory=True,
-        reload_dirs=[os.path.join(os.path.dirname(__file__), "meeting")],
+        reload_dirs=[os.path.join(os.path.dirname(__file__), "src")],
     )
 
 
@@ -413,7 +413,7 @@ def main():
         sys.exit(1)
 
     # Realtime-STT WebSocket is now mounted INTO the FastAPI app at /ws (see
-    # meeting.ws_transcribe.register_ws_route), so it shares the HTTP port —
+    # src.ws_transcribe.register_ws_route), so it shares the HTTP port —
     # matching the single-port (8080) AgentBase runtime. The legacy standalone
     # :9091 server (start_whisper_server) is no longer started; kept for
     # reference / manual use only.

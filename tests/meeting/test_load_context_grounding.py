@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from meeting.graphs.chat_graph import context as ctx
+from src.graphs.chat_graph import context as ctx
 
 
 class _Meeting:

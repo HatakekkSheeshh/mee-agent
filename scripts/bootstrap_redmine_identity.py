@@ -7,7 +7,7 @@ AGENTBASE_REDMINE_RETURN_URL in .env:
     venv/bin/python scripts/bootstrap_redmine_identity.py
 
 Pure payload builders are unit-tested; the network calls reuse the proven IAM
-token flow from meeting.memory_client._get_token.
+token flow from src.memory_client._get_token.
 """
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ sys.path.append(str(PROJECT_ROOT))
 from dotenv import load_dotenv
 
 # Import only the lightweight, stdlib-based token helper. We deliberately do NOT
-# import from meeting.services — its package __init__ pulls in meeting.db.base,
+# import from src.services — its package __init__ pulls in src.db.base,
 # which requires DATABASE_URL at import time, and this bootstrap never touches the
-# DB. The two AgentBase constants below mirror meeting/services/identity_client.py.
-from meeting.memory_client import _get_token
+# DB. The two AgentBase constants below mirror src/services/identity_client.py.
+from src.memory_client import _get_token
 
 ALLOWED_IDENTITY_HOST = "agentbase.api.vngcloud.vn"
 DEFAULT_IDENTITY_BASE = "https://agentbase.api.vngcloud.vn/identity/api/v1"

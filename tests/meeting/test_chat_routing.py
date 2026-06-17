@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.graphs.chat_graph import make_classify_intent, route_entry
+from src.graphs.chat_graph import make_classify_intent, route_entry
 
 
 def test_route_pm_task_goes_to_pm_call():
@@ -149,7 +149,7 @@ async def test_classify_grounding_auto_on_error():
 def test_classify_prompt_is_grounding_only():
     """The classify prompt asks ONLY for the grounding flag — it must NOT ask the
     model to classify intent (pm-agent is opt-in via /pm-agent, not the LLM)."""
-    from meeting.graphs.chat_graph import CLASSIFY_SYSTEM_PROMPT
+    from src.graphs.chat_graph import CLASSIFY_SYSTEM_PROMPT
 
     assert "grounding" in CLASSIFY_SYSTEM_PROMPT
     assert "required" in CLASSIFY_SYSTEM_PROMPT

@@ -8,7 +8,7 @@ breaks the grant redirect.
 """
 from __future__ import annotations
 
-from meeting.services.identity_client import pick_return_url
+from src.services.identity_client import pick_return_url
 
 
 def test_single_url_unchanged():

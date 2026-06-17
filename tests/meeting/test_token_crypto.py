@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from meeting.auth import token_crypto
+from src.auth import token_crypto
 
 
 @pytest.fixture(autouse=True)

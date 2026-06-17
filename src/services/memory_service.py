@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
+from src.db import repositories as repo
 
 logger = logging.getLogger(__name__)
 

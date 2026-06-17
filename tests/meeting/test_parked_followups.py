@@ -6,14 +6,14 @@
 """
 import uuid
 
-from meeting.graphs import chat_graph
-from meeting.graphs.chat_graph import (
+from src.graphs import chat_graph
+from src.graphs.chat_graph import (
     MAX_RECONCILE_ITEMS,
     _reconcile_payloads,
     pm_reply,
     route_after_pm_reply,
 )
-from meeting.services.tools.create_task import assignee_matches
+from src.services.tools.create_task import assignee_matches
 
 MID = "11111111-1111-1111-1111-111111111111"
 RID = "33333333-3333-3333-3333-333333333333"

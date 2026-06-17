@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import meeting.api.chat as chat
+import src.api.chat as chat
 
 
 async def test_oid_mode_forwards_user_oid_without_graph_call(monkeypatch):

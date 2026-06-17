@@ -1,12 +1,12 @@
 """Role seed data — the 10 company roles that populate the `roles` pool.
 
-Lives in meeting/db/seed_roles.py so both the Alembic migration and this test
+Lives in src/db/seed_roles.py so both the Alembic migration and this test
 share one source of truth. Locks count, uniqueness, well-formedness, and the
 data_plan assignments agreed in the design spec.
 """
 from __future__ import annotations
 
-from meeting.db.seed_roles import SEED_ROLES
+from src.db.seed_roles import SEED_ROLES
 
 VALID_PLANS = {"own_tasks", "cross_project", "minimal"}
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.services.role_mapping import normalize, resolve_role
+from src.services.role_mapping import normalize, resolve_role
 
 
 def _role(name, aliases=()):

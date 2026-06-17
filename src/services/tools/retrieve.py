@@ -8,8 +8,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
-from meeting.services.tools._registry import tool
+from src.db import repositories as repo
+from src.services.tools._registry import tool
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ async def retrieve(args: dict, *, session: AsyncSession, user_id: uuid.UUID) -> 
     top_k = args.get("top_k") or DEFAULT_RETRIEVE_K
     # Resolve via the package namespace so tests can monkeypatch
     # `tools.get_memory_service`. Lazy import avoids an import cycle at load.
-    from meeting.services import tools as _tools_pkg
+    from src.services import tools as _tools_pkg
 
     svc = _tools_pkg.get_memory_service()
     events = await svc.retrieve(

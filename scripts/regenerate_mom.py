@@ -5,8 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from meeting.note_generator import generate_meeting_notes
-from meeting.report_generator import generate_mom_markdown
+from src.note_generator import generate_meeting_notes
+from src.report_generator import generate_mom_markdown
 
 transcript_path = Path(sys.argv[1])
 raw = transcript_path.read_text(encoding="utf-8")

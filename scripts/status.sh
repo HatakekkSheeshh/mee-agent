@@ -35,5 +35,5 @@ check_docker "Adminer"   "mee-adminer"   "http://localhost:8080"
 echo
 echo "Python processes:"
 check "FastAPI"  "run_meeting.py"            "http://localhost:8000"
-check "Celery"   "celery.*meeting.celery_app"
-check "Vite FE"  "vite.*meeting_frontend_react" "http://localhost:5173"
+check "Celery"   "celery.*src.celery_app"
+check "Vite FE"  "vite.*frontend" "http://localhost:5173"

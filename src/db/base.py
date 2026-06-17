@@ -2,7 +2,7 @@
 SQLAlchemy 2 async setup — engine, session factory, declarative Base.
 
 Usage in FastAPI:
-    from meeting.db import get_session
+    from src.db import get_session
     @app.get("/...")
     async def handler(session: AsyncSession = Depends(get_session)):
         ...

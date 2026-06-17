@@ -6,7 +6,7 @@ to run; `build_kickoff_messages` assembles the kickoff LLM prompt. Both are pure
 """
 from __future__ import annotations
 
-from meeting.services.kickoff import build_kickoff_messages, role_data_plan
+from src.services.kickoff import build_kickoff_messages, role_data_plan
 
 
 # ─── role_data_plan ───────────────────────────────────────────────────

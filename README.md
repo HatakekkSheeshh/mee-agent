@@ -92,7 +92,7 @@ venv/bin/alembic upgrade head                # tạo schema + pgvector + IVFFlat
 venv/bin/python run_meeting.py
 
 # Terminal 2 — React frontend (Vite :8001, proxy /api+/auth→:8002, /ws→:9091)
-cd meeting_frontend_react
+cd frontend
 npm install                                  # lần đầu, hoặc khi package.json đổi
 npm run dev
 ```
@@ -101,7 +101,6 @@ Mở **http://localhost:8001** (Vite chạy :8001 vì đó là host đã đăng 
 Build production: `npm run build` → `dist/`.
 
 > Backend phải chạy trước (`:8002`) thì proxy `/api` mới hoạt động. Lỗi peer-deps khi `npm install` → thử `--legacy-peer-deps`.
-> Legacy vanilla frontend vẫn served bởi FastAPI tại `http://localhost:8002/` (fallback).
 
 ---
 
@@ -146,7 +145,6 @@ Build production: `npm run build` → `dist/`.
 flowchart TB
     subgraph FE["🖥 Frontend"]
         FE1[React 18 + TS + Vite + TipTap]
-        FE2[Legacy vanilla JS<br/>meeting_frontend/]
     end
     subgraph BE["⚙️ FastAPI Backend"]
         API[API: meetings.py · chat.py]
@@ -227,7 +225,7 @@ vượt qua "Xóa hội thoại". Hai scope:
 
 ```
 mee-meeting-agent/
-├── meeting/                      # Backend Python package
+├── src/                          # Backend Python package
 │   ├── api/                      # meetings.py (REST) · chat.py (HITL)
 │   ├── db/                       # base.py (engine) · models.py (ORM) · repositories.py
 │   ├── graphs/                   # mom_graph.py · chat_graph.py · checkpointer.py
@@ -235,9 +233,8 @@ mee-meeting-agent/
 │   ├── app.py                    # FastAPI factory
 │   ├── note_generator.py         # MoM LLM (map-reduce + Qwen3 think-strip)
 │   └── report_generator.py       # MoM JSON → Markdown
-├── meeting_frontend_react/       # React frontend (recommended) — Vite + React 18 + TS + TipTap
+├── frontend/                     # React frontend (recommended) — Vite + React 18 + TS + TipTap
 │   └── src/                      # api/client.ts · store/AppContext.tsx · hooks/ · i18n.ts · components/
-├── meeting_frontend/             # Legacy vanilla SPA (fallback, served bởi FastAPI)
 ├── whisper_live/                 # Whisper streaming backend (maas_backend.py)
 ├── tools/phowhisper-server/      # Self-hosted PhoWhisper + pyannote (deploy L40)
 ├── alembic/versions/             # DB migrations 0001–0023

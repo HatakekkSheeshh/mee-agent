@@ -21,7 +21,7 @@ PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 dotenv.load_dotenv(PROJECT_ROOT / ".env", override=True, interpolate=False)
 sys.path.append(str(PROJECT_ROOT))
 
-from meeting import memory_client as mc  # noqa: E402
+from src import memory_client as mc  # noqa: E402
 
 
 def main() -> int:

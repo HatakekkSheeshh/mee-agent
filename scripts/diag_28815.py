@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True, interpolate=False)
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-from meeting.services.redmine_mcp_client import get_redmine_mcp_client  # noqa: E402
+from src.services.redmine_mcp_client import get_redmine_mcp_client  # noqa: E402
 
 FIELDS = ("id", "subject", "assigned_to", "updated_on", "status", "tracker", "author")
 

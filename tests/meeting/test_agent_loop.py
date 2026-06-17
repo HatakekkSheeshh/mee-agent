@@ -21,7 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
-from meeting.graphs.chat_graph import (
+from src.graphs.chat_graph import (
     ChatState,
     MAX_AGENT_ROUNDS,
     REJECT_REPLY,
@@ -138,7 +138,7 @@ class FakeToolset:
         return await self.exec(name, args, session=session, user_id=user_id)
 
     def build_task_items(self, items):
-        from meeting.services import build_task_items as real
+        from src.services import build_task_items as real
         return real(items)
 
 

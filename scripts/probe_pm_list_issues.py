@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True, interpolate=False)
 
-from meeting.services.pm_agent_client import get_pm_agent_client  # noqa: E402
+from src.services.pm_agent_client import get_pm_agent_client  # noqa: E402
 
 PROMPT = "liệt kê issue trong project AI Innovation Project"
 

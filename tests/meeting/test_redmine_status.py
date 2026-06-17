@@ -1,5 +1,5 @@
 """Pure status-envelope builder for GET /api/redmine/status."""
-from meeting.api.redmine import (
+from src.api.redmine import (
     EXPECTED_REDMINE_TOOL_COUNT,
     _pm_agent_configured,
     build_redmine_status,

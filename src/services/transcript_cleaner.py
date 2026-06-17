@@ -341,7 +341,7 @@ def _clean_one(
     # Inject dynamic phonetic mappings (sinh từ vocab_hints, cached on recording).
     # If none, leave a placeholder so cleaner falls back to the generic pattern
     # examples already baked below in the prompt template.
-    from meeting.services.phonetic_generator import format_for_prompt
+    from src.services.phonetic_generator import format_for_prompt
     phonetic_block = format_for_prompt(phonetic_examples or [])
     if not phonetic_block:
         phonetic_block = "  (chưa có mapping — dùng pattern chung bên dưới)"

@@ -1,6 +1,6 @@
 // Live recording via WebSocket Whisper backend.
 //
-// Flow (mirrors meeting_frontend/app.js):
+// Flow (mirrors the previous vanilla frontend implementation):
 //   1. start() → getUserMedia → AudioContext + AudioWorklet (PCM @16kHz)
 //   2. open WebSocket → onopen: send config JSON
 //   3. server replies SERVER_READY → start streaming PCM bytes

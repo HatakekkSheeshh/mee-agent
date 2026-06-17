@@ -21,7 +21,7 @@ import uuid
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded
 
-from meeting.celery_app import celery_app
+from src.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,10 @@ def _run_async(coro_factory):
         # they were created in a now-dead event loop and are unusable here.
         # Each resource has the same "close needs original loop" trap, so
         # we use reference-drop semantics (no await close) for both.
-        from meeting.db.base import async_engine
+        from src.db.base import async_engine
         await async_engine.dispose(close=False)
         try:
-            from meeting.graphs.checkpointer import reset_checkpointer
+            from src.graphs.checkpointer import reset_checkpointer
             reset_checkpointer()
         except Exception:
             pass  # checkpointer module is optional for tasks that don't use it
@@ -89,9 +89,9 @@ def gen_mom_task(self, recording_id: str, ui_lang: str = "vi") -> dict:
         f"task_id={self.request.id}"
     )
     # Heavy imports inside task — autodiscovery doesn't load these at module init.
-    from meeting.db.base import AsyncSessionLocal
-    from meeting.graphs import run_mom_graph
-    from meeting.graphs.checkpointer import init_checkpointer, get_checkpointer
+    from src.db.base import AsyncSessionLocal
+    from src.graphs import run_mom_graph
+    from src.graphs.checkpointer import init_checkpointer, get_checkpointer
     import os
 
     output_dir = os.getenv("OUTPUT_DIR") or os.path.join(
@@ -179,9 +179,9 @@ def diarize_recording_task(self, recording_id: str, audio_rel_path: str) -> dict
     import os
     import base64
 
-    from meeting.db.base import SyncSessionLocal
-    from meeting.db import repositories_sync as repo_sync
-    from meeting.services.local_diarize import (
+    from src.db.base import SyncSessionLocal
+    from src.db import repositories_sync as repo_sync
+    from src.services.local_diarize import (
         diarize_audio, split_text_proportional,
     )
 
@@ -207,7 +207,7 @@ def diarize_recording_task(self, recording_id: str, audio_rel_path: str) -> dict
         # Below that, single-shot is faster (no chunking overhead + AHC merge).
         est_duration_s = len(wav_bytes) / 32_000  # rough but good enough
         if est_duration_s > 15 * 60:
-            from meeting.services.parallel_diarize import diarize_parallel
+            from src.services.parallel_diarize import diarize_parallel
             logger.info(
                 f"[diarize_recording_task] loaded {size_mb}MB audio "
                 f"(~{est_duration_s/60:.0f} min) → PARALLEL diarize "
@@ -262,7 +262,7 @@ def diarize_recording_task(self, recording_id: str, audio_rel_path: str) -> dict
     # Sync DB I/O — no event loop, no async pool. Same logic as before.
     from sqlalchemy import select
     from sqlalchemy.orm.attributes import flag_modified
-    from meeting.db.models import TranscriptSegment
+    from src.db.models import TranscriptSegment
 
     with SyncSessionLocal() as session:
         recording = repo_sync.get_recording(session, uuid.UUID(recording_id))
@@ -359,11 +359,11 @@ def clean_recording_task(self, recording_id: str, regenerate: bool = False) -> d
         f"regenerate={regenerate} task_id={self.request.id}"
     )
 
-    from meeting.db.base import SyncSessionLocal
-    from meeting.db import repositories_sync as repo_sync
-    from meeting.services.transcript_cleaner import clean_transcript
-    from meeting.services.model_registry import resolve_llm
-    from meeting.services.phonetic_generator import (
+    from src.db.base import SyncSessionLocal
+    from src.db import repositories_sync as repo_sync
+    from src.services.transcript_cleaner import clean_transcript
+    from src.services.model_registry import resolve_llm
+    from src.services.phonetic_generator import (
         generate_phonetic_mappings, needs_regeneration,
     )
     from sqlalchemy.orm.attributes import flag_modified

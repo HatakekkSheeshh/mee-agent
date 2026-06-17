@@ -42,7 +42,7 @@ WHICH="$WHICH" OUT="$OUT" PNG="$PNG" "$PY" - <<'PY'
 import os
 import sys
 
-# Building a graph imports meeting.db.base, which needs DATABASE_URL at import
+# Building a graph imports src.db.base, which needs DATABASE_URL at import
 # time (engine is lazy — no connection). Seed a dummy, then let a real .env
 # override it if present.
 os.environ.setdefault("DATABASE_URL", "postgresql://t:t@localhost:5432/t")
@@ -60,13 +60,13 @@ want_png = os.environ["PNG"] == "1"
 
 
 def _chat():
-    from meeting.graphs.chat_graph import build_chat_graph
+    from src.graphs.chat_graph import build_chat_graph
     return build_chat_graph(session=object(), checkpointer=MemorySaver())
 
 
 def _mom():
-    from meeting.graphs.mom_graph import build_mom_graph
-    from meeting.services.memory_service import get_memory_service
+    from src.graphs.mom_graph import build_mom_graph
+    from src.services.memory_service import get_memory_service
     return build_mom_graph(session=object(), memory_service=get_memory_service(),
                            checkpointer=MemorySaver())
 

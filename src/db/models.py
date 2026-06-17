@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from meeting.db.base import Base
+from src.db.base import Base
 
 
 class User(Base):

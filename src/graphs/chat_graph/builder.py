@@ -4,8 +4,8 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.graphs._chat_state import ChatState
-from meeting.graphs.chat_graph.agent import (
+from src.graphs._chat_state import ChatState
+from src.graphs.chat_graph.agent import (
     make_agent,
     make_agent_approve,
     make_agent_execute,
@@ -14,9 +14,9 @@ from meeting.graphs.chat_graph.agent import (
     route_after_agent_execute,
     route_after_agent_tools,
 )
-from meeting.graphs.chat_graph.classify import make_classify_intent, route_entry
-from meeting.graphs.chat_graph.context import make_load_context, make_save_reply
-from meeting.graphs.chat_graph.pm import (
+from src.graphs.chat_graph.classify import make_classify_intent, route_entry
+from src.graphs.chat_graph.context import make_load_context, make_save_reply
+from src.graphs.chat_graph.pm import (
     make_pm_call,
     pm_await,
     pm_error,
@@ -34,7 +34,7 @@ def build_chat_graph(
     g.add_node("load_context", make_load_context(session))
     g.add_node("classify_intent", make_classify_intent(agent_llm))
     # Unified tool-calling agent (question + local tools). agent_llm + tools are
-    # injected in tests; in production they default to _llm_client() / meeting.services.
+    # injected in tests; in production they default to _llm_client() / src.services.
     g.add_node("agent", make_agent(agent_llm, tools=tools))
     g.add_node("agent_tools", make_agent_tools(session, tools=tools))
     g.add_node("agent_approve", make_agent_approve(tools=tools))

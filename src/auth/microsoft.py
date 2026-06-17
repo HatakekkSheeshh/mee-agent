@@ -7,7 +7,7 @@ Authorization Code flow against Azure AD:
      id_token_claims to build a UserInfo (email + oid + tid), AND serializes the
      MSAL token cache (which now holds the refresh token) so the callback can
      persist it encrypted — that refresh token lets us mint Microsoft Graph
-     access tokens later (see meeting.auth.tokens) to call pm-agent's JWT path.
+     access tokens later (see src.auth.tokens) to call pm-agent's JWT path.
 
 Config (env): MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT_ID. redirect_uri is
 supplied by routes (pinned to MS_REDIRECT_URI). Switch on with
@@ -25,7 +25,7 @@ import os
 import urllib.request
 from typing import Optional
 
-from meeting.auth.base import UserInfo
+from src.auth.base import UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def build_msal_app(cache=None):
     """Build a ConfidentialClientApplication bound to an (optional) token cache.
 
     Used both at login (exchange_code) and later for silent refresh
-    (meeting.auth.tokens) so the same client_id/authority/secret config drives
+    (src.auth.tokens) so the same client_id/authority/secret config drives
     both. Lazy msal import keeps module import cheap.
     """
     import msal

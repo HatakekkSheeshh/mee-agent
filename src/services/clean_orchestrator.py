@@ -26,9 +26,9 @@ import uuid
 
 from sqlalchemy.orm.attributes import flag_modified
 
-from meeting.db.base import AsyncSessionLocal
-from meeting.db import repositories as repo
-from meeting.services.transcript_cleaner import clean_transcript
+from src.db.base import AsyncSessionLocal
+from src.db import repositories as repo
+from src.services.transcript_cleaner import clean_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -177,9 +177,9 @@ def trigger_background(recording_id: str) -> None:
     # Preferred path: dispatch to Celery worker. Same task as /clean uses
     # → identical retry + timeout behaviour.
     try:
-        from meeting.celery_app import is_broker_reachable
+        from src.celery_app import is_broker_reachable
         if is_broker_reachable():
-            from meeting.tasks import clean_recording_task
+            from src.tasks import clean_recording_task
             ar = clean_recording_task.delay(recording_id, False)
             logger.info(
                 f"[clean_orchestrator] dispatched clean_recording_task "
@@ -254,7 +254,7 @@ async def _run_clean(recording_id: str) -> None:
                 meeting = await repo.get_meeting(session, recording.meeting_id)
 
                 # Resolve effective LLM profile (recording → meeting → default).
-                from meeting.services.model_registry import resolve_llm
+                from src.services.model_registry import resolve_llm
                 llm_profile = resolve_llm(
                     recording_choice=recording.llm_model,
                     meeting_choice=getattr(meeting, "llm_model", None) if meeting else None,
@@ -287,7 +287,7 @@ async def _run_clean(recording_id: str) -> None:
                 # Cached value reused across all chunks of THIS recording.
                 phonetic_mappings: list[dict] = []
                 if merged_vocab:
-                    from meeting.services.phonetic_generator import (
+                    from src.services.phonetic_generator import (
                         generate_phonetic_mappings, needs_regeneration,
                     )
                     cached = recording.phonetic_examples_json or {}
@@ -309,7 +309,7 @@ async def _run_clean(recording_id: str) -> None:
                 # Pre-mapped speakers via voice match
                 pre_mapped: dict[str, str] = {}
                 if recording.speaker_embeddings:
-                    from meeting.services.speaker_matcher import (
+                    from src.services.speaker_matcher import (
                         match_clusters_to_names,
                     )
                     user = await repo.get_or_create_dev_user(session)
@@ -339,7 +339,7 @@ async def _run_clean(recording_id: str) -> None:
                 # Estimate chunk count for progress reporting (cleaner internally
                 # chunks at MAX_TRANSCRIPT_CHARS = 14_000). Approximate so FE
                 # can show "1/N" progress.
-                from meeting.services.transcript_cleaner import MAX_TRANSCRIPT_CHARS
+                from src.services.transcript_cleaner import MAX_TRANSCRIPT_CHARS
                 est_total = max(
                     1, (len(raw_text) + MAX_TRANSCRIPT_CHARS - 1) // MAX_TRANSCRIPT_CHARS
                 )

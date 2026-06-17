@@ -7,9 +7,9 @@ from typing import AsyncIterator, Optional
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.graphs._chat_state import ChatState
-from meeting.graphs.chat_graph.builder import build_chat_graph
-from meeting.services import ensure_redmine_tools_registered
+from src.graphs._chat_state import ChatState
+from src.graphs.chat_graph.builder import build_chat_graph
+from src.services import ensure_redmine_tools_registered
 
 logger = logging.getLogger(__name__)
 

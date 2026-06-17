@@ -6,8 +6,8 @@ venv/
 env/
 
 # Node / Vite (rebuilt inside the image — never ship local copies)
-meeting_frontend_react/node_modules/
-meeting_frontend_react/dist/
+frontend/node_modules/
+frontend/dist/
 node_modules/
 
 # Secrets & local config (injected as runtime env on AgentBase)

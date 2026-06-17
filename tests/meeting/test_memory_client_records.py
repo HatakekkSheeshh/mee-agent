@@ -1,4 +1,4 @@
-"""Unit tests for the project-state memory-records layer in meeting/memory_client.py.
+"""Unit tests for the project-state memory-records layer in src/memory_client.py.
 
 Network-free: pure helpers (build/parse/select) plus the `search_project_record` /
 `upsert_project_record` functions exercised through an injected `call` seam, so no
@@ -9,7 +9,7 @@ docs/superpowers/specs/2026-06-11-agent-memory-sync-design.md.
 """
 from __future__ import annotations
 
-from meeting.memory_client import (
+from src.memory_client import (
     build_project_record_text,
     parse_project_marker,
     select_latest_project_record,

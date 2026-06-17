@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from meeting.graphs.chat_graph import redmine_format as rf
-from meeting.graphs.chat_graph import make_agent_tools
+from src.graphs.chat_graph import redmine_format as rf
+from src.graphs.chat_graph import make_agent_tools
 
 
 # ── Task 1: scaffold ────────────────────────────────────────────────

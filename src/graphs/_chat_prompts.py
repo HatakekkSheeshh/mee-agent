@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from meeting.graphs._chat_state import ChatState
+from src.graphs._chat_state import ChatState
 
 # Vietnam time (UTC+7) for "today" awareness. Prefer the tz database; fall back to
 # a fixed offset if tzdata is unavailable so prompt-building never raises.

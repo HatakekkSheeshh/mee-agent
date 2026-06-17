@@ -7,8 +7,8 @@ token.
 """
 from __future__ import annotations
 
-from meeting.graphs.chat_graph.pm import make_pm_call
-from meeting.services.pm_agent_client import PmAgentResult
+from src.graphs.chat_graph.pm import make_pm_call
+from src.services.pm_agent_client import PmAgentResult
 
 
 class _RecordingClient:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.auth.routes import _redirect_uri
+from src.auth.routes import _redirect_uri
 
 
 def _fake_request(scheme="http", netloc="localhost:8002", headers=None):
@@ -32,7 +32,7 @@ def test_redirect_uri_derives_from_request_without_override(monkeypatch):
 
 # ─── voice-enrollment gate (VOICE_ENROLL_OPTIONAL) ──────────────────
 
-from meeting.auth.routes import _enrollment_satisfied
+from src.auth.routes import _enrollment_satisfied
 
 
 def test_enrollment_gate_without_flag(monkeypatch):

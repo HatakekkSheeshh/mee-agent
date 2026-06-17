@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import uuid
 
-import meeting.services.tools.remember_fact as rf
-from meeting.services import tools
+import src.services.tools.remember_fact as rf
+from src.services import tools
 
 MID = "11111111-1111-1111-1111-111111111111"
 UID = uuid.UUID("22222222-2222-2222-2222-222222222222")

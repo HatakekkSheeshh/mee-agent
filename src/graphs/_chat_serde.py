@@ -13,8 +13,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from meeting.graphs._chat_state import ChatState
-from meeting.services.pm_agent_client import PmAgentResult
+from src.graphs._chat_state import ChatState
+from src.services.pm_agent_client import PmAgentResult
 
 logger = logging.getLogger(__name__)
 

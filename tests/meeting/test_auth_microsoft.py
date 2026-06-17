@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from meeting.auth.base import UserInfo
+from src.auth.base import UserInfo
 
 
 CLIENT_ID = "821cfa9b-972b-421a-99cf-4cc3db53fc71"
@@ -37,7 +37,7 @@ def _provider(monkeypatch, token_result: dict):
     monkeypatch.setenv("MS_CLIENT_ID", CLIENT_ID)
     monkeypatch.setenv("MS_CLIENT_SECRET", "secret-value")
     monkeypatch.setenv("MS_TENANT_ID", TENANT_ID)
-    from meeting.auth.microsoft import MicrosoftProvider
+    from src.auth.microsoft import MicrosoftProvider
     return MicrosoftProvider(msal_app=_FakeMsalApp(token_result))
 
 
@@ -84,13 +84,13 @@ def test_get_login_url_passes_state_and_redirect(monkeypatch):
 def test_init_requires_client_credentials(monkeypatch):
     monkeypatch.delenv("MS_CLIENT_ID", raising=False)
     monkeypatch.delenv("MS_CLIENT_SECRET", raising=False)
-    from meeting.auth.microsoft import MicrosoftProvider
+    from src.auth.microsoft import MicrosoftProvider
     with pytest.raises(RuntimeError):
         MicrosoftProvider()
 
 
 def test_fetch_profile_parses_graph_response(monkeypatch):
-    import meeting.auth.microsoft as ms
+    import src.auth.microsoft as ms
     monkeypatch.setattr(
         ms, "_graph_get_me",
         lambda token: {"jobTitle": "Applied AI Engineer", "department": "Engineer"},
@@ -102,7 +102,7 @@ def test_fetch_profile_parses_graph_response(monkeypatch):
 
 
 def test_fetch_profile_degrades_to_empty_on_graph_error(monkeypatch):
-    import meeting.auth.microsoft as ms
+    import src.auth.microsoft as ms
     def _boom(token):
         raise RuntimeError("graph 500")
     monkeypatch.setattr(ms, "_graph_get_me", _boom)
@@ -111,7 +111,7 @@ def test_fetch_profile_degrades_to_empty_on_graph_error(monkeypatch):
 
 
 def test_exchange_code_sets_position_from_graph(monkeypatch):
-    import meeting.auth.microsoft as ms
+    import src.auth.microsoft as ms
     monkeypatch.setattr(
         ms, "_graph_get_me",
         lambda token: {"jobTitle": "Software Engineer", "department": "Product"},
@@ -132,7 +132,7 @@ def test_exchange_code_sets_position_from_graph(monkeypatch):
 
 
 def test_exchange_code_position_none_when_graph_fails(monkeypatch):
-    import meeting.auth.microsoft as ms
+    import src.auth.microsoft as ms
     monkeypatch.setattr(ms, "_graph_get_me", lambda token: (_ for _ in ()).throw(RuntimeError("x")))
     result = {
         "access_token": "graph-token",

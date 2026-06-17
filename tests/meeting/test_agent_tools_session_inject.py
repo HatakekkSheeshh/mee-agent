@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from meeting.graphs.chat_graph.agent import make_agent_tools
+from src.graphs.chat_graph.agent import make_agent_tools
 
 UID = uuid.uuid4()
 

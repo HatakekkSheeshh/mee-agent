@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from meeting.services.role_mapping import classify_role
+from src.services.role_mapping import classify_role
 
 
 def _role(name):

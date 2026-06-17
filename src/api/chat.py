@@ -25,22 +25,22 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.auth import get_current_user
-from meeting.auth.tokens import ReauthRequired, get_graph_access_token
-from meeting.db import get_session
-from meeting.db import repositories as repo
-from meeting.db.base import AsyncSessionLocal
-from meeting.db.models import PendingAction, User
-from meeting.graphs import (
+from src.auth import get_current_user
+from src.auth.tokens import ReauthRequired, get_graph_access_token
+from src.db import get_session
+from src.db import repositories as repo
+from src.db.base import AsyncSessionLocal
+from src.db.models import PendingAction, User
+from src.graphs import (
     get_checkpointer,
     resume_chat_turn,
     run_chat_turn,
     stream_chat_turn,
 )
-from meeting.graphs._chat_llm import _llm_client, _llm_model
+from src.graphs._chat_llm import _llm_client, _llm_model
 # (role now comes from the authenticated user's users.role_id, not AgentBase)
-from meeting.services.kickoff import run_kickoff
-from meeting.services.redmine_mcp_client import get_redmine_mcp_client
+from src.services.kickoff import run_kickoff
+from src.services.redmine_mcp_client import get_redmine_mcp_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])

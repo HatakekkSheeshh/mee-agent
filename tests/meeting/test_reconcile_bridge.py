@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from meeting.graphs import chat_graph
+from src.graphs import chat_graph
 
 
 def test_reconcile_text_lists_items_and_project():
@@ -138,7 +138,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
-from meeting.graphs.chat_graph import (
+from src.graphs.chat_graph import (
     ChatState,
     make_agent,
     make_agent_approve,
@@ -225,7 +225,7 @@ class FakeToolset:
         return await self.exec(name, args, session=session, user_id=user_id)
 
     def build_task_items(self, items, *, description: str = ""):
-        from meeting.services import build_task_items as real
+        from src.services import build_task_items as real
         return real(items, description=description)
 
 

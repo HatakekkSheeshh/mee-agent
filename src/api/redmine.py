@@ -15,10 +15,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 
-from meeting.auth import get_current_user
-from meeting.db.models import User
-from meeting.services import tools as ts
-from meeting.services.identity_client import get_identity_client
+from src.auth import get_current_user
+from src.db.models import User
+from src.services import tools as ts
+from src.services.identity_client import get_identity_client
 
 logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
-from meeting.db import repositories as repo
+from src.db import repositories as repo
 
 logger = logging.getLogger(__name__)
 

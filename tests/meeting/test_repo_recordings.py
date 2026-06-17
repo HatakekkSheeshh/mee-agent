@@ -12,7 +12,7 @@ import uuid
 from datetime import date, datetime
 from types import SimpleNamespace
 
-from meeting.db import repositories as repo
+from src.db import repositories as repo
 
 MID = "11111111-1111-1111-1111-111111111111"
 

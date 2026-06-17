@@ -12,7 +12,7 @@ from typing import Optional, Sequence
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db.models import SpeakerVoiceprint
+from src.db.models import SpeakerVoiceprint
 
 
 async def save_voiceprint(

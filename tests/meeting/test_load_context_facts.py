@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from meeting.graphs.chat_graph import context as ctx
+from src.graphs.chat_graph import context as ctx
 
 OID = "entra-oid-ronaldo"
 

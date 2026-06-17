@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from meeting.graphs._chat_serde import to_redmine_date
+from src.graphs._chat_serde import to_redmine_date
 
 
 @pytest.mark.parametrize(

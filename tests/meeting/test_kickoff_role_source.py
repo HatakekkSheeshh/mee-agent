@@ -7,7 +7,7 @@ greeting).
 """
 from __future__ import annotations
 
-from meeting.api.chat import _pick_role_name
+from src.api.chat import _pick_role_name
 
 
 def test_request_role_wins_over_persona():

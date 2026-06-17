@@ -30,9 +30,9 @@ load_dotenv(override=True, interpolate=False)
 
 from sqlalchemy import select
 
-from meeting.db.base import AsyncSessionLocal, async_engine
-from meeting.db.models import Meeting
-from meeting.services.memory_sync_runner import sync_project
+from src.db.base import AsyncSessionLocal, async_engine
+from src.db.models import Meeting
+from src.services.memory_sync_runner import sync_project
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sync_memory")

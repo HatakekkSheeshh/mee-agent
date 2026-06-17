@@ -9,10 +9,10 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
-from meeting.db.models import User
-from meeting.graphs._chat_state import ChatState
-from meeting.memory_client import (
+from src.db import repositories as repo
+from src.db.models import User
+from src.graphs._chat_state import ChatState
+from src.memory_client import (
     STALE_NOTE,
     fact_namespace,
     is_record_stale,
@@ -20,9 +20,9 @@ from meeting.memory_client import (
     search_project_record,
     strip_project_marker,
 )
-from meeting.services.meeting_resolver import default_generate, llm_resolve_meeting
-from meeting.services.memory_sync import canonical_source_hash
-from meeting.services.memory_sync_runner import schedule_project_sync
+from src.services.meeting_resolver import default_generate, llm_resolve_meeting
+from src.services.memory_sync import canonical_source_hash
+from src.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 

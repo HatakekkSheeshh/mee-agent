@@ -11,9 +11,9 @@ from typing import Literal, Optional
 
 from langgraph.types import interrupt
 
-from meeting.graphs._chat_serde import _decision_to_payload, _result_to_dict
-from meeting.graphs._chat_state import ChatState, PM_MAX_ROUNDS
-from meeting.services.pm_agent_client import PmAgentError, get_pm_agent_client
+from src.graphs._chat_serde import _decision_to_payload, _result_to_dict
+from src.graphs._chat_state import ChatState, PM_MAX_ROUNDS
+from src.services.pm_agent_client import PmAgentError, get_pm_agent_client
 
 logger = logging.getLogger(__name__)
 

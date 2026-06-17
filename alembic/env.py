@@ -13,8 +13,8 @@ from sqlalchemy import engine_from_config, pool
 load_dotenv(interpolate=False)
 
 # Import models so Base.metadata is populated
-from meeting.db.base import Base  # noqa: E402
-from meeting.db import models  # noqa: E402, F401
+from src.db.base import Base  # noqa: E402
+from src.db import models  # noqa: E402, F401
 
 config = context.config
 

@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
-from meeting.graphs.chat_graph import (
+from src.graphs.chat_graph import (
     ChatState,
     PM_MAX_ROUNDS,
     make_pm_call,
@@ -24,7 +24,7 @@ from meeting.graphs.chat_graph import (
     route_after_pm_call,
     route_after_pm_error,
 )
-from meeting.services.pm_agent_client import PmAgentError, PmAgentResult
+from src.services.pm_agent_client import PmAgentError, PmAgentResult
 
 
 # ─── fixtures ────────────────────────────────────────────────────────

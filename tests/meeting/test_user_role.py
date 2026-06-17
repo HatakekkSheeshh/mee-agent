@@ -6,7 +6,7 @@ mirroring `search_project_record`.
 """
 from __future__ import annotations
 
-from meeting import memory_client as mc
+from src import memory_client as mc
 
 
 # ─── parse_user_role (pure) ───────────────────────────────────────────

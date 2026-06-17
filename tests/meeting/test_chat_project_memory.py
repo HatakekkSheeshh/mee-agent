@@ -14,15 +14,15 @@ import uuid
 
 import pytest
 
-from meeting.memory_client import (
+from src.memory_client import (
     STALE_NOTE,
     build_project_record_text,
     is_record_stale,
     strip_project_marker,
 )
-from meeting.graphs._chat_prompts import _agent_system_prompt
-from meeting.graphs.chat_graph import context as ctx
-from meeting.services.memory_sync import canonical_source_hash
+from src.graphs._chat_prompts import _agent_system_prompt
+from src.graphs.chat_graph import context as ctx
+from src.services.memory_sync import canonical_source_hash
 
 
 # ── strip_project_marker ─────────────────────────────────────────────────

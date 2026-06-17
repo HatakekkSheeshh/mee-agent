@@ -518,7 +518,7 @@ def create_app(output_dir: str = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "meeting_frontend")
+    frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 
     # Phase A — DB-backed meetings router
     app.include_router(meetings_router)
@@ -1153,11 +1153,10 @@ def create_app(output_dir: str = None) -> FastAPI:
     from src.ws_transcribe import register_ws_route
     register_ws_route(app)
 
-    # Serve the frontend. Prefer the built React SPA (meeting_frontend_react/
-    # dist) when present — that's the production single-port image. Fall back to
-    # the legacy vanilla SPA for dev / back-compat when no React build exists.
+    # Serve the frontend. Prefer the built React SPA (frontend/dist) when present
+    # — that's the production single-port image. In dev, run Vite from frontend/.
     react_dist = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "meeting_frontend_react", "dist"
+        os.path.dirname(os.path.dirname(__file__)), "frontend", "dist"
     )
     if os.path.isdir(react_dist):
         _mount_spa(app, react_dist)

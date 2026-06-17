@@ -18,7 +18,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db.repositories_voiceprint import bulk_match
+from src.db.repositories_voiceprint import bulk_match
 
 logger = logging.getLogger(__name__)
 

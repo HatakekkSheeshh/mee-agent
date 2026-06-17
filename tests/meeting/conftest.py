@@ -1,8 +1,8 @@
 """
-Shared test setup for the meeting/ package suite.
+Shared test setup for the src package suite.
 
-Importing meeting.services / meeting.graphs transitively imports
-meeting.db.base, which requires DATABASE_URL at import time (it builds a
+Importing src.services / src.graphs transitively imports
+src.db.base, which requires DATABASE_URL at import time (it builds a
 SQLAlchemy async engine — lazily, so no connection is made). We seed dummy
 env here, before any test module is collected, so unit tests can import the
 code under test without a live database or real secrets.

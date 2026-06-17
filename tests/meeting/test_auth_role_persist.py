@@ -8,8 +8,8 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-import meeting.auth.routes as routes
-from meeting.auth.base import UserInfo
+import src.auth.routes as routes
+from src.auth.base import UserInfo
 
 
 ROLE_ID = uuid.uuid4()

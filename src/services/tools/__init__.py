@@ -15,10 +15,10 @@ via this package at call time so those patches take effect.
 from __future__ import annotations
 
 # Shared references exposed for tests' monkeypatch points + the retrieve tool.
-from meeting.db import repositories as repo
-from meeting.services.memory_service import get_memory_service
+from src.db import repositories as repo
+from src.services.memory_service import get_memory_service
 
-from meeting.services.tools._registry import (
+from src.services.tools._registry import (
     TOOLS,
     execute_tool,
     get_tool,
@@ -28,21 +28,21 @@ from meeting.services.tools._registry import (
 
 # Import each tool module so its @tool decorator registers it. Import order =
 # the order tools are offered to the LLM (matches the legacy TOOLS dict order).
-from meeting.services.tools import send_email as _send_email  # noqa: F401
-from meeting.services.tools.create_task import build_agenda_task_items, build_task_items
-from meeting.services.tools import create_task as _create_task  # noqa: F401
-from meeting.services.tools import switch_meeting as _switch_meeting  # noqa: F401
-from meeting.services.tools import retrieve as _retrieve  # noqa: F401
-from meeting.services.tools import list_meetings as _list_meetings  # noqa: F401
-from meeting.services.tools import list_recordings as _list_recordings  # noqa: F401
-from meeting.services.tools import recording_mom as _recording_mom  # noqa: F401
-from meeting.services.tools import search_transcript as _search_transcript  # noqa: F401
-from meeting.services.tools import remember_fact as _remember_fact  # noqa: F401  (registers remember_fact + forget_fact)
+from src.services.tools import send_email as _send_email  # noqa: F401
+from src.services.tools.create_task import build_agenda_task_items, build_task_items
+from src.services.tools import create_task as _create_task  # noqa: F401
+from src.services.tools import switch_meeting as _switch_meeting  # noqa: F401
+from src.services.tools import retrieve as _retrieve  # noqa: F401
+from src.services.tools import list_meetings as _list_meetings  # noqa: F401
+from src.services.tools import list_recordings as _list_recordings  # noqa: F401
+from src.services.tools import recording_mom as _recording_mom  # noqa: F401
+from src.services.tools import search_transcript as _search_transcript  # noqa: F401
+from src.services.tools import remember_fact as _remember_fact  # noqa: F401  (registers remember_fact + forget_fact)
 
 # Redmine MCP tools register DYNAMICALLY (network discovery) at app startup via
 # load_and_register_redmine_tools — importing the module here only loads the
 # defs (no network, no registration), so the tool set stays clean until wired.
-from meeting.services.tools.redmine import (  # noqa: F401
+from src.services.tools.redmine import (  # noqa: F401
     ensure_redmine_tools_registered,
     ensure_redmine_tools_with_key,
     is_write_tool,

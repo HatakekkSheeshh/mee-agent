@@ -1,4 +1,4 @@
-"""Tests for meeting.auth.tokens.get_graph_access_token.
+"""Tests for src.auth.tokens.get_graph_access_token.
 
 The MSAL silent-refresh round-trip (_acquire_silent_sync) is the one piece that
 does network I/O, so it's monkeypatched. Everything else — in-memory caching,
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from meeting.auth import tokens, token_crypto
+from src.auth import tokens, token_crypto
 
 
 @pytest.fixture(autouse=True)

@@ -8,7 +8,7 @@ For each (meeting, prompt) in a YAML prompt set, measure BOTH sources on:
 Then print + write a Markdown report and a JSON dump for an overall view of the
 fast-but-lossy (agent mem) vs complete-but-heavy (Postgres) tradeoff.
 
-The number-crunching is the pure core in meeting/services/memory_bench.py; this
+The number-crunching is the pure core in src/services/memory_bench.py; this
 script is the impure shell (DB + AgentBase browse + embedding + LLM I/O + timing).
 
 Scope (2026-06-12): only the `project_facts` projection exists — no user_pref /
@@ -39,13 +39,13 @@ load_dotenv(override=True, interpolate=False)
 import yaml
 from sqlalchemy import select
 
-from meeting.db import repositories as repo
-from meeting.db.base import AsyncSessionLocal, async_engine
-from meeting.db.models import Meeting
-from meeting.graphs._chat_llm import _llm_client, _llm_model
-from meeting.memory_client import search_project_record, strip_project_marker
-from meeting.services.embedding import embed_batch
-from meeting.services.memory_bench import (
+from src.db import repositories as repo
+from src.db.base import AsyncSessionLocal, async_engine
+from src.db.models import Meeting
+from src.graphs._chat_llm import _llm_client, _llm_model
+from src.memory_client import search_project_record, strip_project_marker
+from src.services.embedding import embed_batch
+from src.services.memory_bench import (
     BenchRow,
     best_sim,
     build_postgres_chunks,

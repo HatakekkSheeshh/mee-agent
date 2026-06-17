@@ -25,8 +25,8 @@ import json
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from meeting.graphs._chat_prompts import _agent_system_prompt
-from meeting.graphs.chat_graph import _seed_agent_messages
+from src.graphs._chat_prompts import _agent_system_prompt
+from src.graphs.chat_graph import _seed_agent_messages
 from tests.meeting.test_agent_loop import (
     FakeLLM,
     _build,

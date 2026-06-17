@@ -13,8 +13,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import Delete
 
-from meeting.api import chat as chat_api
-from meeting.db import repositories as repo
+from src.api import chat as chat_api
+from src.db import repositories as repo
 
 SID = "44444444-4444-4444-4444-444444444444"
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Start Celery worker standalone — no watchmedo wrapper, so only ONE file
-# watcher runs in the dev environment (uvicorn's reload handles meeting/*.py).
-# To pick up changes in meeting/tasks.py: Ctrl+C and re-run this script.
+# watcher runs in the dev environment (uvicorn's reload handles src/*.py).
+# To pick up changes in src/tasks.py: Ctrl+C and re-run this script.
 #
 # Pool default = solo (1 task at a time, fastest startup, no async event-loop
 # binding issues). Override with CELERY_POOL=prefork CELERY_CONCURRENCY=4 ./celery.sh
-# for production-like parallelism — see meeting/tasks.py for safety notes.
+# for production-like parallelism — see src/tasks.py for safety notes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,11 +46,11 @@ echo "   tasks: gen_mom · clean_recording · diarize_recording"
 echo
 
 if [[ "$POOL" == "solo" ]]; then
-    exec python -m celery -A meeting.celery_app worker \
+    exec python -m celery -A src.celery_app worker \
         --pool="$POOL" \
         --loglevel="$LOGLEVEL"
 else
-    exec python -m celery -A meeting.celery_app worker \
+    exec python -m celery -A src.celery_app worker \
         --pool="$POOL" \
         --concurrency="$CONCURRENCY" \
         --loglevel="$LOGLEVEL"

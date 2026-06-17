@@ -172,7 +172,7 @@ def diarize_parallel(
     n = len(chunks)
     if n <= 1:
         # Single chunk — fall back to single-shot impl, no overhead.
-        from meeting.services.local_diarize import diarize_audio
+        from src.services.local_diarize import diarize_audio
         logger.info(
             f"[parallel_diarize] only 1 slice — using single-shot diarize"
         )
@@ -210,7 +210,7 @@ def diarize_parallel(
             "carefully and revert to DIARIZE_THREADS=1 if stuck."
         )
 
-    from meeting.services.local_diarize import diarize_audio
+    from src.services.local_diarize import diarize_audio
 
     t_start = time.time()
     per_slice_results: list[dict] = []

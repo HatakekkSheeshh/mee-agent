@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.services.tools._registry import tool
+from src.services.tools._registry import tool
 
 logger = logging.getLogger(__name__)
 

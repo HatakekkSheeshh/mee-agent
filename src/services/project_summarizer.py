@@ -22,8 +22,8 @@ from typing import Optional
 from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
-from meeting.services.memory_sync_runner import schedule_project_sync
+from src.db import repositories as repo
+from src.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from meeting.graphs._chat_prompts import _agent_system_prompt
-from meeting.graphs.chat_graph import context as ctx
+from src.graphs._chat_prompts import _agent_system_prompt
+from src.graphs.chat_graph import context as ctx
 
 
 # ── A. user-context injection ────────────────────────────────────────────

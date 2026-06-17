@@ -19,7 +19,7 @@ Memory context:
     to current meeting's topic, excluding this meeting itself.
 
 Usage:
-    from meeting.graphs import run_mom_graph
+    from src.graphs import run_mom_graph
     result = await run_mom_graph(recording_id, session, output_dir)
 """
 from __future__ import annotations
@@ -31,12 +31,12 @@ from typing import Optional, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meeting.db import repositories as repo
-from meeting.note_generator import generate_meeting_notes
-from meeting.report_generator import generate_mom_markdown
-from meeting.services import MemoryService, get_memory_service
-from meeting.services.memory_service import MemoryEvent
-from meeting.services.memory_sync_runner import schedule_project_sync
+from src.db import repositories as repo
+from src.note_generator import generate_meeting_notes
+from src.report_generator import generate_mom_markdown
+from src.services import MemoryService, get_memory_service
+from src.services.memory_service import MemoryEvent
+from src.services.memory_sync_runner import schedule_project_sync
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ def make_load_transcript(session: AsyncSession):
         # for the cleaner if it's in-flight, then re-fetch.
         if not clean_segs:
             try:
-                from meeting.services.clean_orchestrator import (
+                from src.services.clean_orchestrator import (
                     is_inflight, wait_for_inflight,
                 )
                 if is_inflight(recording_id):
@@ -469,7 +469,7 @@ async def run_mom_graph(
     # Resolver: recording.mom_language → meeting.mom_language → caller hint → "vi".
     # We need the DB to know recording/meeting values — fetch quickly here.
     import uuid as _uuid
-    from meeting.db import repositories as repo
+    from src.db import repositories as repo
     try:
         rid = _uuid.UUID(recording_id)
         rec = await repo.get_recording(session, rid)

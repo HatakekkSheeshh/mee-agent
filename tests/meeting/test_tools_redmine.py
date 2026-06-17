@@ -6,8 +6,8 @@ Live per-tool schemas are checked separately by scripts/probe_redmine_mcp.py.
 """
 from __future__ import annotations
 
-import meeting.services.tools as tools
-from meeting.services.tools import redmine
+import src.services.tools as tools
+from src.services.tools import redmine
 
 # Mirrors a representative slice of the live ~15-tool surface (reads + writes).
 FAKE_SCHEMAS = [

@@ -9,7 +9,7 @@ import asyncio
 import threading
 import time
 
-from meeting.ws_transcribe import SyncWSAdapter
+from src.ws_transcribe import SyncWSAdapter
 
 
 class _FakeWS:
@@ -30,7 +30,17 @@ class _FakeWS:
 
 def _loop_in_thread():
     loop = asyncio.new_event_loop()
-    t = threading.Thread(target=loop.run_forever, daemon=True)
+    def _run():
+        asyncio.set_event_loop(loop)
+
+        def _wake_idle_selector():
+            if loop.is_running():
+                loop.call_later(0.001, _wake_idle_selector)
+
+        loop.call_soon(_wake_idle_selector)
+        loop.run_forever()
+
+    t = threading.Thread(target=_run, daemon=True)
     t.start()
     # give the loop a moment to start spinning
     time.sleep(0.05)
