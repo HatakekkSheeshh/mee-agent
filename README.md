@@ -247,6 +247,16 @@ mee-meeting-agent/
 
 ---
 
+## 🌐 Agent runtime (GreenNode AgentBase)
+
+Agent được deploy trên **GreenNode AgentBase runtime**. Endpoint (docs / playground):
+
+> https://endpoint-e2c26683-c6aa-4f05-8502-57eec4d78c35.agentbase-runtime.aiplatform.vngcloud.vn
+
+> Credentials runtime + container registry nằm trong `.greennode.json` (gitignored — KHÔNG commit).
+
+---
+
 ## 🤝 License
 
 Internal project — VNG Cloud / GreenNode AI team.
