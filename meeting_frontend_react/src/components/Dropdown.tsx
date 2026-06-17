@@ -4,12 +4,17 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { createPortal } from "react-dom";
 
 interface Pos {
-  top: number;
+  top?: number;
+  bottom?: number;
   left?: number;
   right?: number;
 }
 
-export function useDropdown(triggerRef: RefObject<HTMLElement>) {
+export function useDropdown(
+  triggerRef: RefObject<HTMLElement>,
+  opts: { placement?: "top" | "bottom" } = {},
+) {
+  const placement = opts.placement || "bottom";
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<Pos>({ top: 0 });
 
@@ -18,9 +23,15 @@ export function useDropdown(triggerRef: RefObject<HTMLElement>) {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const onRight = r.right > window.innerWidth - 300;
-    setPos(onRight
-      ? { top: r.bottom + 6, right: window.innerWidth - r.right }
-      : { top: r.bottom + 6, left: r.left });
+    const horizontal = onRight
+      ? { right: window.innerWidth - r.right }
+      : { left: r.left };
+    // Vertical: above the trigger when placement="top" (menu's
+    // bottom anchored above the trigger's top); below otherwise.
+    const vertical = placement === "top"
+      ? { bottom: window.innerHeight - r.top + 6 }
+      : { top: r.bottom + 6 };
+    setPos({ ...vertical, ...horizontal });
   }
 
   function toggle() {
@@ -53,7 +64,8 @@ interface DropdownProps {
 
 export function Dropdown({ open, pos, children }: DropdownProps) {
   const style: React.CSSProperties = {
-    top: pos.top,
+    ...(pos.top !== undefined ? { top: pos.top } : {}),
+    ...(pos.bottom !== undefined ? { bottom: pos.bottom } : {}),
     ...(pos.left !== undefined ? { left: pos.left } : {}),
     ...(pos.right !== undefined ? { right: pos.right } : {}),
   };

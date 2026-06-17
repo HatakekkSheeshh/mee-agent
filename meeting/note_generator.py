@@ -21,9 +21,27 @@ MAX_TRANSCRIPT_CHARS = 60_000    # absolute cap — ~6 chunks fit in reduce step
 LLM_MAX_TOKENS = 1_500
 
 
-NOTE_PROMPT = """Bạn là trợ lý tóm tắt cuộc họp chuyên nghiệp. Phân tích bản ghi cuộc họp dưới đây và tạo biên bản họp (Minutes of Meeting). TẤT CẢ nội dung phải viết bằng TIẾNG VIỆT.
+_LANG_INSTRUCTION = {
+    "vi": "Generate ALL output content in TIẾNG VIỆT (Vietnamese).",
+    "en": (
+        "Generate ALL output content in ENGLISH. The examples and field "
+        "descriptions below are written in Vietnamese — translate the SPIRIT "
+        "of those examples to English when producing your answer. Do NOT "
+        "leak Vietnamese words into the output."
+    ),
+}
 
-## Thông tin cuộc họp (đã được xác nhận — dùng trực tiếp, không suy diễn lại)
+
+def _lang_directive(lang: str) -> str:
+    return _LANG_INSTRUCTION.get(lang, _LANG_INSTRUCTION["vi"])
+
+
+NOTE_PROMPT = """Bạn là trợ lý tóm tắt cuộc họp chuyên nghiệp. Phân tích bản ghi cuộc họp dưới đây và tạo biên bản họp (Minutes of Meeting).
+
+## OUTPUT LANGUAGE (CRITICAL)
+{language_directive}
+
+## Thông tin cuộc họp (đã được xác nhận — DÙNG TRỰC TIẾP, KHÔNG suy diễn lại)
 - Tiêu đề: {title}
 - Mục đích: {purpose}
 - Ngày họp: {date}
@@ -32,8 +50,41 @@ NOTE_PROMPT = """Bạn là trợ lý tóm tắt cuộc họp chuyên nghiệp. P
 - Địa điểm: {venue}
 - Thành viên tham gia: {attendees}
 
+⚠ Nếu các trường trên = "(không có)" hoặc rỗng → GIỮ NGUYÊN giá trị "(không có)"
+trong output. TUYỆT ĐỐI KHÔNG bịa "Họp báo cáo tiến độ", "Office", "Chaired by Huyền"
+khi user chưa điền. Field rỗng = field rỗng.
+
 ## Bản ghi cuộc họp
 {transcript}
+
+## 🚨 QUY TẮC ATTRIBUTION (CRITICAL — đọc trước tiên!) 🚨
+
+**Speaker attribution PHẢI ĐÚNG**. Transcript đã có speaker prefixes dạng
+`Tên: nội dung` (vd `Huyền: ...`, `Duy Anh: ...`). Khi extract decisions /
+commitments / action_items:
+
+1. **PIC / by** PHẢI lấy TÊN xuất hiện thực sự ở prefix của câu đó (hoặc
+   trong attendees list ở trên), KHÔNG được đoán hay default về 1 tên.
+2. **KHÔNG ĐƯỢC**:
+   - Gán mọi thứ cho cùng 1 người (vd "Hiệu" cho mọi commitment)
+   - Dùng "Người điều phối" / "Team" / "Người quản lý" — phải là tên cụ thể
+   - Bịa tên không có trong transcript hoặc attendees
+3. Nếu thực sự KHÔNG xác định được PIC từ context → dùng "(không rõ)" thay
+   vì đoán mò.
+4. Khi 1 người nói "em sẽ làm X" → PIC là CHÍNH người đó (lấy từ prefix
+   `Tên:` ở đầu câu), KHÔNG phải người trước đó.
+
+VÍ DỤ ĐÚNG:
+```
+Transcript:
+  Lộc: Convert skill sang repo Android.
+  Hiệu: Tuần sau họp mình thử luôn.
+```
+Output đúng:
+- commitments: [{{"text": "Convert skill sang repo Android", "by": "Lộc"}},
+                {{"text": "Thử tính năng trong buổi họp tuần sau", "by": "Hiệu"}}]
+Output SAI (gán nhầm):
+- commitments: [{{"text": "Convert skill sang repo Android", "by": "Hiệu"}}]  ← MISATTRIBUTED
 
 ## Cách phân loại nội dung (QUAN TRỌNG)
 
@@ -145,6 +196,16 @@ Trả về CHỈ JSON hợp lệ (không markdown fences, không giải thích).
 
 MAP_PROMPT = """Bạn là trợ lý phân tích cuộc họp. Đây là PHẦN {idx}/{total} của bản ghi (transcript) cuộc họp dài. Sẽ có bước merge các phần lại sau — nhiệm vụ của bạn LÀ extract sự kiện rời rạc trong phần này, KHÔNG cần tóm tắt toàn cuộc họp.
 
+## OUTPUT LANGUAGE (CRITICAL)
+{language_directive}
+
+## 🚨 SPEAKER ATTRIBUTION (CRITICAL) 🚨
+Transcript có speaker prefixes dạng `Tên: nội dung`. Khi extract:
+- `pic` / `by` PHẢI lấy CHÍNH XÁC tên ở prefix của câu đó.
+- KHÔNG gán mọi entry cho cùng 1 người — đọc kỹ từng prefix.
+- KHÔNG bịa tên "Team" / "Người điều phối" / etc — phải tên cụ thể.
+- Nếu không rõ → "(không rõ)".
+
 ## Thông tin cuộc họp (context)
 - Tiêu đề: {title}
 - Người tham gia: {attendees}
@@ -185,6 +246,9 @@ Trả về CHỈ JSON hợp lệ (không markdown fences, không giải thích).
 
 
 REDUCE_PROMPT = """Bạn là trợ lý tổng hợp meeting. Bên dưới là {n_partials} partial MoM extracted từ {n_partials} chunks của CÙNG 1 cuộc họp (các chunks có overlap nên có thể trùng lặp). Nhiệm vụ: GỘP lại thành 1 biên bản hoàn chỉnh, DEDUPE các entry trùng lặp, gom agenda_items theo chủ đề.
+
+## OUTPUT LANGUAGE (CRITICAL)
+{language_directive}
 
 ## Thông tin cuộc họp
 - Tiêu đề: {title}
@@ -356,11 +420,13 @@ def _generate_via_map_reduce(
     chaired_by: str, noted_by: str, venue: str,
     attendees: str, attendees_json: list,
     timeout: int,
+    lang: str = "vi",
 ) -> dict:
     """Long transcript → split chunks → extract partial → merge."""
     chunks = _split_transcript_chunks(transcript)
     n = len(chunks)
     logging.info(f"[map-reduce] {len(transcript)} chars → {n} chunks (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})")
+    lang_dir = _lang_directive(lang)
 
     partials: list[dict] = []
     for idx, chunk in enumerate(chunks, start=1):
@@ -370,6 +436,7 @@ def _generate_via_map_reduce(
             title=title or "Cuộc họp",
             attendees=attendees or "(không có)",
             chunk=chunk,
+            language_directive=lang_dir,
         )
         partial = _call_llm_for_json(client, model, prompt, timeout=timeout, max_tokens=LLM_MAX_TOKENS)
         if "error" in partial:
@@ -393,6 +460,7 @@ def _generate_via_map_reduce(
         attendees=attendees or "(không có)",
         attendees_json=json.dumps(attendees_json, ensure_ascii=False),
         partials_json=partials_json,
+        language_directive=lang_dir,
     )
     final = _call_llm_for_json(client, model, reduce_prompt, timeout=timeout, max_tokens=LLM_MAX_TOKENS)
     if "error" in final:
@@ -410,11 +478,15 @@ def generate_meeting_notes(
     venue: str = "",
     attendees: str = "",
     timeout: int = 300,
+    lang: str = "vi",
 ) -> dict:
     """Generate structured MoM JSON from transcript.
 
     Routes to single-call path (≤ SINGLE_CALL_THRESHOLD chars) or map-reduce chunking
     (long transcripts). Hard-truncates above MAX_TRANSCRIPT_CHARS as safety net.
+
+    `lang` controls output language ("vi" / "en"). Resolver is the caller's job
+    (see mom_graph.py — recording → meeting → request body → "vi").
     """
     attendees_json = _parse_attendees(attendees)
 
@@ -437,10 +509,11 @@ def generate_meeting_notes(
             chaired_by=chaired_by, noted_by=noted_by, venue=venue,
             attendees=attendees, attendees_json=attendees_json,
             timeout=timeout,
+            lang=lang,
         )
 
     # Short transcript → single call (original path)
-    logging.info(f"[single-call] {len(transcript)} chars → 1 LLM call")
+    logging.info(f"[single-call] {len(transcript)} chars → 1 LLM call (lang={lang})")
     prompt = NOTE_PROMPT.format(
         title=title or "Cuộc họp",
         purpose=purpose or "(không có)",
@@ -450,6 +523,7 @@ def generate_meeting_notes(
         venue=venue or "(không có)",
         attendees=attendees or "(không có)",
         attendees_json=json.dumps(attendees_json, ensure_ascii=False),
+        language_directive=_lang_directive(lang),
         transcript=transcript,
     )
     return _call_llm_for_json(client, model, prompt, timeout=timeout, max_tokens=LLM_MAX_TOKENS)

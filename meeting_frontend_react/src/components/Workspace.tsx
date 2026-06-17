@@ -4,6 +4,8 @@ import { useResizer } from "../hooks/useResizer";
 import { TranscriptPane } from "./TranscriptPane";
 import { MoMPane } from "./MoMPane";
 import { ChatPane } from "./ChatPane";
+import { InsightsPane } from "./InsightsPane";
+import { CommentsPane } from "./CommentsPane";
 import { ProjectOverview } from "./ProjectOverview";
 
 const MIN_LEFT = 280;
@@ -13,7 +15,7 @@ const MAX_CHAT = 500;
 const DEFAULT_CHAT = 380;
 
 export function Workspace() {
-  const { chatOpen, currentMeeting, currentMeetingId, currentRecordingId } = useApp();
+  const { chatOpen, momOpen, insightsOpen, commentsOpen, currentMeeting, currentMeetingId, currentRecordingId, t } = useApp();
   const wsRef = useRef<HTMLDivElement>(null);
 
   const [leftW, setLeftW] = useState<number>(
@@ -40,14 +42,25 @@ export function Workspace() {
     storageKey: "mee.chatWidth",
   });
 
+  // Treat "no meeting selected" as if MoM pane were closed — the
+  // transcript pane will be a full-width empty state CTA, so a MoM
+  // strip beside it would just show "Chưa có biên bản" which is noise.
+  const momVisible = momOpen && !!currentMeetingId;
+  // Insights + Comments share the same slot as chat (only one open at
+  // a time). When any of the 3 is open, reserve a right column same
+  // width as chat. The "rightOpen" flag drives the grid layout.
+  const rightOpen = chatOpen || insightsOpen || commentsOpen;
   useEffect(() => {
     const el = wsRef.current;
     if (!el) return;
     el.style.setProperty("--chat-width", `${chatW}px`);
-    el.style.gridTemplateColumns = chatOpen
-      ? `${leftW}px 1px 1fr 1px ${chatW}px`
-      : `${leftW}px 1px 1fr`;
-  }, [leftW, chatW, chatOpen]);
+    let cols: string;
+    if (momVisible && rightOpen) cols = `${leftW}px 1px 1fr 1px ${chatW}px`;
+    else if (momVisible) cols = `${leftW}px 1px 1fr`;
+    else if (rightOpen) cols = `1fr 1px ${chatW}px`;
+    else cols = `1fr`;
+    el.style.gridTemplateColumns = cols;
+  }, [leftW, chatW, rightOpen, momVisible]);
 
   function resetMom() { setLeftW(DEFAULT_LEFT); localStorage.removeItem("mee.mainLeftWidth"); }
   function resetChat() { setChatW(DEFAULT_CHAT); localStorage.setItem("mee.chatWidth", String(DEFAULT_CHAT)); }
@@ -69,28 +82,34 @@ export function Workspace() {
   return (
     <div
       ref={wsRef}
-      className={`workspace${chatOpen ? " chat-open" : ""}`}
+      className={`workspace${rightOpen ? " chat-open" : ""}${momVisible ? " mom-open" : " mom-closed"}`}
       id="workspace"
     >
       <TranscriptPane overviewContent={showOverview ? <ProjectOverview /> : null} />
-      <div
-        className="resizer"
-        id="resizer-mom"
-        onMouseDown={onMomMouseDown}
-        onDoubleClick={resetMom}
-        title="Kéo để thay đổi kích thước · double-click để reset"
-      />
-      <MoMPane />
-      {chatOpen && (
+      {momVisible && (
+        <>
+          <div
+            className="resizer"
+            id="resizer-mom"
+            onMouseDown={onMomMouseDown}
+            onDoubleClick={resetMom}
+            title={t("workspace.resizerTitle")}
+          />
+          <MoMPane />
+        </>
+      )}
+      {rightOpen && (
         <>
           <div
             className="resizer chat-resizer"
             id="resizer-chat"
             onMouseDown={onChatMouseDown}
             onDoubleClick={resetChat}
-            title="Kéo để thay đổi kích thước · double-click để reset"
+            title={t("workspace.resizerTitle")}
           />
-          <ChatPane />
+          {chatOpen && <ChatPane />}
+          {insightsOpen && <InsightsPane />}
+          {commentsOpen && <CommentsPane />}
         </>
       )}
     </div>

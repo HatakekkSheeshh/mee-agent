@@ -5,3 +5,16 @@ __pycache__/
 .greennode.json
 .agentbase/
 .dockerignore
+venv
+temp
+slides
+.claude/
+.pytest_cache/
+cache/
+benchmarks
+agentbase
+voiceprints_*.webm
+*.ipynb
+HANDOFF.md
+PLAN.md
+tools/kaggle/build.log

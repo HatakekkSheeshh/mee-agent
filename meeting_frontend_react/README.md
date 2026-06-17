@@ -10,8 +10,8 @@ npm install
 npm run dev
 ```
 
-Dev server runs at http://localhost:5173. Vite proxies:
-- `/api/*` → `http://localhost:8001` (FastAPI backend — make sure `python run_meeting.py` is running)
+Dev server runs at http://localhost:8001 (the host registered as the Azure OAuth callback). Vite proxies:
+- `/api/*` + `/auth/*` → `http://localhost:8002` (FastAPI backend — make sure `python run_meeting.py` is running)
 - `/ws` → `ws://localhost:9091` (live transcribe WebSocket)
 
 ## Folder structure

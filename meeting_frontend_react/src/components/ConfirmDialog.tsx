@@ -2,6 +2,7 @@
 // caller does `const ok = await confirm({...})` instead of window.confirm().
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useApp } from "../store/AppContext";
 
 export interface ConfirmOpts {
   title?: string;
@@ -10,6 +11,8 @@ export interface ConfirmOpts {
   cancelLabel?: string;
   /** Style the primary button as danger (red) — for destructive ops. */
   danger?: boolean;
+  /** Style the primary button with the brand accent (green). Ignored if danger. */
+  accent?: boolean;
 }
 
 interface Props extends ConfirmOpts {
@@ -25,9 +28,11 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   danger,
+  accent,
   onConfirm,
   onCancel,
 }: Props) {
+  const { t } = useApp();
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -54,15 +59,15 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
           >
-            {cancelLabel || "Hủy"}
+            {cancelLabel || t("confirm.cancel")}
           </button>
           <button
-            className={`btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`}
+            className={`btn btn-sm ${danger ? "btn-danger" : accent ? "btn-accent" : "btn-primary"}`}
             type="button"
             onClick={onConfirm}
             autoFocus
           >
-            {confirmLabel || "OK"}
+            {confirmLabel || t("confirm.ok")}
           </button>
         </div>
       </div>
